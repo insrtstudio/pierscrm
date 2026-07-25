@@ -94,6 +94,7 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             name        TEXT NOT NULL,
             purpose     TEXT,
+            event_name  TEXT,
             artist_id   INTEGER REFERENCES artists(id) ON DELETE SET NULL,
             target_date TEXT,
             status      TEXT NOT NULL DEFAULT 'active',
@@ -218,6 +219,7 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
         "ALTER TABLE emails ADD COLUMN opened_at TEXT",
         "ALTER TABLE emails ADD COLUMN open_count INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE emails ADD COLUMN campaign_id INTEGER",
+        "ALTER TABLE campaigns ADD COLUMN event_name TEXT",
     ] {
         let _ = conn.execute(stmt, []);
     }

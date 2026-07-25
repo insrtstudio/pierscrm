@@ -108,6 +108,7 @@ pub struct Campaign {
     pub id: Option<i64>,
     pub name: String,
     pub purpose: Option<String>,
+    pub event_name: Option<String>,
     #[serde(default)]
     pub artist_id: Option<i64>,
     pub target_date: Option<String>,
@@ -135,6 +136,7 @@ impl Campaign {
             id: row.get("id")?,
             name: row.get("name")?,
             purpose: row.get("purpose")?,
+            event_name: row.get("event_name")?,
             artist_id: row.get("artist_id")?,
             target_date: row.get("target_date")?,
             status: row.get("status")?,

@@ -31,8 +31,9 @@ import type { Campaign, Template } from "../lib/types";
 import { CAMPAIGN_STATUSES } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
 import { Modal, Field, useToast, useConfirm } from "../components/ui";
+import { BulkSend } from "./BulkSend";
 
-type Tab = "compose" | "campaigns" | "templates" | "log";
+type Tab = "compose" | "bulk" | "campaigns" | "templates" | "log";
 
 const CAMPAIGN_COLORS = [
   "#6366f1", "#10b981", "#f59e0b", "#ec4899", "#0ea5e9", "#8b5cf6", "#ef4444", "#14b8a6",
@@ -48,7 +49,8 @@ const CAMPAIGN_STATUS_STYLE: Record<string, string> = {
 export function Emails() {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>("compose");
-  const tabs: Tab[] = ["compose", "campaigns", "templates", "log"];
+  const tabs: Tab[] = ["compose", "bulk", "campaigns", "templates", "log"];
+  const tabLabel = (tb: Tab) => (tb === "bulk" ? t("bulk.tab") : t(`emails.tab_${tb}`));
 
   useEffect(() => {
     const h = (e: Event) => {
@@ -70,12 +72,13 @@ export function Emails() {
               onClick={() => setTab(tb)}
               className="segmented-item"
             >
-              {t(`emails.tab_${tb}`)}
+              {tabLabel(tb)}
             </button>
           ))}
         </div>
 
         {tab === "compose" && <ComposeTab />}
+        {tab === "bulk" && <BulkSend />}
         {tab === "campaigns" && <CampaignsTab />}
         {tab === "templates" && <TemplatesTab />}
         {tab === "log" && <LogTab />}
@@ -352,13 +355,23 @@ function CampaignModal({
       title={campaign.id ? t("campaigns.edit") : t("campaigns.new")}
     >
       <div className="space-y-3.5">
-        <Field label={t("campaigns.name")}>
-          <input
-            className="input"
-            value={form.name}
-            onChange={(e) => set("name", e.target.value)}
-          />
-        </Field>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label={t("campaigns.name")}>
+            <input
+              className="input"
+              value={form.name}
+              onChange={(e) => set("name", e.target.value)}
+            />
+          </Field>
+          <Field label={t("campaigns.event_name")}>
+            <input
+              className="input"
+              value={form.event_name ?? ""}
+              placeholder={t("campaigns.event_name_ph")}
+              onChange={(e) => set("event_name", e.target.value)}
+            />
+          </Field>
+        </div>
         <Field label={t("campaigns.purpose")}>
           <textarea
             className="input min-h-[70px]"

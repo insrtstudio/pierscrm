@@ -5,8 +5,9 @@ use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 static TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -51,6 +52,65 @@ fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+/// Substitute {{ key }} placeholders from a map; unknown keys are left intact.
+fn render_template(input: &str, vars: &HashMap<String, String>) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'{' && bytes[i + 1] == b'{' {
+            if let Some(end) = input[i + 2..].find("}}") {
+                let key = input[i + 2..i + 2 + end].trim();
+                match vars.get(key) {
+                    Some(v) => out.push_str(v),
+                    None => out.push_str(&format!("{{{{{}}}}}", key)),
+                }
+                i = i + 2 + end + 2;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// Build a single message (HTML + tracking pixel when configured, else plain text).
+fn build_message(
+    from: &Mailbox,
+    to: &Mailbox,
+    subject: &str,
+    body: &str,
+    tracking_base: &Option<String>,
+    token: &str,
+) -> Result<Message, String> {
+    let builder = Message::builder()
+        .from(from.clone())
+        .to(to.clone())
+        .subject(subject.to_string());
+    if let Some(base) = tracking_base {
+        let base = base.trim_end_matches('/');
+        let pixel = format!(
+            "<img src=\"{}/o/{}.gif\" width=\"1\" height=\"1\" alt=\"\" style=\"display:none\"/>",
+            base, token
+        );
+        let html = format!(
+            "<div style=\"font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111\">{}</div>{}",
+            html_escape(body).replace('\n', "<br/>"),
+            pixel
+        );
+        builder
+            .header(ContentType::TEXT_HTML)
+            .body(html)
+            .map_err(|e| e.to_string())
+    } else {
+        builder
+            .header(ContentType::TEXT_PLAIN)
+            .body(body.to_string())
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[tauri::command]
@@ -232,6 +292,184 @@ pub struct OpenRecord {
     pub opened_at: Option<String>,
     #[serde(default)]
     pub count: Option<i64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct BulkProgress {
+    pub done: usize,
+    pub total: usize,
+    pub sent: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub current: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct BulkResult {
+    pub sent: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub errors: Vec<String>,
+}
+
+fn non_empty(s: Option<String>) -> Option<String> {
+    s.filter(|v| !v.trim().is_empty())
+}
+
+/// Send one email per contact in `contact_ids`, rendering {{variables}} from the
+/// contact + its campaign (event/artist/target date). One SMTP connection is
+/// reused; progress is streamed via the `bulk-progress` event.
+#[tauri::command]
+pub fn send_bulk(
+    app: AppHandle,
+    state: State<AppState>,
+    campaign_id: Option<i64>,
+    contact_ids: Vec<i64>,
+    subject: String,
+    body: String,
+) -> Result<BulkResult, String> {
+    let cfg = load_smtp(&state)?;
+    if cfg.from_email.trim().is_empty() {
+        return Err("Sender email is not configured (Settings → Email).".into());
+    }
+    let from_mbox: Mailbox = format!("{} <{}>", cfg.from_name, cfg.from_email)
+        .parse()
+        .or_else(|_| cfg.from_email.parse())
+        .map_err(|_| "Invalid sender email address".to_string())?;
+    let transport = build_transport(&cfg)?;
+
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let tracking_base = setting(&conn, "tracking_base_url");
+
+    // Campaign-level variables ({{event}}, {{artist}}, {{target_date}}).
+    let mut base_vars: HashMap<String, String> = HashMap::new();
+    if let Some(cid) = campaign_id {
+        if let Ok((event_name, target_date, artist_id)) = conn.query_row(
+            "SELECT event_name, target_date, artist_id FROM campaigns WHERE id = ?1",
+            params![cid],
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                ))
+            },
+        ) {
+            if let Some(e) = non_empty(event_name) {
+                base_vars.insert("event".into(), e);
+            }
+            if let Some(td) = non_empty(target_date) {
+                base_vars.insert("target_date".into(), td);
+            }
+            if let Some(aid) = artist_id {
+                if let Ok(name) = conn.query_row(
+                    "SELECT name FROM artists WHERE id = ?1",
+                    params![aid],
+                    |r| r.get::<_, String>(0),
+                ) {
+                    base_vars.insert("artist".into(), name);
+                }
+            }
+        }
+    }
+
+    let total = contact_ids.len();
+    let (mut sent, mut failed, mut skipped) = (0usize, 0usize, 0usize);
+    let mut errors: Vec<String> = Vec::new();
+
+    for (idx, cid) in contact_ids.iter().enumerate() {
+        let row = conn
+            .query_row(
+                "SELECT name, promoter, venue, area, date, email FROM contacts WHERE id = ?1",
+                params![cid],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                    ))
+                },
+            )
+            .ok();
+
+        let emit = |done, sent, failed, skipped, current| {
+            let _ = app.emit(
+                "bulk-progress",
+                BulkProgress { done, total, sent, failed, skipped, current },
+            );
+        };
+
+        let Some((name, promoter, venue, area, date, email)) = row else {
+            skipped += 1;
+            emit(idx + 1, sent, failed, skipped, None);
+            continue;
+        };
+        let Some(email) = non_empty(email) else {
+            skipped += 1;
+            emit(idx + 1, sent, failed, skipped, None);
+            continue;
+        };
+
+        let mut vars = base_vars.clone();
+        let display = non_empty(promoter.clone()).unwrap_or_else(|| name.clone());
+        vars.insert("name".into(), display);
+        vars.insert(
+            "venue".into(),
+            non_empty(venue.clone()).unwrap_or_else(|| name.clone()),
+        );
+        vars.entry("event".into()).or_insert_with(|| name.clone());
+        vars.insert("promoter".into(), promoter.clone().unwrap_or_default());
+        vars.insert("city".into(), area.clone().unwrap_or_default());
+        let fallback_date = base_vars.get("target_date").cloned().unwrap_or_default();
+        vars.insert("date".into(), non_empty(date).unwrap_or(fallback_date));
+
+        let subj = render_template(&subject, &vars);
+        let bod = render_template(&body, &vars);
+
+        let to_mbox: Mailbox = match email.trim().parse() {
+            Ok(m) => m,
+            Err(_) => {
+                failed += 1;
+                errors.push(format!("{}: adresse invalide", email));
+                emit(idx + 1, sent, failed, skipped, Some(email.clone()));
+                continue;
+            }
+        };
+
+        let token = gen_token();
+        let msg = build_message(&from_mbox, &to_mbox, &subj, &bod, &tracking_base, &token)?;
+        let (status, err) = match transport.send(&msg) {
+            Ok(_) => ("sent", None),
+            Err(e) => ("failed", Some(e.to_string())),
+        };
+        let _ = conn.execute(
+            "INSERT INTO emails (contact_id, campaign_id, to_addr, subject, body, status, error, track_token)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![cid, campaign_id, email, subj, bod, status, err, token],
+        );
+        if status == "sent" {
+            sent += 1;
+            let _ = conn.execute(
+                "UPDATE contacts
+                 SET status = CASE WHEN status IN ('to_contact','to_evaluate','low_priority') THEN 'contacted' ELSE status END,
+                     first_contact = COALESCE(first_contact, date('now')),
+                     updated_at = datetime('now')
+                 WHERE id = ?1",
+                params![cid],
+            );
+        } else {
+            failed += 1;
+            if let Some(e) = err {
+                errors.push(format!("{}: {}", email, e));
+            }
+        }
+        emit(idx + 1, sent, failed, skipped, Some(email.clone()));
+    }
+
+    Ok(BulkResult { sent, failed, skipped, errors })
 }
 
 /// Apply a batch of open events (fetched by the frontend from the tracking

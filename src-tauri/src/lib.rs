@@ -65,6 +65,7 @@ pub fn run() {
             commands::email::save_smtp_config,
             commands::email::test_smtp,
             commands::email::send_email,
+            commands::email::send_bulk,
             commands::email::list_emails,
             commands::email::apply_opens,
             // campaigns

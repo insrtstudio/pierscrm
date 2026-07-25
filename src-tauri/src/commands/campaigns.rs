@@ -8,7 +8,7 @@ pub fn list_campaigns(state: State<AppState>) -> Result<Vec<Campaign>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT c.id, c.name, c.purpose, c.artist_id, c.target_date, c.status, c.color,
+            "SELECT c.id, c.name, c.purpose, c.event_name, c.artist_id, c.target_date, c.status, c.color,
                     c.created_at, c.updated_at,
                     COALESCE((SELECT COUNT(*) FROM emails e WHERE e.campaign_id = c.id AND e.status='sent'), 0) AS sent_count,
                     COALESCE((SELECT COUNT(*) FROM emails e WHERE e.campaign_id = c.id AND e.opened_at IS NOT NULL), 0) AS opened_count
@@ -32,16 +32,16 @@ pub fn save_campaign(state: State<AppState>, campaign: Campaign) -> Result<i64, 
     match campaign.id {
         Some(id) => {
             conn.execute(
-                "UPDATE campaigns SET name=?2, purpose=?3, artist_id=?4, target_date=?5, status=?6, color=?7, updated_at=datetime('now') WHERE id=?1",
-                params![id, campaign.name, campaign.purpose, campaign.artist_id, campaign.target_date, campaign.status, campaign.color],
+                "UPDATE campaigns SET name=?2, purpose=?3, event_name=?4, artist_id=?5, target_date=?6, status=?7, color=?8, updated_at=datetime('now') WHERE id=?1",
+                params![id, campaign.name, campaign.purpose, campaign.event_name, campaign.artist_id, campaign.target_date, campaign.status, campaign.color],
             )
             .map_err(|e| e.to_string())?;
             Ok(id)
         }
         None => {
             conn.execute(
-                "INSERT INTO campaigns (name, purpose, artist_id, target_date, status, color) VALUES (?1,?2,?3,?4,?5,?6)",
-                params![campaign.name, campaign.purpose, campaign.artist_id, campaign.target_date, campaign.status, campaign.color],
+                "INSERT INTO campaigns (name, purpose, event_name, artist_id, target_date, status, color) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![campaign.name, campaign.purpose, campaign.event_name, campaign.artist_id, campaign.target_date, campaign.status, campaign.color],
             )
             .map_err(|e| e.to_string())?;
             Ok(conn.last_insert_rowid())

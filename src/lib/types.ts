@@ -90,6 +90,7 @@ export interface Campaign {
   id?: number;
   name: string;
   purpose?: string | null;
+  event_name?: string | null;
   artist_id?: number | null;
   target_date?: string | null;
   status: string;
@@ -200,6 +201,22 @@ export interface SendResult {
   ok: boolean;
   error?: string | null;
   tracked: boolean;
+}
+
+export interface BulkProgress {
+  done: number;
+  total: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+  current?: string | null;
+}
+
+export interface BulkResult {
+  sent: number;
+  failed: number;
+  skipped: number;
+  errors: string[];
 }
 
 export interface VisaCountry {

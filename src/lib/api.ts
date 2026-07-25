@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Artist,
   BudgetItem,
+  BulkResult,
   Campaign,
   Contact,
   DashboardStats,
@@ -77,6 +78,18 @@ export const sendEmail = (p: {
   });
 export const listEmails = (contactId?: number) =>
   invoke<EmailLog[]>("list_emails", { contactId: contactId ?? null });
+export const sendBulk = (p: {
+  campaign_id?: number | null;
+  contact_ids: number[];
+  subject: string;
+  body: string;
+}) =>
+  invoke<BulkResult>("send_bulk", {
+    campaignId: p.campaign_id ?? null,
+    contactIds: p.contact_ids,
+    subject: p.subject,
+    body: p.body,
+  });
 export const applyOpens = (
   opens: { token: string; opened_at?: string; count?: number }[]
 ) => invoke<number>("apply_opens", { opens });
