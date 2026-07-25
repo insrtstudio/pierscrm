@@ -1,0 +1,63 @@
+name: Release
+
+# Publie une release GitHub (DMG + artefacts d'auto-update) à chaque tag "vX.Y.Z".
+# Pré-requis (une seule fois) : ajouter dans Settings → Secrets and variables → Actions :
+#   - TAURI_SIGNING_PRIVATE_KEY          = contenu de src-tauri/pierscrm-updater.key
+#   - TAURI_SIGNING_PRIVATE_KEY_PASSWORD = (vide, mais crée quand même le secret)
+#
+# Publier une version :
+#   1) bump "version" dans src-tauri/tauri.conf.json (ET package.json)
+#   2) git tag v0.2.0 && git push origin v0.2.0
+# → le workflow build, signe, crée la release et attache latest.json.
+#   Les apps installées se mettent à jour toutes seules.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install Rust (both macOS targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      - name: Build & publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "PiersCRM ${{ github.ref_name }}"
+          releaseBody: "Mise à jour automatique — l'app se met à jour seule au démarrage."
+          releaseDraft: false
+          prerelease: false
+          # Build universel : un seul DMG pour Mac Intel ET Apple Silicon.
+          args: --target universal-apple-darwin

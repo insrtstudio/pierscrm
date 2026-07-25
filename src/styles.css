@@ -1,0 +1,138 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light theme */
+    --bg: 247 248 250;
+    --surface: 255 255 255;
+    --surface-2: 244 246 249;
+    --border: 226 230 236;
+    --muted: 241 243 246;
+    --fg: 17 22 31;
+    --fg-subtle: 100 110 124;
+    --accent: 99 91 255;
+    --accent-fg: 255 255 255;
+  }
+
+  .dark {
+    /* Dark theme */
+    --bg: 12 14 19;
+    --surface: 20 23 31;
+    --surface-2: 27 31 41;
+    --border: 39 44 56;
+    --muted: 30 34 44;
+    --fg: 234 237 243;
+    --fg-subtle: 148 156 170;
+    --accent: 124 116 255;
+    --accent-fg: 255 255 255;
+  }
+
+  * {
+    border-color: rgb(var(--border));
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-bg text-fg font-sans antialiased;
+    margin: 0;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border rounded-full;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-fg-subtle;
+    background-clip: padding-box;
+    border: 2px solid transparent;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium
+      transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none select-none;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-accent-fg hover:opacity-90;
+  }
+  .btn-ghost {
+    @apply btn text-fg-subtle hover:bg-muted hover:text-fg;
+  }
+  .btn-outline {
+    @apply btn border border-border bg-surface hover:bg-muted;
+  }
+  .btn-danger {
+    @apply btn bg-red-500/10 text-red-500 hover:bg-red-500/20;
+  }
+
+  .card {
+    @apply bg-surface border border-border rounded-2xl shadow-soft;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-fg
+      placeholder:text-fg-subtle/60 outline-none transition
+      focus:border-accent focus:ring-2 focus:ring-accent/20;
+  }
+
+  .label {
+    @apply text-xs font-medium text-fg-subtle mb-1.5 block;
+  }
+}
+
+/* ---- Print / PDF export (EPK one-pager) ---- */
+@media print {
+  body {
+    overflow: visible;
+    background: #fff;
+  }
+  body * {
+    visibility: hidden;
+  }
+  #epk-print,
+  #epk-print * {
+    visibility: visible;
+  }
+  #epk-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    border: none !important;
+    box-shadow: none !important;
+    /* Force light, print-friendly colors regardless of theme */
+    --bg: 255 255 255;
+    --surface: 255 255 255;
+    --surface-2: 244 246 249;
+    --border: 226 230 236;
+    --muted: 241 243 246;
+    --fg: 17 22 31;
+    --fg-subtle: 90 100 115;
+    --accent: 99 91 255;
+    color: #11161f;
+  }
+  #epk-print .epk-link {
+    border-color: #e2e6ec !important;
+  }
+  @page {
+    margin: 14mm;
+  }
+}

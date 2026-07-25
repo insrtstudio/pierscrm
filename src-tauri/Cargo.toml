@@ -1,0 +1,45 @@
+[package]
+name = "pierscrm"
+version = "0.1.0"
+description = "PiersCRM — desktop booking & artist management"
+authors = ["Insrt.Studio"]
+edition = "2021"
+
+[lib]
+name = "pierscrm_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+lettre = { version = "0.11", default-features = false, features = [
+    "smtp-transport",
+    "builder",
+    "rustls-tls",
+    "hostname",
+    "pool",
+] }
+calamine = "0.26"
+csv = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

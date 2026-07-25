@@ -1,0 +1,221 @@
+export type Category = "venue" | "lineup" | "major" | "other";
+
+export type Status =
+  | "to_contact"
+  | "to_evaluate"
+  | "low_priority"
+  | "contacted"
+  | "followed_up"
+  | "in_discussion"
+  | "confirmed"
+  | "declined"
+  | "no_answer";
+
+export const STATUSES: Status[] = [
+  "to_contact",
+  "to_evaluate",
+  "low_priority",
+  "contacted",
+  "followed_up",
+  "in_discussion",
+  "confirmed",
+  "declined",
+  "no_answer",
+];
+
+export interface Artist {
+  id?: number;
+  name: string;
+  real_name?: string | null;
+  tagline?: string | null;
+  bio?: string | null;
+  genres?: string | null;
+  city?: string | null;
+  country?: string | null;
+  avatar?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  booking_email?: string | null;
+  website?: string | null;
+  instagram?: string | null;
+  soundcloud?: string | null;
+  spotify?: string | null;
+  apple_music?: string | null;
+  beatport?: string | null;
+  youtube?: string | null;
+  press_quotes?: string | null;
+  achievements?: string | null;
+  links?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface Contact {
+  id?: number;
+  artist_id?: number | null;
+  category: string;
+  priority?: string | null;
+  name: string;
+  promoter?: string | null;
+  venue?: string | null;
+  type?: string | null;
+  area?: string | null;
+  scale?: string | null;
+  date?: string | null;
+  time?: string | null;
+  format?: string | null;
+  reason?: string | null;
+  contact_channel?: string | null;
+  email?: string | null;
+  email_status?: string | null;
+  status: string;
+  first_contact?: string | null;
+  follow_up?: string | null;
+  notes?: string | null;
+  website?: string | null;
+  tags?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface Template {
+  id?: number;
+  name: string;
+  subject: string;
+  body: string;
+  created_at?: string | null;
+}
+
+export interface EmailLog {
+  id?: number;
+  contact_id?: number | null;
+  to_addr: string;
+  subject: string;
+  body: string;
+  status: string;
+  error?: string | null;
+  track_token?: string | null;
+  opened_at?: string | null;
+  open_count: number;
+  sent_at?: string | null;
+}
+
+export interface BudgetItem {
+  id?: number;
+  category?: string | null;
+  item: string;
+  min_cost: number;
+  max_cost: number;
+  actual?: number | null;
+  kind: "expense" | "revenue";
+  notes?: string | null;
+  sort: number;
+}
+
+export interface Task {
+  id?: number;
+  period?: string | null;
+  title: string;
+  done: boolean;
+  owner?: string | null;
+  due_date?: string | null;
+  sort: number;
+}
+
+export interface Kpi {
+  id?: number;
+  artist_id?: number | null;
+  goal?: string | null;
+  kpi?: string | null;
+  target?: string | null;
+  actual?: string | null;
+  sort: number;
+}
+
+export interface SmtpConfig {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  from_name: string;
+  from_email: string;
+  encryption: "starttls" | "tls" | "none";
+}
+
+export interface SheetPreview {
+  name: string;
+  headers: string[];
+  rows: string[][];
+  total_rows: number;
+  header_row: number;
+}
+
+export interface FilePreview {
+  kind: string;
+  sheets: SheetPreview[];
+}
+
+export interface ImportResult {
+  inserted: number;
+  skipped: number;
+}
+
+export interface SendResult {
+  ok: boolean;
+  error?: string | null;
+  tracked: boolean;
+}
+
+export interface VisaCountry {
+  code: string;
+  name: string;
+  work_rules?: string | null;
+  visa_types?: string | null;
+  processing_time?: string | null;
+  required_docs?: string | null;
+  notes?: string | null;
+  official_link?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ChecklistItem {
+  label: string;
+  done: boolean;
+}
+
+export interface VisaDossier {
+  id?: number;
+  artist_id?: number | null;
+  country_code?: string | null;
+  country_name?: string | null;
+  title: string;
+  purpose?: string | null;
+  event_date?: string | null;
+  entry_date?: string | null;
+  status: string;
+  checklist?: string | null;
+  notes?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export const VISA_STATUSES = [
+  "draft",
+  "preparing",
+  "submitted",
+  "approved",
+  "rejected",
+] as const;
+
+export interface DashboardStats {
+  by_status: Record<string, number>;
+  by_category: Record<string, number>;
+  total_contacts: number;
+  emails_sent: number;
+  budget_min: number;
+  budget_max: number;
+  budget_actual: number;
+  revenue_actual: number;
+  tasks_done: number;
+  tasks_total: number;
+}

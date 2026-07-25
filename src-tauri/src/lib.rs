@@ -1,0 +1,88 @@
+mod commands;
+mod db;
+mod models;
+
+use db::DbPool;
+use std::fs;
+use tauri::Manager;
+
+pub struct AppState {
+    pub pool: DbPool,
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            let dir = app
+                .path()
+                .app_data_dir()
+                .expect("failed to resolve app data dir");
+            fs::create_dir_all(&dir).ok();
+            let db_path = dir.join("pierscrm.db");
+            let pool = db::init_pool(&db_path).expect("failed to init database");
+            app.manage(AppState { pool });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            // artists
+            commands::artists::list_artists,
+            commands::artists::get_artist,
+            commands::artists::save_artist,
+            commands::artists::delete_artist,
+            commands::artists::image_to_data_url,
+            // contacts
+            commands::contacts::list_contacts,
+            commands::contacts::get_contact,
+            commands::contacts::create_contact,
+            commands::contacts::update_contact,
+            commands::contacts::update_contact_status,
+            commands::contacts::delete_contact,
+            commands::contacts::delete_contacts,
+            // import
+            commands::import::preview_file,
+            commands::import::import_file,
+            // email
+            commands::email::get_smtp_config,
+            commands::email::save_smtp_config,
+            commands::email::test_smtp,
+            commands::email::send_email,
+            commands::email::list_emails,
+            commands::email::apply_opens,
+            // visa
+            commands::visa::list_visa_countries,
+            commands::visa::save_visa_country,
+            commands::visa::delete_visa_country,
+            commands::visa::list_dossiers,
+            commands::visa::save_dossier,
+            commands::visa::delete_dossier,
+            // templates
+            commands::data::list_templates,
+            commands::data::save_template,
+            commands::data::delete_template,
+            // budget
+            commands::data::list_budget,
+            commands::data::save_budget_item,
+            commands::data::delete_budget_item,
+            // tasks
+            commands::data::list_tasks,
+            commands::data::save_task,
+            commands::data::delete_task,
+            // kpis
+            commands::data::list_kpis,
+            commands::data::save_kpi,
+            commands::data::delete_kpi,
+            // settings + dashboard
+            commands::data::get_setting,
+            commands::data::set_setting,
+            commands::data::dashboard_stats,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running PiersCRM");
+}

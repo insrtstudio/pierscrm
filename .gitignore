@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Updater signing keys — NEVER commit these
+src-tauri/*.key
+src-tauri/*.key.pub
+
+# Misc
+.DS_Store
+*.log
