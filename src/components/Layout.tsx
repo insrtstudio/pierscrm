@@ -103,11 +103,16 @@ export function Layout() {
     <div className="flex h-screen w-screen overflow-hidden bg-bg text-fg">
       {/* Sidebar */}
       <aside className="flex w-[236px] shrink-0 flex-col border-r border-border bg-surface/60">
-        <div className="drag flex h-[52px] items-center gap-2.5 px-4 pl-20">
-          <div className="flex h-[26px] w-[26px] items-center justify-center rounded-[8px] bg-accent text-accent-fg text-[13px] font-bold shadow-accent-glow">
-            P
+        <div
+          data-tauri-drag-region
+          className="flex h-[52px] items-center gap-2.5 px-4 pl-20"
+        >
+          <div className="pointer-events-none flex items-center gap-2.5">
+            <div className="flex h-[26px] w-[26px] items-center justify-center rounded-[8px] bg-accent text-accent-fg text-[13px] font-bold shadow-accent-glow">
+              P
+            </div>
+            <span className="text-[15px] font-semibold tracking-tight">PiersCRM</span>
           </div>
-          <span className="text-[15px] font-semibold tracking-tight">PiersCRM</span>
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-2">
@@ -167,7 +172,7 @@ export function Layout() {
 
       {/* Main */}
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="drag h-[52px] w-full shrink-0" />
+        <div data-tauri-drag-region className="h-[52px] w-full shrink-0" />
         <UpdateBanner />
         <div className="flex-1 overflow-y-auto">
           <Outlet />
