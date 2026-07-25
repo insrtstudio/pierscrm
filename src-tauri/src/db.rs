@@ -244,18 +244,18 @@ fn seed_defaults(conn: &rusqlite::Connection) -> Result<(), String> {
         conn.execute(
             "INSERT INTO templates (name, subject, body) VALUES (?1, ?2, ?3)",
             rusqlite::params![
-                "Lineup pitch (Template A)",
-                "Opening slot proposal — {{event}}, ADE 2026",
-                "Hi {{name}},\n\nLoved what you did with your last event. I'm Piers, a French producer/DJ. I'll be in Amsterdam for the full ADE week with a small crew, and I'd love to offer an opening set (or B2B) for {{event}} on {{date}} — no fee, we just want the right room.\n\nWe're also giving away an ADE-exclusive EP (free download, 500 copies) and running a street campaign all week, so we'd bring our own crowd and promo push to the night.\n\nPrivate listening link: [link] · 30-min mix: [link] · One-pager: [link].\n\nEither way, keep doing what you're doing — hope to catch the party.\nPiers — Insrt.Studio"
+                "Slot pitch",
+                "opening set for {{event}}?",
+                "Hey {{name}},\n\nI'm Piers, a producer/DJ from France. Been keeping an eye on {{event}} and really like what you're doing with it.\n\nI'm around in Amsterdam for the whole week and wanted to ask — any chance there's still an opening slot on {{date}}? Happy to do a short B2B too. No fee, I just want to play the right room.\n\nHere's a recent mix if you want a listen: {{mix}}\n\nEither way, hope it's a good one.\nPiers"
             ],
         )
         .map_err(|e| e.to_string())?;
         conn.execute(
             "INSERT INTO templates (name, subject, body) VALUES (?1, ?2, ?3)",
             rusqlite::params![
-                "Venue pitch (Template B)",
-                "ADE week — free showcase proposal for {{venue}}, Wed Oct 21 (early evening)",
-                "Hi {{name}},\n\nQuick question first: do you still have availability on Tuesday 20, Wednesday 21 or Thursday 22 October (ADE week)?\n\nI'm Piers, a French producer/DJ, and with my label Insrt.Studio we'd like to host a free-entry early-evening showcase (5–10pm) at {{venue}}. What we bring: a lineup of 3-4 artists (all playing for free), our own crowd — we're running a street campaign all ADE week (1,500 flyers/stickers, an ADE-exclusive free EP) that will carry your venue's name on every flyer — and full promo on Resident Advisor, Instagram and the ADE app.\n\nWhat we'd ask: the room and sound for the evening, free entry for guests, and you keep 100% of the bar. No fees in either direction.\n\n15-min call this week? Listening link: [link] · One-pager: [link].\n\nThanks either way.\nPiers — Insrt.Studio"
+                "Venue ask",
+                "something at {{venue}} during ADE week?",
+                "Hi {{name}},\n\nQuick one — are you doing anything on the early-week dates (Tue 20 / Wed 21 / Thu 22)?\n\nI'm Piers, a French producer/DJ. With my label Insrt.Studio we'd love to put on a small free-entry showcase at {{venue}}, early evening, a few of us playing. We'd bring our own crowd and you'd keep the bar — no fees either way.\n\nIf it sounds worth a chat I'm easy to reach. Here's a mix in the meantime: {{mix}}\n\nAnd if the timing's off, no worries at all — would still love to stay in touch.\nPiers — Insrt.Studio"
             ],
         )
         .map_err(|e| e.to_string())?;

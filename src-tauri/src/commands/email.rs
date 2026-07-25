@@ -327,6 +327,7 @@ pub fn send_bulk(
     contact_ids: Vec<i64>,
     subject: String,
     body: String,
+    extra_vars: Option<HashMap<String, String>>,
 ) -> Result<BulkResult, String> {
     let cfg = load_smtp(&state)?;
     if cfg.from_email.trim().is_empty() {
@@ -341,8 +342,16 @@ pub fn send_bulk(
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let tracking_base = setting(&conn, "tracking_base_url");
 
-    // Campaign-level variables ({{event}}, {{artist}}, {{target_date}}).
+    // Campaign-level variables ({{event}}, {{artist}}, {{target_date}}) plus any
+    // per-send link variables the user supplied ({{mix}}, {{listen}}, …).
     let mut base_vars: HashMap<String, String> = HashMap::new();
+    if let Some(extra) = extra_vars {
+        for (k, v) in extra {
+            if !v.trim().is_empty() {
+                base_vars.insert(k, v);
+            }
+        }
+    }
     if let Some(cid) = campaign_id {
         if let Ok((event_name, target_date, artist_id)) = conn.query_row(
             "SELECT event_name, target_date, artist_id FROM campaigns WHERE id = ?1",

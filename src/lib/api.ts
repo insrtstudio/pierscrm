@@ -83,12 +83,14 @@ export const sendBulk = (p: {
   contact_ids: number[];
   subject: string;
   body: string;
+  extra_vars?: Record<string, string>;
 }) =>
   invoke<BulkResult>("send_bulk", {
     campaignId: p.campaign_id ?? null,
     contactIds: p.contact_ids,
     subject: p.subject,
     body: p.body,
+    extraVars: p.extra_vars ?? {},
   });
 export const applyOpens = (
   opens: { token: string; opened_at?: string; count?: number }[]

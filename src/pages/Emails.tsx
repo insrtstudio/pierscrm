@@ -32,6 +32,9 @@ import { CAMPAIGN_STATUSES } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
 import { Modal, Field, useToast, useConfirm } from "../components/ui";
 import { BulkSend } from "./BulkSend";
+import { renderTemplate } from "../components/ComposeModal";
+
+const LINK_FIELDS = ["mix", "listen", "onepager", "epk"] as const;
 
 type Tab = "compose" | "bulk" | "campaigns" | "templates" | "log";
 
@@ -99,7 +102,12 @@ function ComposeTab() {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [campaignId, setCampaignId] = useState<number | "">("");
+  const [links, setLinks] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
+
+  const linkVars = Object.fromEntries(
+    Object.entries(links).filter(([, v]) => v.trim())
+  );
 
   const doSend = async () => {
     setSending(true);
@@ -108,14 +116,15 @@ function ComposeTab() {
         contact_id: null,
         campaign_id: campaignId === "" ? null : campaignId,
         to: to.trim(),
-        subject,
-        body,
+        subject: renderTemplate(subject, null, linkVars),
+        body: renderTemplate(body, null, linkVars),
       });
       if (res.ok) {
         toast(t("emails.sent_ok"), "ok");
         setTo("");
         setSubject("");
         setBody("");
+        setLinks({});
         qc.invalidateQueries({ queryKey: ["emails"] });
         qc.invalidateQueries({ queryKey: ["campaigns"] });
         qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -179,6 +188,27 @@ function ComposeTab() {
           onChange={(e) => setBody(e.target.value)}
         />
       </Field>
+      <div className="panel p-3">
+        <div className="text-2xs font-semibold uppercase tracking-wide text-fg-subtle">
+          {t("bulk.links")}
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {LINK_FIELDS.map((k) => (
+            <label key={k} className="block">
+              <span className="mb-1 flex items-center justify-between text-2xs text-fg-subtle">
+                {t(`bulk.link_${k}`)}
+                <code className="text-fg-faint">{`{{${k}}}`}</code>
+              </span>
+              <input
+                className="input py-1.5 text-xs"
+                placeholder="https://…"
+                value={links[k] ?? ""}
+                onChange={(e) => setLinks((l) => ({ ...l, [k]: e.target.value }))}
+              />
+            </label>
+          ))}
+        </div>
+      </div>
       <div className="flex justify-end">
         <button
           className="btn-primary"

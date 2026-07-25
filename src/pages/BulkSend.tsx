@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
-import { Send, Users, Check, X, CheckCheck, Ban } from "lucide-react";
+import { Send, Users, Check, X, CheckCheck, Ban, Link as LinkIcon } from "lucide-react";
 import clsx from "clsx";
 import {
   listArtists,
@@ -17,12 +17,15 @@ import { CATEGORIES } from "../lib/constants";
 import { Field, useToast, useConfirm, Modal } from "../components/ui";
 
 const VARS = ["name", "venue", "event", "artist", "date", "promoter", "city", "target_date"] as const;
+const LINK_FIELDS = ["mix", "listen", "onepager", "epk"] as const;
+type LinkKey = (typeof LINK_FIELDS)[number];
 
 function renderPreview(
   str: string,
   c: Contact | undefined,
   campaign: Campaign | undefined,
-  artistName: string
+  artistName: string,
+  links: Record<string, string>
 ): string {
   if (!c) return str;
   const map: Record<string, string> = {
@@ -34,6 +37,7 @@ function renderPreview(
     promoter: c.promoter || "",
     city: c.area || "",
     target_date: campaign?.target_date || "",
+    ...links,
   };
   return str.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => map[k] ?? `{{${k}}}`);
 }
@@ -96,6 +100,12 @@ export function BulkSend() {
   // Message
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [links, setLinks] = useState<Record<LinkKey, string>>({
+    mix: "",
+    listen: "",
+    onepager: "",
+    epk: "",
+  });
   const focused = useRef<"subject" | "body">("body");
   const subjectRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
@@ -115,8 +125,21 @@ export function BulkSend() {
   };
 
   const campaign = campaigns.find((c) => c.id === campaignId);
-  const artistName = artists.find((a) => a.id === campaign?.artist_id)?.name ?? "";
+  const artist = artists.find((a) => a.id === campaign?.artist_id);
+  const artistName = artist?.name ?? "";
   const firstRecipient = contacts.find((c) => selected.has(c.id!));
+
+  // Prefill empty link fields from the campaign's artist profile.
+  useEffect(() => {
+    if (!artist) return;
+    setLinks((l) => ({
+      mix: l.mix || artist.soundcloud || "",
+      listen: l.listen || artist.spotify || "",
+      onepager: l.onepager || artist.website || "",
+      epk: l.epk,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignId]);
 
   // Sending
   const [sending, setSending] = useState(false);
@@ -139,11 +162,15 @@ export function BulkSend() {
     setSending(true);
     setProgress({ done: 0, total: ids.length, sent: 0, failed: 0, skipped: 0 });
     try {
+      const extra_vars = Object.fromEntries(
+        Object.entries(links).filter(([, v]) => v.trim())
+      );
       const res = await sendBulk({
         campaign_id: campaignId === "" ? null : campaignId,
         contact_ids: ids,
         subject,
         body,
+        extra_vars,
       });
       setResult(res);
       qc.invalidateQueries({ queryKey: ["contacts"] });
@@ -293,7 +320,7 @@ export function BulkSend() {
           </Field>
           <div className="flex items-end">
             <div className="flex flex-wrap gap-1">
-              {VARS.map((v) => (
+              {[...VARS, ...LINK_FIELDS].map((v) => (
                 <button
                   key={v}
                   onClick={() => insertVar(v)}
@@ -304,6 +331,30 @@ export function BulkSend() {
                 </button>
               ))}
             </div>
+          </div>
+        </div>
+
+        {/* Links (case-by-case) */}
+        <div className="mt-4 panel p-4">
+          <div className="flex items-center gap-2 text-2xs font-semibold uppercase tracking-wide text-fg-subtle">
+            <LinkIcon size={12} /> {t("bulk.links")}
+          </div>
+          <p className="mt-0.5 text-2xs text-fg-subtle">{t("bulk.links_hint")}</p>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            {LINK_FIELDS.map((k) => (
+              <label key={k} className="block">
+                <span className="mb-1 flex items-center justify-between text-2xs text-fg-subtle">
+                  {t(`bulk.link_${k}`)}
+                  <code className="text-fg-faint">{`{{${k}}}`}</code>
+                </span>
+                <input
+                  className="input py-1.5 text-xs"
+                  placeholder="https://…"
+                  value={links[k]}
+                  onChange={(e) => setLinks((l) => ({ ...l, [k]: e.target.value }))}
+                />
+              </label>
+            ))}
           </div>
         </div>
 
@@ -335,10 +386,10 @@ export function BulkSend() {
               {t("bulk.preview")} · {firstRecipient.name}
             </div>
             <div className="text-sm font-semibold">
-              {renderPreview(subject, firstRecipient, campaign, artistName)}
+              {renderPreview(subject, firstRecipient, campaign, artistName, links)}
             </div>
             <div className="mt-1 whitespace-pre-wrap text-xs text-fg-subtle">
-              {renderPreview(body, firstRecipient, campaign, artistName)}
+              {renderPreview(body, firstRecipient, campaign, artistName, links)}
             </div>
           </div>
         )}
