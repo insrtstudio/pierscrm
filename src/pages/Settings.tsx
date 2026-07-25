@@ -1,17 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import {
-  Globe,
-  Moon,
-  Sun,
-  Mail,
-  Plug,
-  CalendarClock,
-  Eye,
-  Download,
-  RefreshCw,
-} from "lucide-react";
+import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import i18n from "../i18n";
 import { checkForUpdate, installAndRelaunch } from "../lib/updater";
@@ -35,15 +25,6 @@ export function Settings() {
   const [theme, setTheme] = useState(
     localStorage.getItem("theme") || "dark"
   );
-
-  const { data: targetDate } = useQuery({
-    queryKey: ["setting", "target_date"],
-    queryFn: () => getSetting("target_date"),
-  });
-  const [dateVal, setDateVal] = useState("");
-  useEffect(() => {
-    if (targetDate) setDateVal(targetDate);
-  }, [targetDate]);
 
   const { data: trackingUrl } = useQuery({
     queryKey: ["setting", "tracking_base_url"],
@@ -105,6 +86,13 @@ export function Settings() {
     }
   };
 
+  useEffect(() => {
+    const h = () => checkUpdate();
+    window.addEventListener("app:check-updates", h);
+    return () => window.removeEventListener("app:check-updates", h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const changeLang = (l: string) => {
     setLang(l);
     i18n.changeLanguage(l);
@@ -114,13 +102,6 @@ export function Settings() {
     setTheme(th);
     localStorage.setItem("theme", th);
     document.documentElement.classList.toggle("dark", th === "dark");
-  };
-
-  const saveDate = async () => {
-    await setSetting("target_date", dateVal);
-    qc.invalidateQueries({ queryKey: ["setting", "target_date"] });
-    qc.invalidateQueries({ queryKey: ["dashboard"] });
-    toast(t("settings.saved"), "ok");
   };
 
   const saveSmtp = async () => {
@@ -201,26 +182,6 @@ export function Settings() {
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-
-        {/* Target date */}
-        <div className="card p-6">
-          <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
-            <CalendarClock size={15} /> {t("settings.target_date")}
-          </div>
-          <div className="flex items-end gap-3">
-            <Field label={t("settings.target_date")} className="flex-1">
-              <input
-                type="date"
-                className="input"
-                value={dateVal}
-                onChange={(e) => setDateVal(e.target.value)}
-              />
-            </Field>
-            <button className="btn-primary" onClick={saveDate}>
-              {t("common.save")}
-            </button>
           </div>
         </div>
 

@@ -1,6 +1,7 @@
 import { HashRouter, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Dashboard } from "./pages/Dashboard";
+import { Agenda } from "./pages/Agenda";
 import { Artists } from "./pages/Artists";
 import { ArtistDetail } from "./pages/ArtistDetail";
 import { Contacts } from "./pages/Contacts";
@@ -18,6 +19,7 @@ export function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<Dashboard />} />
+          <Route path="agenda" element={<Agenda />} />
           <Route path="artists" element={<Artists />} />
           <Route path="artists/:id" element={<ArtistDetail />} />
           <Route path="contacts" element={<Contacts />} />

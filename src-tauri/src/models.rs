@@ -89,6 +89,8 @@ pub struct Template {
 pub struct EmailLog {
     pub id: Option<i64>,
     pub contact_id: Option<i64>,
+    #[serde(default)]
+    pub campaign_id: Option<i64>,
     pub to_addr: String,
     pub subject: String,
     pub body: String,
@@ -99,6 +101,98 @@ pub struct EmailLog {
     #[serde(default)]
     pub open_count: i64,
     pub sent_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct Campaign {
+    pub id: Option<i64>,
+    pub name: String,
+    pub purpose: Option<String>,
+    #[serde(default)]
+    pub artist_id: Option<i64>,
+    pub target_date: Option<String>,
+    #[serde(default = "default_campaign_status")]
+    pub status: String,
+    pub color: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    // Derived stats (populated by list_campaigns)
+    #[serde(default)]
+    pub sent_count: i64,
+    #[serde(default)]
+    pub opened_count: i64,
+}
+
+fn default_campaign_status() -> String {
+    "active".into()
+}
+
+impl Campaign {
+    pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(Campaign {
+            id: row.get("id")?,
+            name: row.get("name")?,
+            purpose: row.get("purpose")?,
+            artist_id: row.get("artist_id")?,
+            target_date: row.get("target_date")?,
+            status: row.get("status")?,
+            color: row.get("color")?,
+            created_at: row.get("created_at")?,
+            updated_at: row.get("updated_at")?,
+            sent_count: row.get("sent_count").unwrap_or(0),
+            opened_count: row.get("opened_count").unwrap_or(0),
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct Event {
+    pub id: Option<i64>,
+    #[serde(default)]
+    pub artist_id: Option<i64>,
+    #[serde(default)]
+    pub contact_id: Option<i64>,
+    pub title: String,
+    pub venue: Option<String>,
+    pub city: Option<String>,
+    pub date: String,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+    #[serde(default = "default_event_status")]
+    pub status: String,
+    pub fee: Option<f64>,
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+fn default_event_status() -> String {
+    "confirmed".into()
+}
+
+impl Event {
+    pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(Event {
+            id: row.get("id")?,
+            artist_id: row.get("artist_id")?,
+            contact_id: row.get("contact_id")?,
+            title: row.get("title")?,
+            venue: row.get("venue")?,
+            city: row.get("city")?,
+            date: row.get("date")?,
+            start_time: row.get("start_time")?,
+            end_time: row.get("end_time")?,
+            status: row.get("status")?,
+            fee: row.get("fee")?,
+            notes: row.get("notes")?,
+            created_at: row.get("created_at")?,
+            updated_at: row.get("updated_at")?,
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

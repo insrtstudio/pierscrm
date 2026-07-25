@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
@@ -43,6 +43,15 @@ export function Contacts() {
     queryKey: ["contacts", category, status, search],
     queryFn: () => listContacts({ category, status, search }),
   });
+
+  useEffect(() => {
+    const h = (e: Event) => {
+      if ((e as CustomEvent).detail === "new:contact")
+        setEditing({ category: "venue", name: "", status: "to_contact" } as Contact);
+    };
+    window.addEventListener("app:new", h);
+    return () => window.removeEventListener("app:new", h);
+  }, []);
 
   const statusMut = useMutation({
     mutationFn: ({ id, status }: { id: number; status: Status }) =>

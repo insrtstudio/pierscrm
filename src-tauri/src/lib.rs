@@ -1,10 +1,11 @@
 mod commands;
 mod db;
+mod menu;
 mod models;
 
 use db::DbPool;
 use std::fs;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 pub struct AppState {
     pub pool: DbPool,
@@ -20,6 +21,17 @@ pub fn run() {
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
+
+            // Native menu bar (macOS) — forwards clicks to the frontend.
+            let menu = menu::build(app.handle())?;
+            app.set_menu(menu)?;
+            app.on_menu_event(|app, event| {
+                let id = event.id().0.clone();
+                if id == "check-updates" || id.starts_with("nav:") || id.starts_with("new:") {
+                    let _ = app.emit("menu-action", id);
+                }
+            });
+
             let dir = app
                 .path()
                 .app_data_dir()
@@ -55,6 +67,14 @@ pub fn run() {
             commands::email::send_email,
             commands::email::list_emails,
             commands::email::apply_opens,
+            // campaigns
+            commands::campaigns::list_campaigns,
+            commands::campaigns::save_campaign,
+            commands::campaigns::delete_campaign,
+            // events
+            commands::events::list_events,
+            commands::events::save_event,
+            commands::events::delete_event,
             // visa
             commands::visa::list_visa_countries,
             commands::visa::save_visa_country,

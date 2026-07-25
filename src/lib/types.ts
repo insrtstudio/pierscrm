@@ -86,9 +86,45 @@ export interface Template {
   created_at?: string | null;
 }
 
+export interface Campaign {
+  id?: number;
+  name: string;
+  purpose?: string | null;
+  artist_id?: number | null;
+  target_date?: string | null;
+  status: string;
+  color?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  sent_count: number;
+  opened_count: number;
+}
+
+export const CAMPAIGN_STATUSES = ["active", "scheduled", "done", "archived"] as const;
+
+export interface Event {
+  id?: number;
+  artist_id?: number | null;
+  contact_id?: number | null;
+  title: string;
+  venue?: string | null;
+  city?: string | null;
+  date: string;
+  start_time?: string | null;
+  end_time?: string | null;
+  status: string;
+  fee?: number | null;
+  notes?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export const EVENT_STATUSES = ["hold", "confirmed", "cancelled"] as const;
+
 export interface EmailLog {
   id?: number;
   contact_id?: number | null;
+  campaign_id?: number | null;
   to_addr: string;
   subject: string;
   body: string;

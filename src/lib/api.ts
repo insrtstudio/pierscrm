@@ -2,9 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Artist,
   BudgetItem,
+  Campaign,
   Contact,
   DashboardStats,
   EmailLog,
+  Event,
   FilePreview,
   ImportResult,
   Kpi,
@@ -61,12 +63,14 @@ export const saveSmtpConfig = (config: SmtpConfig) => invoke<void>("save_smtp_co
 export const testSmtp = () => invoke<boolean>("test_smtp");
 export const sendEmail = (p: {
   contact_id?: number | null;
+  campaign_id?: number | null;
   to: string;
   subject: string;
   body: string;
 }) =>
   invoke<SendResult>("send_email", {
     contactId: p.contact_id ?? null,
+    campaignId: p.campaign_id ?? null,
     to: p.to,
     subject: p.subject,
     body: p.body,
@@ -88,6 +92,26 @@ export const listDossiers = () => invoke<VisaDossier[]>("list_dossiers");
 export const saveDossier = (dossier: VisaDossier) =>
   invoke<number>("save_dossier", { dossier });
 export const deleteDossier = (id: number) => invoke<void>("delete_dossier", { id });
+
+// ---- Campaigns ----
+export const listCampaigns = () => invoke<Campaign[]>("list_campaigns");
+export const saveCampaign = (campaign: Campaign) =>
+  invoke<number>("save_campaign", { campaign });
+export const deleteCampaign = (id: number) => invoke<void>("delete_campaign", { id });
+
+// ---- Events ----
+export const listEvents = (p: {
+  from?: string;
+  to?: string;
+  artist_id?: number | null;
+}) =>
+  invoke<Event[]>("list_events", {
+    from: p.from ?? null,
+    to: p.to ?? null,
+    artistId: p.artist_id ?? null,
+  });
+export const saveEvent = (event: Event) => invoke<number>("save_event", { event });
+export const deleteEvent = (id: number) => invoke<void>("delete_event", { id });
 
 // ---- Templates ----
 export const listTemplates = () => invoke<Template[]>("list_templates");

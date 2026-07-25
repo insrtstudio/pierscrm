@@ -90,9 +90,22 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS campaigns (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            purpose     TEXT,
+            artist_id   INTEGER REFERENCES artists(id) ON DELETE SET NULL,
+            target_date TEXT,
+            status      TEXT NOT NULL DEFAULT 'active',
+            color       TEXT,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE TABLE IF NOT EXISTS emails (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             contact_id  INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+            campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL,
             to_addr     TEXT NOT NULL,
             subject     TEXT NOT NULL,
             body        TEXT NOT NULL,
@@ -102,6 +115,23 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
             opened_at   TEXT,
             open_count  INTEGER NOT NULL DEFAULT 0,
             sent_at     TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS events (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            artist_id  INTEGER REFERENCES artists(id) ON DELETE CASCADE,
+            contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+            title      TEXT NOT NULL,
+            venue      TEXT,
+            city       TEXT,
+            date       TEXT NOT NULL,
+            start_time TEXT,
+            end_time   TEXT,
+            status     TEXT NOT NULL DEFAULT 'confirmed',
+            fee        REAL,
+            notes      TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
         CREATE TABLE IF NOT EXISTS budget_items (
@@ -174,6 +204,8 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_contacts_artist   ON contacts(artist_id);
         CREATE INDEX IF NOT EXISTS idx_kpis_artist       ON kpis(artist_id);
         CREATE INDEX IF NOT EXISTS idx_emails_contact    ON emails(contact_id);
+        CREATE INDEX IF NOT EXISTS idx_events_date       ON events(date);
+        CREATE INDEX IF NOT EXISTS idx_events_artist     ON events(artist_id);
         "#,
     )
     .map_err(|e| e.to_string())?;
@@ -185,11 +217,17 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
         "ALTER TABLE emails ADD COLUMN track_token TEXT",
         "ALTER TABLE emails ADD COLUMN opened_at TEXT",
         "ALTER TABLE emails ADD COLUMN open_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE emails ADD COLUMN campaign_id INTEGER",
     ] {
         let _ = conn.execute(stmt, []);
     }
+    // These indexes depend on columns added by the ALTERs above, so create them last.
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_emails_token ON emails(track_token)",
+        [],
+    );
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_emails_campaign ON emails(campaign_id)",
         [],
     );
     Ok(())

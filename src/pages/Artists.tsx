@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -17,6 +17,14 @@ export function Artists() {
     queryFn: listArtists,
   });
   const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    const h = (e: Event) => {
+      if ((e as CustomEvent).detail === "new:artist") setCreating(true);
+    };
+    window.addEventListener("app:new", h);
+    return () => window.removeEventListener("app:new", h);
+  }, []);
 
   return (
     <div>

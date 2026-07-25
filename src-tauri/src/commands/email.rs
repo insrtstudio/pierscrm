@@ -89,6 +89,7 @@ pub struct SendResult {
 pub fn send_email(
     state: State<AppState>,
     contact_id: Option<i64>,
+    campaign_id: Option<i64>,
     to: String,
     subject: String,
     body: String,
@@ -150,9 +151,9 @@ pub fn send_email(
 
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute(
-        "INSERT INTO emails (contact_id, to_addr, subject, body, status, error, track_token)
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        params![contact_id, to, subject, body, status, error, token],
+        "INSERT INTO emails (contact_id, campaign_id, to_addr, subject, body, status, error, track_token)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+        params![contact_id, campaign_id, to, subject, body, status, error, token],
     )
     .map_err(|e| e.to_string())?;
 
@@ -183,20 +184,21 @@ pub fn list_emails(
     contact_id: Option<i64>,
 ) -> Result<Vec<crate::models::EmailLog>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
-    let cols = "id, contact_id, to_addr, subject, body, status, error, track_token, opened_at, open_count, sent_at";
+    let cols = "id, contact_id, campaign_id, to_addr, subject, body, status, error, track_token, opened_at, open_count, sent_at";
     let map = |row: &rusqlite::Row| -> rusqlite::Result<crate::models::EmailLog> {
         Ok(crate::models::EmailLog {
             id: row.get(0)?,
             contact_id: row.get(1)?,
-            to_addr: row.get(2)?,
-            subject: row.get(3)?,
-            body: row.get(4)?,
-            status: row.get(5)?,
-            error: row.get(6)?,
-            track_token: row.get(7)?,
-            opened_at: row.get(8)?,
-            open_count: row.get(9)?,
-            sent_at: row.get(10)?,
+            campaign_id: row.get(2)?,
+            to_addr: row.get(3)?,
+            subject: row.get(4)?,
+            body: row.get(5)?,
+            status: row.get(6)?,
+            error: row.get(7)?,
+            track_token: row.get(8)?,
+            opened_at: row.get(9)?,
+            open_count: row.get(10)?,
+            sent_at: row.get(11)?,
         })
     };
     let mut out = Vec::new();

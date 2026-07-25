@@ -4,29 +4,37 @@
 
 @layer base {
   :root {
-    /* Light theme */
-    --bg: 247 248 250;
+    /* ---- Light theme ---- */
+    --bg: 244 245 248;
     --surface: 255 255 255;
-    --surface-2: 244 246 249;
-    --border: 226 230 236;
-    --muted: 241 243 246;
-    --fg: 17 22 31;
-    --fg-subtle: 100 110 124;
-    --accent: 99 91 255;
+    --surface-2: 248 249 251;
+    --elevated: 255 255 255;
+    --border: 229 231 236;
+    --border-strong: 214 218 225;
+    --muted: 240 242 245;
+    --fg: 13 17 23;
+    --fg-subtle: 92 101 115;
+    --fg-faint: 148 156 170;
+    --accent: 88 80 236;
     --accent-fg: 255 255 255;
+    --accent-soft: 238 237 253;
   }
 
   .dark {
-    /* Dark theme */
-    --bg: 12 14 19;
-    --surface: 20 23 31;
-    --surface-2: 27 31 41;
-    --border: 39 44 56;
-    --muted: 30 34 44;
-    --fg: 234 237 243;
-    --fg-subtle: 148 156 170;
+    /* ---- Dark theme ---- */
+    --bg: 9 11 15;
+    --surface: 20 23 30;
+    --surface-2: 26 30 39;
+    --elevated: 30 34 44;
+    --border: 37 42 53;
+    --border-strong: 52 59 73;
+    --muted: 28 32 41;
+    --fg: 233 236 242;
+    --fg-subtle: 151 160 176;
+    --fg-faint: 108 117 133;
     --accent: 124 116 255;
     --accent-fg: 255 255 255;
+    --accent-soft: 34 33 66;
   }
 
   * {
@@ -44,57 +52,130 @@
     margin: 0;
     overflow: hidden;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  h1, h2, h3 {
+    letter-spacing: -0.014em;
   }
 
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 11px;
+    height: 11px;
   }
   ::-webkit-scrollbar-thumb {
-    @apply bg-border rounded-full;
-    border: 2px solid transparent;
+    @apply bg-border-strong rounded-full;
+    border: 3px solid transparent;
     background-clip: padding-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-fg-subtle;
+    @apply bg-fg-faint;
     background-clip: padding-box;
-    border: 2px solid transparent;
+    border: 3px solid transparent;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
+
+  ::selection {
+    background: rgb(var(--accent) / 0.22);
+  }
 }
 
 @layer components {
+  /* ---- Buttons ---- */
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium
-      transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none select-none;
+      transition-all duration-150 select-none whitespace-nowrap
+      disabled:opacity-45 disabled:pointer-events-none;
   }
   .btn-primary {
-    @apply btn bg-accent text-accent-fg hover:opacity-90;
+    @apply btn bg-accent text-accent-fg shadow-xs
+      hover:shadow-accent-glow hover:brightness-[1.07] active:brightness-95 active:scale-[0.98];
   }
   .btn-ghost {
-    @apply btn text-fg-subtle hover:bg-muted hover:text-fg;
+    @apply btn text-fg-subtle hover:bg-muted hover:text-fg active:scale-[0.98];
   }
   .btn-outline {
-    @apply btn border border-border bg-surface hover:bg-muted;
+    @apply btn border border-border bg-surface text-fg shadow-xs
+      hover:bg-muted hover:border-border-strong active:scale-[0.98];
   }
   .btn-danger {
-    @apply btn bg-red-500/10 text-red-500 hover:bg-red-500/20;
+    @apply btn bg-red-500/10 text-red-500 hover:bg-red-500/[0.16] active:scale-[0.98];
   }
 
+  /* ---- Surfaces ---- */
   .card {
     @apply bg-surface border border-border rounded-2xl shadow-soft;
   }
+  .panel {
+    @apply bg-surface-2 border border-border rounded-xl;
+  }
 
+  /* ---- Inputs ---- */
   .input {
     @apply w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-fg
-      placeholder:text-fg-subtle/60 outline-none transition
-      focus:border-accent focus:ring-2 focus:ring-accent/20;
+      placeholder:text-fg-faint outline-none transition-all
+      focus:border-accent focus:ring-[3px] focus:ring-accent/15
+      hover:border-border-strong;
+  }
+  textarea.input {
+    @apply leading-relaxed resize-y;
+  }
+  select.input {
+    @apply cursor-pointer;
   }
 
   .label {
     @apply text-xs font-medium text-fg-subtle mb-1.5 block;
+  }
+
+  /* ---- Segmented control (tabs) ---- */
+  .segmented {
+    @apply inline-flex items-center gap-0.5 rounded-xl border border-border bg-surface-2 p-1;
+  }
+  .segmented-item {
+    @apply rounded-lg px-3.5 py-1.5 text-sm font-medium text-fg-subtle transition-all
+      hover:text-fg cursor-pointer;
+  }
+  .segmented-item[data-active="true"] {
+    @apply bg-surface text-fg shadow-xs;
+  }
+
+  /* ---- Badge ---- */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap;
+  }
+
+  /* ---- Table ---- */
+  .tbl {
+    @apply w-full text-sm border-separate border-spacing-0;
+  }
+  .tbl thead th {
+    @apply sticky top-0 z-10 bg-surface/95 backdrop-blur border-b border-border
+      px-4 py-2.5 text-left text-xs font-semibold text-fg-subtle;
+  }
+  .tbl tbody td {
+    @apply border-b border-border/60 px-4 py-2.5 align-middle;
+  }
+  .tbl tbody tr {
+    @apply transition-colors;
+  }
+  .tbl tbody tr:hover {
+    @apply bg-muted/50;
+  }
+}
+
+@layer utilities {
+  .drag {
+    -webkit-app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
   }
 }
 
@@ -118,7 +199,6 @@
     width: 100%;
     border: none !important;
     box-shadow: none !important;
-    /* Force light, print-friendly colors regardless of theme */
     --bg: 255 255 255;
     --surface: 255 255 255;
     --surface-2: 244 246 249;
@@ -126,7 +206,7 @@
     --muted: 241 243 246;
     --fg: 17 22 31;
     --fg-subtle: 90 100 115;
-    --accent: 99 91 255;
+    --accent: 88 80 236;
     color: #11161f;
   }
   #epk-print .epk-link {
