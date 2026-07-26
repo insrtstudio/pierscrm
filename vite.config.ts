@@ -6,6 +6,19 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
+  build: {
+    target: "es2021",
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom", "react-router-dom"],
+          query: ["@tanstack/react-query", "@tanstack/react-table"],
+          i18n: ["i18next", "react-i18next"],
+        },
+      },
+    },
+  },
   // Tauri expects a fixed port, fail if that port is not available
   clearScreen: false,
   server: {

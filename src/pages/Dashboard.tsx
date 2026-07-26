@@ -1,19 +1,7 @@
-import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
-import {
-  Users,
-  Mail,
-  CheckCircle2,
-  CalendarDays,
-  Music2,
-  Megaphone,
-  TrendingUp,
-  Wallet,
-  MapPin,
-} from "lucide-react";
-import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from "recharts";
+import { Plus, Mail } from "lucide-react";
 import {
   dashboardStats,
   listArtists,
@@ -32,7 +20,6 @@ function euro(n: number) {
     maximumFractionDigits: 0,
   }).format(n || 0);
 }
-
 function isoToday() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
@@ -54,163 +41,141 @@ export function Dashboard() {
     queryFn: () => listEvents({ from: today }),
   });
 
-  const openRate = useMemo(() => {
-    const sent = emails.filter((e) => e.status === "sent").length;
-    const opened = emails.filter((e) => e.opened_at).length;
-    return sent ? Math.round((opened / sent) * 100) : 0;
-  }, [emails]);
-
+  const sent = emails.filter((e) => e.status === "sent").length;
+  const opened = emails.filter((e) => e.opened_at).length;
+  const openRate = sent ? Math.round((opened / sent) * 100) : 0;
   const activeCampaigns = campaigns.filter((c) => c.status === "active").length;
 
-  const pipelineData = STATUSES.map((s) => ({
+  const pipeline = STATUSES.map((s) => ({
     key: s,
     label: t(`status.${s}`),
     value: stats?.by_status[s] ?? 0,
   })).filter((d) => d.value > 0);
-  const maxPipeline = Math.max(1, ...pipelineData.map((d) => d.value));
+  const maxPipe = Math.max(1, ...pipeline.map((d) => d.value));
 
-  const categoryData = Object.entries(stats?.by_category ?? {}).map(([k, v]) => ({
-    name: t(`category.${k}`, k),
-    value: v,
-  }));
-  const CAT_COLORS = ["#5850ec", "#10b981", "#f59e0b", "#f43f5e", "#0ea5e9"];
+  const cats = Object.entries(stats?.by_category ?? {});
+  const catTotal = cats.reduce((a, [, v]) => a + v, 0) || 1;
+  const CAT_COLOR: Record<string, string> = {
+    venue: "#ec3013",
+    lineup: "#8a847e",
+    major: "#3a3532",
+    other: "#5c5651",
+  };
 
   const months = t("agenda.months").split("_");
+  const net = (stats?.revenue_actual ?? 0) - (stats?.budget_actual ?? 0);
+
+  const stat = [
+    { label: t("dashboard.artists"), value: artists.length },
+    { label: t("dashboard.contacts"), value: stats?.total_contacts ?? 0 },
+    { label: t("dashboard.confirmed"), value: stats?.by_status["confirmed"] ?? 0, hot: true },
+    { label: t("dashboard.upcoming_events"), value: upcoming.length },
+    { label: t("dashboard.active_campaigns"), value: activeCampaigns },
+    { label: t("dashboard.open_rate"), value: `${openRate}`, unit: "%" },
+  ];
 
   return (
     <div>
-      <PageHeader title={t("dashboard.title")} subtitle={t("dashboard.subtitle")} />
-      <div className="space-y-6 px-8 py-6">
-        {/* Stat row */}
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
-          <StatCard icon={Music2} label={t("dashboard.artists")} value={artists.length} tone="text-violet-500" />
-          <StatCard icon={Users} label={t("dashboard.contacts")} value={stats?.total_contacts ?? 0} tone="text-blue-500" />
-          <StatCard icon={CheckCircle2} label={t("dashboard.confirmed")} value={stats?.by_status["confirmed"] ?? 0} tone="text-emerald-500" />
-          <StatCard icon={CalendarDays} label={t("dashboard.upcoming_events")} value={upcoming.length} tone="text-accent" />
-          <StatCard icon={Megaphone} label={t("dashboard.active_campaigns")} value={activeCampaigns} tone="text-pink-500" />
-          <StatCard icon={Mail} label={t("dashboard.open_rate")} value={`${openRate}%`} sub={`${stats?.emails_sent ?? 0} ${t("dashboard.emails_sent").toLowerCase()}`} tone="text-indigo-500" />
-        </div>
+      <PageHeader
+        kicker="PILOTAGE / VUE GÉNÉRALE"
+        title={t("dashboard.title")}
+        actions={
+          <>
+            <span className="mr-1 inline-flex items-center gap-2 border border-accent px-2.5 py-1.5 text-2xs font-bold uppercase tracking-widest text-accent-2">
+              <span className="h-[7px] w-[7px] bg-accent animate-livepulse" />
+              {t("agenda.months").split("_")[new Date().getMonth()].slice(0, 3)} 2026
+            </span>
+            <button className="btn-outline" onClick={() => navigate("/emails")}>
+              <Mail size={15} />
+              {t("artists.write_email")}
+            </button>
+            <button className="btn-primary" onClick={() => navigate("/agenda")}>
+              <Plus size={15} />
+              {t("agenda.new_event")}
+            </button>
+          </>
+        }
+      />
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          {/* Pipeline */}
-          <div className="card p-5 lg:col-span-2">
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-sm font-semibold">{t("dashboard.by_status")}</h3>
-              <Link to="/contacts" className="text-xs font-medium text-accent hover:underline">
-                {t("nav.contacts")} →
-              </Link>
+      {/* Stat band */}
+      <div className="grid grid-cols-2 border-b-2 border-border sm:grid-cols-3 xl:grid-cols-6">
+        {stat.map((s, i) => (
+          <div
+            key={i}
+            className="border-b-2 border-r-2 border-border px-6 py-6 last:border-r-0 xl:border-b-0"
+          >
+            <div className="text-2xs font-bold uppercase tracking-widest text-fg-subtle">
+              {s.label}
             </div>
-            {pipelineData.length === 0 ? (
-              <EmptyState icon={Users} title={t("common.empty")} />
-            ) : (
-              <div className="space-y-2.5">
-                {pipelineData.map((d) => (
-                  <div key={d.key} className="flex items-center gap-3">
-                    <div className="w-28 shrink-0 text-xs text-fg-subtle">{d.label}</div>
-                    <div className="h-6 flex-1 overflow-hidden rounded-md bg-muted">
-                      <div
-                        className="flex h-full items-center justify-end rounded-md px-2 text-2xs font-semibold text-white"
-                        style={{
-                          width: `${(d.value / maxPipeline) * 100}%`,
-                          backgroundColor: STATUS_DOT[d.key as Status],
-                          minWidth: 26,
-                        }}
-                      >
-                        {d.value}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+            <div
+              className={`mt-2 text-[52px] font-black leading-[0.9] tracking-tightest tabular ${
+                s.hot ? "text-accent text-glow" : "text-fg"
+              }`}
+            >
+              {s.value}
+              {s.unit && <span className="text-[24px] text-fg-subtle">{s.unit}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px]">
+        {/* Left: pipeline + upcoming */}
+        <div className="border-b-2 border-border p-8 lg:border-b-0 lg:border-r-2">
+          <div className="mb-5 flex items-baseline justify-between">
+            <div className="kicker">{t("dashboard.by_status")}</div>
+            <Link to="/contacts" className="text-2xs font-bold uppercase tracking-widest text-accent-2">
+              {t("nav.contacts")} →
+            </Link>
           </div>
 
-          {/* Category donut */}
-          <div className="card p-5">
-            <h3 className="mb-2 text-sm font-semibold">{t("dashboard.by_category")}</h3>
-            {categoryData.length === 0 ? (
-              <EmptyState icon={Users} title={t("common.empty")} />
-            ) : (
-              <>
-                <div className="h-44">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={categoryData} dataKey="value" nameKey="name" innerRadius={44} outerRadius={72} paddingAngle={2} stroke="none">
-                        {categoryData.map((_, i) => (
-                          <Cell key={i} fill={CAT_COLORS[i % CAT_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{
-                          background: "rgb(var(--elevated))",
-                          border: "1px solid rgb(var(--border))",
-                          borderRadius: 10,
-                          fontSize: 12,
-                        }}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="mt-2 space-y-1">
-                  {categoryData.map((d, i) => (
-                    <div key={d.name} className="flex items-center gap-2 text-xs">
-                      <span className="h-2.5 w-2.5 rounded-full" style={{ background: CAT_COLORS[i % CAT_COLORS.length] }} />
-                      <span className="text-fg-subtle">{d.name}</span>
-                      <span className="ml-auto font-medium tabular">{d.value}</span>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+          {pipeline.length === 0 ? (
+            <EmptyState icon={Mail} title={t("common.empty")} />
+          ) : (
+            <div className="grid grid-cols-[130px_1fr_36px] items-center gap-x-4 gap-y-3 text-sm">
+              {pipeline.map((d) => (
+                <PipelineRow key={d.key} label={d.label} value={d.value} max={maxPipe} statusKey={d.key} />
+              ))}
+            </div>
+          )}
 
-        {/* Upcoming events + budget */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div className="card p-5 lg:col-span-2">
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-sm font-semibold">{t("dashboard.upcoming")}</h3>
-              <Link to="/agenda" className="text-xs font-medium text-accent hover:underline">
+          {/* Upcoming */}
+          <div className="mt-8 border-t-2 border-border pt-6">
+            <div className="mb-4 flex items-baseline justify-between">
+              <div className="kicker">{t("dashboard.upcoming")}</div>
+              <Link to="/agenda" className="text-2xs font-bold uppercase tracking-widest text-accent-2">
                 {t("dashboard.view_agenda")} →
               </Link>
             </div>
             {upcoming.length === 0 ? (
-              <EmptyState
-                icon={CalendarDays}
-                title={t("dashboard.no_upcoming")}
-                action={
-                  <button className="btn-outline" onClick={() => navigate("/agenda")}>
-                    {t("nav.agenda")}
-                  </button>
-                }
-              />
+              <p className="text-sm text-fg-subtle">{t("dashboard.no_upcoming")}</p>
             ) : (
-              <div className="divide-y divide-border">
+              <div>
                 {upcoming.slice(0, 6).map((ev) => {
+                  const d = new Date(ev.date);
                   const artist = artists.find((a) => a.id === ev.artist_id);
                   return (
-                    <div key={ev.id} className="flex items-center gap-3 py-2.5">
-                      <div className="flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-lg bg-muted text-center">
-                        <span className="text-sm font-semibold leading-none tabular">
-                          {new Date(ev.date).getDate()}
+                    <div
+                      key={ev.id}
+                      className="grid grid-cols-[64px_1fr_auto] items-center gap-4 border-b border-border py-3 transition-colors hover:bg-muted/50"
+                    >
+                      <div className="tabular">
+                        <span className="text-[26px] font-black leading-none">
+                          {String(d.getDate()).padStart(2, "0")}
                         </span>
-                        <span className="text-2xs text-fg-subtle">
-                          {months[new Date(ev.date).getMonth()]?.slice(0, 3)}
+                        <span className="text-2xs text-fg-faint">
+                          {" "}
+                          {months[d.getMonth()]?.slice(0, 3).toUpperCase()}
                         </span>
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium">{ev.title}</div>
-                        <div className="flex items-center gap-2 text-xs text-fg-subtle">
-                          {artist && <span>{artist.name}</span>}
-                          {ev.venue && (
-                            <span className="inline-flex items-center gap-1">
-                              <MapPin size={11} /> {ev.venue}
-                            </span>
-                          )}
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-bold">{ev.title}</div>
+                        <div className="truncate text-2xs uppercase tracking-wide text-fg-subtle">
+                          {[artist?.name, ev.venue].filter(Boolean).join(" · ")}
                         </div>
                       </div>
                       {ev.start_time && (
-                        <span className="text-xs tabular text-fg-subtle">{ev.start_time}</span>
+                        <div className="text-sm font-bold tabular text-accent-2">{ev.start_time}</div>
                       )}
                     </div>
                   );
@@ -218,21 +183,54 @@ export function Dashboard() {
               </div>
             )}
           </div>
+        </div>
 
-          <div className="card p-5">
-            <div className="mb-4 flex items-center gap-2">
-              <Wallet size={16} className="text-fg-subtle" />
-              <h3 className="text-sm font-semibold">{t("dashboard.budget")}</h3>
-            </div>
-            <div className="space-y-3">
-              <Row label={t("dashboard.budget")} value={`${euro(stats?.budget_min ?? 0)} – ${euro(stats?.budget_max ?? 0)}`} />
-              <Row label={t("dashboard.revenue")} value={euro(stats?.revenue_actual ?? 0)} accent="text-emerald-500" />
-              <div className="flex items-center gap-2 rounded-lg bg-muted px-3 py-2.5">
-                <TrendingUp size={15} className="text-accent" />
-                <span className="text-xs text-fg-subtle">{t("dashboard.net")}</span>
-                <span className="ml-auto text-sm font-semibold tabular">
-                  {euro((stats?.revenue_actual ?? 0) - (stats?.budget_actual ?? 0))}
-                </span>
+        {/* Right: category + budget */}
+        <div className="p-8">
+          <div className="kicker mb-4">{t("dashboard.by_category")}</div>
+          {cats.length > 0 && (
+            <>
+              <div className="mb-4 flex h-4">
+                {cats.map(([k, v]) => (
+                  <div
+                    key={k}
+                    style={{ width: `${(v / catTotal) * 100}%`, background: CAT_COLOR[k] ?? "#5c5651" }}
+                  />
+                ))}
+              </div>
+              <div className="space-y-2.5">
+                {cats.map(([k, v]) => (
+                  <div key={k} className="flex items-center gap-2.5 text-sm">
+                    <span className="h-2.5 w-2.5" style={{ background: CAT_COLOR[k] ?? "#5c5651" }} />
+                    <span className="text-fg-subtle">{t(`category.${k}`, k)}</span>
+                    <span className="ml-auto font-bold tabular">{v}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* Budget */}
+          <div className="mt-8 border-t-2 border-border pt-6">
+            <div className="kicker mb-4">{t("dashboard.budget")}</div>
+            <div className="border border-accent p-5 shadow-[inset_0_0_24px_rgba(236,48,19,0.15)]">
+              <div className="text-2xs font-bold uppercase tracking-widest text-fg-subtle">
+                {t("dashboard.net")}
+              </div>
+              <div className="mt-1 text-[38px] font-black leading-none tracking-tightest tabular text-accent text-glow">
+                {euro(net)}
+              </div>
+              <div className="mt-3 space-y-1 text-2xs uppercase tracking-wide text-fg-subtle">
+                <div>
+                  {t("budget.min")} – {t("budget.max")}:{" "}
+                  <span className="font-bold text-fg">
+                    {euro(stats?.budget_min ?? 0)} – {euro(stats?.budget_max ?? 0)}
+                  </span>
+                </div>
+                <div>
+                  {t("dashboard.revenue")}:{" "}
+                  <span className="font-bold text-fg">{euro(stats?.revenue_actual ?? 0)}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -242,36 +240,30 @@ export function Dashboard() {
   );
 }
 
-function StatCard({
-  icon: Icon,
+function PipelineRow({
   label,
   value,
-  sub,
-  tone,
+  max,
+  statusKey,
 }: {
-  icon: any;
   label: string;
-  value: string | number;
-  sub?: string;
-  tone?: string;
+  value: number;
+  max: number;
+  statusKey: Status;
 }) {
+  const color = STATUS_DOT[statusKey];
   return (
-    <div className="card p-4 transition-shadow hover:shadow-card">
-      <div className="flex items-center gap-2 text-fg-subtle">
-        <Icon size={15} className={tone} />
-        <span className="text-xs font-medium">{label}</span>
+    <>
+      <div className="truncate text-2xs uppercase tracking-wide text-fg-subtle">{label}</div>
+      <div className="h-2.5 bg-muted">
+        <div
+          className="h-full"
+          style={{ width: `${(value / max) * 100}%`, background: color, minWidth: 3 }}
+        />
       </div>
-      <div className="mt-2 text-[26px] font-semibold leading-none tracking-tight tabular">{value}</div>
-      {sub && <div className="mt-1 text-2xs text-fg-subtle">{sub}</div>}
-    </div>
-  );
-}
-
-function Row({ label, value, accent }: { label: string; value: string; accent?: string }) {
-  return (
-    <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
-      <span className="text-xs text-fg-subtle">{label}</span>
-      <span className={`text-sm font-semibold tabular ${accent ?? ""}`}>{value}</span>
-    </div>
+      <div className="text-right text-sm font-bold tabular" style={{ color }}>
+        {value}
+      </div>
+    </>
   );
 }

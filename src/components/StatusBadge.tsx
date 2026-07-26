@@ -48,16 +48,16 @@ export function PriorityBadge({ priority }: { priority?: string | null }) {
   const p = priority.trim().toUpperCase();
   const tone =
     p === "P1" || p === "A"
-      ? "bg-emerald-500/15 text-emerald-500"
+      ? "bg-accent text-accent-fg"
       : p === "P2" || p === "B"
-      ? "bg-amber-500/15 text-amber-500"
+      ? "bg-accent-soft text-accent-2"
       : p === "P3" || p === "C"
-      ? "bg-rose-500/15 text-rose-500"
+      ? "bg-muted text-fg-subtle"
       : "bg-muted text-fg-subtle";
   return (
     <span
       className={clsx(
-        "inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-semibold",
+        "inline-flex items-center px-1.5 py-0.5 text-2xs font-bold tabular",
         tone
       )}
     >

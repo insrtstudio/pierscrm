@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import "@fontsource-variable/archivo";
 import "./i18n";
 import "./styles.css";
 import { App } from "./App";
@@ -11,7 +12,14 @@ const theme = localStorage.getItem("theme") || "dark";
 document.documentElement.classList.toggle("dark", theme === "dark");
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+  defaultOptions: {
+    queries: {
+      retry: false,
+      refetchOnWindowFocus: false,
+      staleTime: 30_000,
+      gcTime: 5 * 60_000,
+    },
+  },
 });
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
