@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
+import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -54,6 +55,23 @@ export function ArtistDetail() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const confirm = useConfirm();
+  const toast = useToast();
+
+  const exportPdf = async () => {
+    toast(t("artists.pdf_hint"), "ok");
+    // small delay so the toast paints before the modal print dialog blocks the UI
+    setTimeout(async () => {
+      try {
+        await invoke("print_page");
+      } catch {
+        try {
+          window.print();
+        } catch {
+          /* ignore */
+        }
+      }
+    }, 150);
+  };
 
   const { data: artist } = useQuery({
     queryKey: ["artist", artistId],
@@ -106,7 +124,7 @@ export function ArtistDetail() {
               {t("artists.write_email")}
             </button>
           )}
-          <button className="btn-outline" onClick={() => window.print()}>
+          <button className="btn-outline" onClick={exportPdf}>
             <FileDown size={15} />
             {t("artists.export_pdf")}
           </button>

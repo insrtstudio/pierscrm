@@ -17,6 +17,7 @@ export const fr = {
     budget: "Budget",
     timeline: "Planning",
     kpis: "KPIs",
+    visa: "Visas",
     settings: "Réglages",
   },
   common: {
@@ -381,6 +382,7 @@ export const fr = {
     section_press: "Presse & réalisations",
     epk: "EPK / One-pager",
     export_pdf: "Exporter en PDF",
+    pdf_hint: "Fenêtre d'impression ouverte — choisissez « PDF » en bas à gauche, puis Enregistrer.",
     write_email: "Écrire un email",
     kpis: "KPIs de l'artiste",
     bookings: "Bookings liés",

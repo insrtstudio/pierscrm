@@ -276,6 +276,15 @@ pub fn set_setting(state: State<AppState>, key: String, value: String) -> Result
     Ok(())
 }
 
+// ---------- Printing ----------
+
+/// Trigger the native print dialog (macOS → "Save as PDF") for the main webview.
+/// More reliable than the webview's own `window.print()` in some setups.
+#[tauri::command]
+pub fn print_page(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.print().map_err(|e| e.to_string())
+}
+
 // ---------- Dashboard ----------
 
 #[derive(Serialize)]

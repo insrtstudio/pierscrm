@@ -102,6 +102,7 @@ pub fn run() {
             // settings + dashboard
             commands::data::get_setting,
             commands::data::set_setting,
+            commands::data::print_page,
             commands::data::dashboard_stats,
         ])
         .run(tauri::generate_context!())
