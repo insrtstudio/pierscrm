@@ -116,7 +116,7 @@ export function Layout() {
           ticker below fully clear of them */}
       <div
         data-tauri-drag-region
-        className="relative flex h-[34px] shrink-0 items-center justify-center border-b-2 border-border bg-bg"
+        className="relative flex h-7 shrink-0 items-center justify-center bg-black"
       >
         <span className="pointer-events-none select-none text-2xs font-bold uppercase tracking-[0.22em] text-fg-faint">
           PiersCRM
