@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Trash2, MapPin, Clock } from "lucide-react";
 import clsx from "clsx";
 import {
   deleteEvent,
@@ -15,10 +16,18 @@ import { EVENT_STATUSES } from "../lib/types";
 import { PageHeader } from "../components/Layout";
 import { Modal, Field, useToast, useConfirm } from "../components/ui";
 
+// Warm, on-brand ramp (reds → warm neutrals) so artists stay distinguishable
+// without breaking the Modernist red/grey system.
 const ARTIST_COLORS = [
-  "#6366f1", "#10b981", "#f59e0b", "#ec4899", "#0ea5e9",
-  "#8b5cf6", "#ef4444", "#14b8a6", "#f97316", "#a855f7",
+  "#ec3013", "#ff7a5c", "#e0a458", "#c2603f", "#8a847e",
+  "#b0aaaa", "#a8552f", "#7d5a4a", "#5c5651", "#d98c6a",
 ];
+
+const EVENT_STATUS_COLOR: Record<string, string> = {
+  confirmed: "#ec3013",
+  hold: "#ff7a5c",
+  cancelled: "#6e6862",
+};
 
 function iso(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
@@ -40,6 +49,7 @@ export function Agenda() {
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
   const [artistFilter, setArtistFilter] = useState<number | "all">("all");
   const [editing, setEditing] = useState<Event | null>(null);
+  const [hover, setHover] = useState<{ ev: Event; rect: DOMRect } | null>(null);
   const todayIso = iso(new Date());
 
   // Build the 6x7 grid (Monday-first).
@@ -70,7 +80,7 @@ export function Agenda() {
   });
 
   const colorFor = (artistId?: number | null) => {
-    if (!artistId) return "#94a3b8";
+    if (!artistId) return "#8a847e";
     const idx = artists.findIndex((a) => a.id === artistId);
     return ARTIST_COLORS[(idx < 0 ? 0 : idx) % ARTIST_COLORS.length];
   };
@@ -206,12 +216,17 @@ export function Agenda() {
                           e.stopPropagation();
                           setEditing(ev);
                         }}
+                        onMouseEnter={(e) =>
+                          setHover({ ev, rect: e.currentTarget.getBoundingClientRect() })
+                        }
+                        onMouseLeave={() => setHover(null)}
                         className={clsx(
-                          "flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs font-medium leading-tight",
+                          "flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold leading-tight",
                           ev.status === "cancelled" && "line-through opacity-50"
                         )}
                         style={{
-                          background: `${colorFor(ev.artist_id)}22`,
+                          borderLeft: `2px solid ${colorFor(ev.artist_id)}`,
+                          background: `${colorFor(ev.artist_id)}1f`,
                           color: colorFor(ev.artist_id),
                         }}
                       >
@@ -267,7 +282,88 @@ export function Agenda() {
           }}
         />
       )}
+
+      {hover && (
+        <EventHoverCard
+          ev={hover.ev}
+          rect={hover.rect}
+          artist={artists.find((a) => a.id === hover.ev.artist_id)}
+          color={colorFor(hover.ev.artist_id)}
+          months={months}
+        />
+      )}
     </div>
+  );
+}
+
+function EventHoverCard({
+  ev,
+  rect,
+  artist,
+  color,
+  months,
+}: {
+  ev: Event;
+  rect: DOMRect;
+  artist?: Artist;
+  color: string;
+  months: string[];
+}) {
+  const { t } = useTranslation();
+  const W = 268;
+  const H = 172;
+  // Prefer below the chip; flip above if it would overflow the viewport.
+  const below = rect.bottom + H + 8 < window.innerHeight;
+  const top = below ? rect.bottom + 6 : rect.top - H - 6;
+  const left = Math.min(Math.max(8, rect.left), window.innerWidth - W - 8);
+
+  const d = new Date(ev.date);
+  const fullDate = `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+  const time = [ev.start_time, ev.end_time].filter(Boolean).join(" – ");
+
+  return createPortal(
+    <div
+      className="pointer-events-none fixed z-[70] animate-fade-in border-2 border-border bg-elevated p-4 shadow-pop"
+      style={{ top, left, width: W, borderTopColor: color }}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-sm font-bold leading-tight text-fg">{ev.title}</div>
+        <span
+          className="badge shrink-0"
+          style={{ background: `${EVENT_STATUS_COLOR[ev.status]}22`, color: EVENT_STATUS_COLOR[ev.status] }}
+        >
+          {t(`agenda.st_${ev.status}`)}
+        </span>
+      </div>
+      {artist && (
+        <div className="mt-1 flex items-center gap-1.5 text-2xs font-bold uppercase tracking-wide" style={{ color }}>
+          <span className="h-2 w-2" style={{ background: color }} />
+          {artist.name}
+        </div>
+      )}
+      <div className="mt-3 space-y-1.5 text-2xs text-fg-subtle">
+        <div className="flex items-center gap-2">
+          <Clock size={12} className="shrink-0 text-fg-faint" />
+          <span className="tabular">
+            {fullDate}
+            {time && ` · ${time}`}
+          </span>
+        </div>
+        {(ev.venue || ev.city) && (
+          <div className="flex items-center gap-2">
+            <MapPin size={12} className="shrink-0 text-fg-faint" />
+            {[ev.venue, ev.city].filter(Boolean).join(" · ")}
+          </div>
+        )}
+        {ev.fee != null && (
+          <div className="font-bold text-fg">
+            {new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(ev.fee)}
+          </div>
+        )}
+        {ev.notes && <div className="line-clamp-3 pt-1 leading-relaxed">{ev.notes}</div>}
+      </div>
+    </div>,
+    document.body
   );
 }
 
