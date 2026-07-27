@@ -431,7 +431,17 @@ export const en = {
     saved: "Saved",
     tracking_section: "Email open tracking",
     tracking_help:
-      "To know whether an email was opened, the app embeds an invisible pixel pointing to your tracking server. Enter that server's public URL (deployable on your own domain — see tracking-server/ in the project). Leave empty to disable.",
-    tracking_url: "Tracking server URL",
+      "To know whether a prospect opened your email, the app embeds an invisible pixel pointing to a small server of your own. It's the only piece to host outside your Mac — the recipient's mail client must be able to load that pixel. Leave the field empty to disable tracking.",
+    tracking_steps_title: "Setup, step by step",
+    tracking_s1:
+      "Grab the “tracking-server/” folder shipped with the project (a tiny zero-dependency Node server).",
+    tracking_s2:
+      "Deploy it on your domain over HTTPS — e.g. https://track.insrt.fr. tracking-server/README.md has the exact commands (Caddy, Cloudflare Tunnel or nginx).",
+    tracking_s3: "Paste that server's public URL in the field below, then click Save.",
+    tracking_s4:
+      "Done: your next emails go out with the pixel. In Emails → History, click “Sync opens” to see who opened.",
+    tracking_note:
+      "Best-effort: some mail clients block remote images, so “not opened” can also mean “images blocked”. It's an indicator, not proof.",
+    tracking_url: "Public URL of your tracking server",
   },
 };

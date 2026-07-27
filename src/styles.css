@@ -140,6 +140,22 @@
   }
   select.input {
     @apply cursor-pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    padding-right: 32px;
+    /* Custom Modernist chevron (square caps), neutral grey for both themes */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23948E8E' stroke-width='3' stroke-linecap='square'%3E%3Cpath d='M5 8l7 8 7-8'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 11px center;
+    background-size: 12px 12px;
+  }
+  select.input:focus {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23ec3013' stroke-width='3' stroke-linecap='square'%3E%3Cpath d='M5 8l7 8 7-8'/%3E%3C/svg%3E");
+  }
+  /* Best-effort styling of the native option list (honoured on some platforms) */
+  select.input option {
+    background: rgb(var(--surface));
+    color: rgb(var(--fg));
   }
   .label {
     @apply mb-1.5 block text-2xs font-semibold uppercase tracking-wider text-fg-subtle;

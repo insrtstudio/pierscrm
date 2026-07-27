@@ -431,7 +431,18 @@ export const fr = {
     saved: "Enregistré",
     tracking_section: "Tracking d'ouverture des emails",
     tracking_help:
-      "Pour savoir si un email a été ouvert, l'app insère un pixel invisible pointant vers votre serveur de tracking. Renseignez l'URL publique de ce serveur (déployable sur votre domaine — voir tracking-server/ dans le projet). Laissez vide pour désactiver.",
-    tracking_url: "URL du serveur de tracking",
+      "Pour savoir si un prospect a ouvert votre email, l'app insère un pixel invisible qui pointe vers un petit serveur à vous. C'est la seule brique à héberger hors de votre Mac — le logiciel de mail du destinataire doit pouvoir charger ce pixel. Laissez le champ vide pour désactiver le tracking.",
+    tracking_steps_title: "Installation, étape par étape",
+    tracking_s1:
+      "Récupérez le dossier « tracking-server/ » fourni avec le projet (un mini-serveur Node, sans aucune dépendance à installer).",
+    tracking_s2:
+      "Déployez-le sur votre domaine en HTTPS — par exemple https://track.insrt.fr. Le fichier tracking-server/README.md donne les commandes exactes (Caddy, Cloudflare Tunnel ou nginx).",
+    tracking_s3:
+      "Collez l'URL publique de ce serveur dans le champ ci-dessous, puis cliquez sur Enregistrer.",
+    tracking_s4:
+      "C'est prêt : vos prochains emails partent avec le pixel. Dans Emails → Historique, cliquez sur « Synchroniser les ouvertures » pour voir qui a ouvert.",
+    tracking_note:
+      "Fiabilité : certains logiciels de mail bloquent les images distantes — un « non ouvert » peut donc aussi signifier « images bloquées ». C'est un indicateur, pas une preuve.",
+    tracking_url: "URL publique de votre serveur de tracking",
   },
 };

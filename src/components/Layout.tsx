@@ -1,11 +1,12 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import clsx from "clsx";
-import type { LucideIcon } from "lucide-react";
+import { Sun, Moon, type LucideIcon } from "lucide-react";
 import { listArtists, listEvents } from "../lib/api";
+import { getTheme, toggleTheme, type Theme } from "../lib/theme";
 import { UpdateBanner } from "./UpdateBanner";
 
 type NavItem = { to: string; key: string; end?: boolean };
@@ -105,6 +106,12 @@ function Ticker() {
 export function Layout() {
   const { t } = useTranslation();
   useMenuActions();
+  const [theme, setTheme] = useState<Theme>(getTheme());
+  useEffect(() => {
+    const h = (e: Event) => setTheme((e as CustomEvent).detail as Theme);
+    window.addEventListener("app:theme", h);
+    return () => window.removeEventListener("app:theme", h);
+  }, []);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg text-fg">
@@ -145,17 +152,26 @@ export function Layout() {
             ))}
           </nav>
 
-          <NavLink
-            to="/settings"
-            className={({ isActive }) =>
-              clsx(
-                "px-6 py-3.5 text-2xs font-bold tracking-[0.14em] transition-colors",
-                isActive ? "bg-accent-ink text-accent" : "text-accent-ink hover:bg-accent-ink/[0.14]"
-              )
-            }
-          >
-            {t("nav.settings").toUpperCase()} · FR/EN
-          </NavLink>
+          <div className="flex items-stretch border-t border-accent-ink/15">
+            <NavLink
+              to="/settings"
+              className={({ isActive }) =>
+                clsx(
+                  "flex-1 px-6 py-3.5 text-2xs font-bold tracking-[0.14em] transition-colors",
+                  isActive ? "bg-accent-ink text-accent" : "text-accent-ink hover:bg-accent-ink/[0.14]"
+                )
+              }
+            >
+              {t("nav.settings").toUpperCase()} · FR/EN
+            </NavLink>
+            <button
+              onClick={toggleTheme}
+              title={theme === "dark" ? t("settings.theme_light") : t("settings.theme_dark")}
+              className="flex w-12 items-center justify-center border-l border-accent-ink/15 text-accent-ink transition-colors hover:bg-accent-ink/[0.14]"
+            >
+              {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
+          </div>
         </aside>
 
         {/* Main canvas */}

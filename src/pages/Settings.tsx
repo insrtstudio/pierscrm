@@ -5,6 +5,7 @@ import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw } from "lucide-r
 import { getVersion } from "@tauri-apps/api/app";
 import i18n from "../i18n";
 import { checkForUpdate, installAndRelaunch } from "../lib/updater";
+import { applyTheme, getTheme, type Theme } from "../lib/theme";
 import {
   getSetting,
   getSmtpConfig,
@@ -22,9 +23,12 @@ export function Settings() {
   const qc = useQueryClient();
 
   const [lang, setLang] = useState(i18n.language);
-  const [theme, setTheme] = useState(
-    localStorage.getItem("theme") || "dark"
-  );
+  const [theme, setTheme] = useState<Theme>(getTheme());
+  useEffect(() => {
+    const h = (e: Event) => setTheme((e as CustomEvent).detail as Theme);
+    window.addEventListener("app:theme", h);
+    return () => window.removeEventListener("app:theme", h);
+  }, []);
 
   const { data: trackingUrl } = useQuery({
     queryKey: ["setting", "tracking_base_url"],
@@ -98,10 +102,9 @@ export function Settings() {
     i18n.changeLanguage(l);
     localStorage.setItem("lang", l);
   };
-  const changeTheme = (th: string) => {
+  const changeTheme = (th: Theme) => {
     setTheme(th);
-    localStorage.setItem("theme", th);
-    document.documentElement.classList.toggle("dark", th === "dark");
+    applyTheme(th);
   };
 
   const saveSmtp = async () => {
@@ -241,6 +244,21 @@ export function Settings() {
             <Eye size={15} /> {t("settings.tracking_section")}
           </div>
           <p className="mb-4 text-xs text-fg-subtle">{t("settings.tracking_help")}</p>
+
+          <div className="mb-4 panel p-4">
+            <div className="kicker mb-3">{t("settings.tracking_steps_title")}</div>
+            <ol className="space-y-2.5">
+              {["tracking_s1", "tracking_s2", "tracking_s3", "tracking_s4"].map((k, i) => (
+                <li key={k} className="flex gap-3 text-xs leading-relaxed text-fg-subtle">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center bg-accent text-2xs font-bold text-accent-fg tabular">
+                    {i + 1}
+                  </span>
+                  <span>{t(`settings.${k}`)}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+
           <div className="flex items-end gap-3">
             <Field label={t("settings.tracking_url")} className="flex-1">
               <input
@@ -254,6 +272,7 @@ export function Settings() {
               {t("common.save")}
             </button>
           </div>
+          <p className="mt-3 text-2xs text-fg-faint">{t("settings.tracking_note")}</p>
         </div>
 
         {/* Updates */}
