@@ -91,11 +91,8 @@ function Ticker() {
   }, [events, artists, months]);
 
   return (
-    <div
-      data-tauri-drag-region
-      className="relative h-8 shrink-0 overflow-hidden bg-accent"
-    >
-      <div className="pointer-events-none flex w-max whitespace-nowrap pl-[76px] animate-ticker">
+    <div data-tauri-drag-region className="relative h-8 shrink-0 overflow-hidden bg-accent">
+      <div className="pointer-events-none flex w-max whitespace-nowrap pl-6 animate-ticker">
         <span className="py-2 text-2xs font-bold tracking-[0.18em] text-accent-ink">{text}</span>
         <span className="py-2 text-2xs font-bold tracking-[0.18em] text-accent-ink">{text}</span>
       </div>
@@ -115,6 +112,16 @@ export function Layout() {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg text-fg">
+      {/* Dedicated macOS title bar — houses the traffic-light controls, keeps the
+          ticker below fully clear of them */}
+      <div
+        data-tauri-drag-region
+        className="relative flex h-[34px] shrink-0 items-center justify-center border-b-2 border-border bg-bg"
+      >
+        <span className="pointer-events-none select-none text-2xs font-bold uppercase tracking-[0.22em] text-fg-faint">
+          PiersCRM
+        </span>
+      </div>
       <Ticker />
       <div className="flex min-h-0 flex-1">
         {/* Red poster sidebar */}
