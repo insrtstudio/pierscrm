@@ -24,6 +24,11 @@ query VI_AREA($c: String, $u: String) {
   }
 }"#;
 
+const VENUE_QUERY: &str = r#"
+query VI_VENUE($id: ID!) {
+  venue(id: $id) { id name website phone address capacity blurb }
+}"#;
+
 const EVENT_LISTINGS_QUERY: &str = r#"
 query VI_EVENT_LISTINGS($filters: FilterInputDtoInput, $pageSize: Int, $page: Int) {
   eventListings(filters: $filters, pageSize: $pageSize, page: $page,
@@ -199,6 +204,31 @@ pub struct CountryInfo {
 #[derive(Deserialize)]
 pub struct NamedNode {
     pub name: String,
+}
+
+// ---------------- Venue detail ----------------
+
+#[derive(Deserialize)]
+struct VenueData {
+    venue: Option<VenueDetailNode>,
+}
+#[derive(Deserialize, Default)]
+pub struct VenueDetailNode {
+    pub website: Option<String>,
+    pub phone: Option<String>,
+    pub address: Option<String>,
+    pub capacity: Option<String>,
+    pub blurb: Option<String>,
+}
+
+/// Fetch a venue's detail (website, phone, address, capacity) straight from RA.
+pub async fn fetch_venue_detail(
+    client: &reqwest::Client,
+    ra_venue_id: i64,
+) -> Result<VenueDetailNode, RaError> {
+    let body = json!({ "query": VENUE_QUERY, "variables": { "id": ra_venue_id.to_string() } });
+    let data: VenueData = post(client, body).await?;
+    Ok(data.venue.unwrap_or_default())
 }
 
 /// Fetch one page of event listings for an area over a date window (ISO 8601).

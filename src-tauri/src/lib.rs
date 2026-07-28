@@ -97,6 +97,9 @@ pub fn run() {
             commands::harvest::vi_resume_run,
             commands::harvest::vi_list_runs,
             commands::harvest::vi_list_venues,
+            // venue intelligence (J5, enrichment)
+            commands::enrich::vi_start_enrich,
+            commands::enrich::vi_venue_detail,
             // templates
             commands::data::list_templates,
             commands::data::save_template,

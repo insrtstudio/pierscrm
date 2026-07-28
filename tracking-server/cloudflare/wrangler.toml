@@ -1,0 +1,8 @@
+name = "pierscrm-track"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# L'id du KV se remplit a l'etape 2 ci-dessous (commande wrangler kv namespace create).
+[[kv_namespaces]]
+binding = "OPENS"
+id = "COLLE_ICI_L_ID_DU_KV"

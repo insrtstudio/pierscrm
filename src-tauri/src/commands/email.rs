@@ -352,6 +352,13 @@ pub fn send_bulk(
 
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let tracking_base = setting(&conn, "tracking_base_url");
+    // Throttle between sends: spreading mail out is the single biggest lever for
+    // staying out of spam and under the mailbox rate limit. Default 1.2s, tunable
+    // via the `bulk_delay_ms` setting (0 disables, capped at 60s).
+    let delay_ms: u64 = setting(&conn, "bulk_delay_ms")
+        .and_then(|s| s.trim().parse().ok())
+        .filter(|&v| v <= 60_000)
+        .unwrap_or(1200);
 
     // Campaign-level variables ({{event}}, {{artist}}, {{target_date}}) plus any
     // per-send link variables the user supplied ({{mix}}, {{listen}}, …).
@@ -487,6 +494,11 @@ pub fn send_bulk(
             }
         }
         emit(idx + 1, sent, failed, skipped, Some(email.clone()));
+
+        // Space out the next send (skip after the very last one).
+        if delay_ms > 0 && idx + 1 < total {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
     }
 
     Ok(BulkResult { sent, failed, skipped, errors })

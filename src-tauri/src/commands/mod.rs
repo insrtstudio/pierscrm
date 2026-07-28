@@ -3,6 +3,7 @@ pub mod campaigns;
 pub mod contacts;
 pub mod data;
 pub mod email;
+pub mod enrich;
 pub mod events;
 pub mod harvest;
 pub mod import;

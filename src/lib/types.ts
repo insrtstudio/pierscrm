@@ -228,7 +228,56 @@ export interface ViVenueRow {
   top_promoter?: string | null;
   ra_url?: string | null;
   site_web?: string | null;
+  telephone?: string | null;
+  best_email?: string | null;
+  nb_emails: number;
+  enriched: boolean;
   crm_contact_id?: number | null;
+}
+
+export interface ViContactRow {
+  id: number;
+  type_: string;
+  valeur: string;
+  role_devine?: string | null;
+  score: number;
+  source_url?: string | null;
+  source_method?: string | null;
+  verifie: boolean;
+}
+
+export interface ViEvidenceRow {
+  artiste: string;
+  artiste_tier?: number | null;
+  date_event: string;
+  titre_event?: string | null;
+  source_url: string;
+}
+
+export interface ViPromoterRow {
+  nom: string;
+  nb_events: number;
+}
+
+export interface ViVenueFiche {
+  id: number;
+  nom: string;
+  ville?: string | null;
+  pays?: string | null;
+  adresse?: string | null;
+  capacite_est?: number | null;
+  site_web?: string | null;
+  page_contact?: string | null;
+  telephone?: string | null;
+  ra_url?: string | null;
+  statut: string;
+  score_qualif: number;
+  nb_events_periode: number;
+  notes?: string | null;
+  enriched_at?: string | null;
+  contacts: ViContactRow[];
+  evidence: ViEvidenceRow[];
+  promoters: ViPromoterRow[];
 }
 
 export interface ViRunProgress {

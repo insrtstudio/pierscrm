@@ -257,14 +257,14 @@ pub async fn vi_resume_run(
 
 // ---------------- Worker ----------------
 
-fn spawn_worker(pool: DbPool, app: AppHandle, run_id: i64) {
+pub fn spawn_worker(pool: DbPool, app: AppHandle, run_id: i64) {
     tauri::async_runtime::spawn(async move {
         let client = ra::client();
         emit(&app, &pool, run_id, Some("Démarrage".into()));
 
         loop {
             // Claim the next pending task for this run.
-            let task: Option<(i64, String, i64, i64)> = {
+            let task: Option<(i64, String, String, i64, i64)> = {
                 let conn = pool.get().unwrap();
                 let claimed = conn.execute(
                     "UPDATE vi_tasks SET statut='en_cours', locked_at=datetime('now'), updated_at=datetime('now')
@@ -274,21 +274,27 @@ fn spawn_worker(pool: DbPool, app: AppHandle, run_id: i64) {
                 match claimed {
                     Ok(1) => conn
                         .query_row(
-                            "SELECT id, payload, tentatives, max_tentatives FROM vi_tasks
+                            "SELECT id, type, payload, tentatives, max_tentatives FROM vi_tasks
                              WHERE run_id=?1 AND statut='en_cours' ORDER BY locked_at DESC LIMIT 1",
                             params![run_id],
-                            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
                         )
                         .ok(),
                     _ => None,
                 }
             };
 
-            let Some((task_id, payload, tentatives, max_tentatives)) = task else {
+            let Some((task_id, task_type, payload, tentatives, max_tentatives)) = task else {
                 break; // no more pending tasks
             };
 
-            match process_harvest_task(&client, &pool, &payload).await {
+            let result = match task_type.as_str() {
+                "enrich_venue" => {
+                    crate::commands::enrich::process_enrich_task(&client, &pool, &payload).await
+                }
+                _ => process_harvest_task(&client, &pool, &payload).await,
+            };
+            match result {
                 Ok(()) => {
                     let conn = pool.get().unwrap();
                     let _ = conn.execute(
@@ -548,6 +554,10 @@ pub struct VenueRow {
     pub top_promoter: Option<String>,
     pub ra_url: Option<String>,
     pub site_web: Option<String>,
+    pub telephone: Option<String>,
+    pub best_email: Option<String>,
+    pub nb_emails: i64,
+    pub enriched: bool,
     pub crm_contact_id: Option<i64>,
 }
 
@@ -566,7 +576,11 @@ pub fn vi_list_venues(
                 v.nb_events_periode,
                 (SELECT COUNT(*) FROM vi_evidence e WHERE e.venue_id=v.id),
                 (SELECT nom FROM vi_promoters p WHERE p.venue_id=v.id ORDER BY nb_events DESC LIMIT 1),
-                v.ra_url, v.site_web, v.crm_contact_id
+                v.ra_url, v.site_web, v.telephone,
+                (SELECT valeur FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email' ORDER BY c.score DESC, c.id LIMIT 1),
+                (SELECT COUNT(*) FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email'),
+                (v.enriched_at IS NOT NULL),
+                v.crm_contact_id
          FROM vi_venues v WHERE 1=1",
     );
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -605,7 +619,11 @@ pub fn vi_list_venues(
                 top_promoter: r.get(10)?,
                 ra_url: r.get(11)?,
                 site_web: r.get(12)?,
-                crm_contact_id: r.get(13)?,
+                telephone: r.get(13)?,
+                best_email: r.get(14)?,
+                nb_emails: r.get(15)?,
+                enriched: r.get::<_, i64>(16)? != 0,
+                crm_contact_id: r.get(17)?,
             })
         })
         .map_err(|e| e.to_string())?;

@@ -160,6 +160,7 @@ import type {
   ViArea,
   ViReferenceArtist,
   ViRun,
+  ViVenueFiche,
   ViVenueRow,
 } from "./types";
 
@@ -192,3 +193,7 @@ export const viListVenues = (p: {
   limit?: number;
   offset?: number;
 }) => invoke<ViVenueRow[]>("vi_list_venues", p);
+export const viStartEnrich = (force?: boolean) =>
+  invoke<number>("vi_start_enrich", { force: force ?? false });
+export const viVenueDetail = (id: number) =>
+  invoke<ViVenueFiche>("vi_venue_detail", { id });

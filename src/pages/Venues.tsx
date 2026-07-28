@@ -12,6 +12,14 @@ import {
   Radio,
   MapPin,
   Check,
+  Sparkles,
+  Mail,
+  Phone,
+  Globe,
+  X,
+  Copy,
+  CalendarDays,
+  Users,
 } from "lucide-react";
 import clsx from "clsx";
 import {
@@ -26,8 +34,16 @@ import {
   viSaveReferenceArtist,
   viDeleteReferenceArtist,
   viStartHarvest,
+  viStartEnrich,
+  viVenueDetail,
 } from "../lib/api";
-import type { ViArea, ViReferenceArtist, ViRun, ViRunProgress } from "../lib/types";
+import type {
+  ViArea,
+  ViReferenceArtist,
+  ViRun,
+  ViRunProgress,
+  ViVenueFiche,
+} from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
 import { Field, useToast, useConfirm } from "../components/ui";
 
@@ -69,12 +85,44 @@ export function Venues() {
 
 function VenuesTab() {
   const { t } = useTranslation();
+  const toast = useToast();
+  const qc = useQueryClient();
   const [statut, setStatut] = useState("qualifie");
   const [search, setSearch] = useState("");
+  const [enriching, setEnriching] = useState(false);
+  const [openId, setOpenId] = useState<number | null>(null);
   const { data: venues = [] } = useQuery({
     queryKey: ["vi_venues", statut, search],
     queryFn: () => viListVenues({ statut, search, limit: 400 }),
+    // While an enrichment run is filling in contacts, keep the list fresh.
+    refetchInterval: enriching ? 4000 : false,
   });
+
+  // Stop the auto-refresh once every enrich run has finished.
+  useEffect(() => {
+    if (!enriching) return;
+    const un = listen<ViRunProgress>("vi:run-progress", (e) => {
+      if (e.payload.statut === "termine") {
+        setEnriching(false);
+        qc.invalidateQueries({ queryKey: ["vi_venues"] });
+      }
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, [enriching, qc]);
+
+  const enrich = async () => {
+    setEnriching(true);
+    try {
+      await viStartEnrich();
+      toast(t("venues.enrich_started"), "ok");
+    } catch (e: any) {
+      setEnriching(false);
+      const msg = e?.toString?.() ?? "error";
+      toast(msg.includes("enrichir") ? t("venues.enrich_none") : msg, "error");
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -93,30 +141,38 @@ function VenuesTab() {
             </option>
           ))}
         </select>
+        <button className="btn-primary ml-auto" onClick={enrich} disabled={enriching} title={t("venues.enrich_hint")}>
+          <Sparkles size={15} className={enriching ? "animate-pulse" : ""} />
+          {t("venues.enrich")}
+        </button>
       </div>
+      <p className="text-2xs text-fg-subtle">{t("venues.enrich_hint")}</p>
 
       {venues.length === 0 ? (
         <div className="card">
           <EmptyState icon={Radio} title={t("venues.no_venues")} />
         </div>
       ) : (
-        <div className="card max-h-[calc(100vh-320px)] overflow-auto">
+        <div className="card max-h-[calc(100vh-360px)] overflow-auto">
           <table className="tbl">
             <thead>
               <tr>
                 <th className="w-16 text-right">{t("venues.score")}</th>
                 <th>{t("venues.name")}</th>
                 <th>{t("venues.city")}</th>
+                <th>{t("venues.contact")}</th>
                 <th className="text-right">{t("venues.evidence")}</th>
-                <th className="text-right">{t("venues.events")}</th>
-                <th>{t("venues.promoter")}</th>
                 <th>{t("venues.status")}</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {venues.map((v) => (
-                <tr key={v.id}>
+                <tr
+                  key={v.id}
+                  className="cursor-pointer hover:bg-muted"
+                  onClick={() => setOpenId(v.id)}
+                >
                   <td className="text-right">
                     <span className="text-lg font-black tabular text-accent">{v.score_qualif}</span>
                   </td>
@@ -124,9 +180,24 @@ function VenuesTab() {
                   <td className="text-fg-subtle">
                     {[v.ville, v.pays].filter(Boolean).join(", ")}
                   </td>
+                  <td>
+                    <div className="flex items-center gap-2 text-fg-subtle">
+                      {v.best_email ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-500" title={v.best_email}>
+                          <Mail size={13} />
+                          {v.nb_emails > 1 ? v.nb_emails : ""}
+                        </span>
+                      ) : (
+                        <Mail size={13} className="text-fg-faint/40" />
+                      )}
+                      <Phone size={13} className={v.telephone ? "text-fg-subtle" : "text-fg-faint/40"} />
+                      <Globe size={13} className={v.site_web ? "text-fg-subtle" : "text-fg-faint/40"} />
+                      {!v.enriched && (
+                        <span className="badge bg-muted text-fg-faint">{t("venues.not_enriched")}</span>
+                      )}
+                    </div>
+                  </td>
                   <td className="text-right font-bold tabular">{v.nb_evidence}</td>
-                  <td className="text-right tabular text-fg-subtle">{v.nb_events_periode}</td>
-                  <td className="max-w-[180px] truncate text-fg-subtle">{v.top_promoter || "-"}</td>
                   <td>
                     <span className={clsx("badge", VENUE_STATUS_STYLE[v.statut])}>
                       {t(`venues.st_${v.statut}`, v.statut)}
@@ -137,7 +208,10 @@ function VenuesTab() {
                       <button
                         className="btn-ghost px-2 py-1.5"
                         title={t("venues.open_ra")}
-                        onClick={() => openUrl(v.ra_url!).catch(() => {})}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openUrl(v.ra_url!).catch(() => {});
+                        }}
                       >
                         <ExternalLink size={15} />
                       </button>
@@ -150,6 +224,181 @@ function VenuesTab() {
         </div>
       )}
       <div className="text-2xs text-fg-subtle">{t("venues.count_venues", { count: venues.length })}</div>
+
+      {openId != null && <VenueFicheModal id={openId} onClose={() => setOpenId(null)} />}
+    </div>
+  );
+}
+
+// ---------------- Venue fiche modal ----------------
+
+const ROLE_STYLE: Record<string, string> = {
+  booking: "bg-accent text-accent-fg",
+  management: "bg-indigo-500/15 text-indigo-400",
+  presse: "bg-amber-500/15 text-amber-500",
+  general: "bg-muted text-fg-subtle",
+  reservation: "bg-muted text-fg-faint",
+  autre: "bg-muted text-fg-faint",
+};
+
+function VenueFicheModal({ id, onClose }: { id: number; onClose: () => void }) {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const { data: fiche } = useQuery<ViVenueFiche>({
+    queryKey: ["vi_venue_detail", id],
+    queryFn: () => viVenueDetail(id),
+  });
+
+  const copy = (val: string) => {
+    navigator.clipboard?.writeText(val).then(
+      () => toast(t("venues.copied"), "ok"),
+      () => {}
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+      <div
+        className="card max-h-[85vh] w-full max-w-2xl overflow-auto p-0"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {!fiche ? (
+          <div className="p-8 text-center text-fg-subtle">
+            <RefreshCw size={18} className="mx-auto animate-spin" />
+          </div>
+        ) : (
+          <>
+            <div className="sticky top-0 z-10 flex items-start justify-between border-b-2 border-border bg-bg px-6 py-4">
+              <div>
+                <div className="kicker">{t("venues.fiche")}</div>
+                <h2 className="text-xl font-black">{fiche.nom}</h2>
+                <div className="mt-0.5 text-xs text-fg-subtle">
+                  {[fiche.ville, fiche.pays].filter(Boolean).join(", ")}
+                  {fiche.capacite_est ? ` · ${t("venues.fiche_capacity")} ${fiche.capacite_est}` : ""}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={clsx("badge", VENUE_STATUS_STYLE[fiche.statut])}>
+                  {t(`venues.st_${fiche.statut}`, fiche.statut)}
+                </span>
+                <span className="text-lg font-black tabular text-accent">{fiche.score_qualif}</span>
+                <button className="btn-ghost px-2 py-1.5" onClick={onClose}>
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-6 p-6">
+              {/* Coordinates */}
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <FicheLine icon={Globe} label={t("venues.fiche_website")} value={fiche.site_web} onOpen={fiche.site_web ? () => openUrl(fiche.site_web!).catch(() => {}) : undefined} />
+                <FicheLine icon={Phone} label={t("venues.fiche_phone")} value={fiche.telephone} onCopy={fiche.telephone ? () => copy(fiche.telephone!) : undefined} />
+                <FicheLine icon={MapPin} label={t("venues.fiche_address")} value={fiche.adresse} />
+                <FicheLine icon={ExternalLink} label="RA" value={fiche.ra_url} onOpen={fiche.ra_url ? () => openUrl(fiche.ra_url!).catch(() => {}) : undefined} />
+              </div>
+
+              {/* Emails found */}
+              <div>
+                <div className="kicker mb-2 flex items-center gap-2">
+                  <Mail size={13} /> {t("venues.fiche_contacts")}
+                </div>
+                {fiche.contacts.filter((c) => c.type_ === "email").length === 0 ? (
+                  <p className="text-xs text-fg-subtle">{t("venues.fiche_no_contacts")}</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {fiche.contacts
+                      .filter((c) => c.type_ === "email")
+                      .map((c) => (
+                        <div key={c.id} className="flex items-center gap-2 border-2 border-border px-3 py-2">
+                          <span className={clsx("badge", ROLE_STYLE[c.role_devine || "autre"])}>
+                            {t(`venues.role_${c.role_devine || "autre"}`, c.role_devine || "")}
+                          </span>
+                          <a href={`mailto:${c.valeur}`} className="font-mono text-xs text-fg hover:text-accent">
+                            {c.valeur}
+                          </a>
+                          <span className="ml-auto text-2xs tabular text-fg-faint">
+                            {c.source_method === "mailto" ? "mailto" : "html"} · {c.score}
+                          </span>
+                          <button className="btn-ghost px-1.5 py-1" title={t("venues.copy")} onClick={() => copy(c.valeur)}>
+                            <Copy size={13} />
+                          </button>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Evidence */}
+              {fiche.evidence.length > 0 && (
+                <div>
+                  <div className="kicker mb-2 flex items-center gap-2">
+                    <CalendarDays size={13} /> {t("venues.fiche_evidence")}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {fiche.evidence.map((ev, i) => (
+                      <span key={i} className="inline-flex items-center gap-1.5 border-2 border-border px-2 py-1 text-2xs">
+                        <span className="font-semibold">{ev.artiste}</span>
+                        <span className="text-fg-faint">{ev.date_event}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Promoters */}
+              {fiche.promoters.length > 0 && (
+                <div>
+                  <div className="kicker mb-2 flex items-center gap-2">
+                    <Users size={13} /> {t("venues.fiche_promoters")}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {fiche.promoters.map((p, i) => (
+                      <span key={i} className="inline-flex items-center gap-1.5 border-2 border-border px-2 py-1 text-2xs">
+                        <span className="font-semibold">{p.nom}</span>
+                        <span className="text-fg-faint tabular">{p.nb_events}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FicheLine({
+  icon: Icon,
+  label,
+  value,
+  onOpen,
+  onCopy,
+}: {
+  icon: any;
+  label: string;
+  value?: string | null;
+  onOpen?: () => void;
+  onCopy?: () => void;
+}) {
+  return (
+    <div className="flex items-start gap-2 border-2 border-border px-3 py-2">
+      <Icon size={14} className="mt-0.5 shrink-0 text-fg-faint" />
+      <div className="min-w-0 flex-1">
+        <div className="text-2xs uppercase tracking-wide text-fg-faint">{label}</div>
+        <div className="truncate text-xs text-fg">{value || "-"}</div>
+      </div>
+      {value && onOpen && (
+        <button className="btn-ghost px-1.5 py-1" onClick={onOpen}>
+          <ExternalLink size={13} />
+        </button>
+      )}
+      {value && onCopy && (
+        <button className="btn-ghost px-1.5 py-1" onClick={onCopy}>
+          <Copy size={13} />
+        </button>
+      )}
     </div>
   );
 }

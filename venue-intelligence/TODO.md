@@ -10,7 +10,11 @@ pour les décisions d'architecture.
 - [x] **J2** Moissonnage RA, file de tâches, worker Rust reprenable, écran Venues (+ qualification de base foldée du J3 pour rendre la build testable ce soir)
 - [ ] **J3** Qualification, preuves (vi_evidence), score, promoteurs
 - [ ] **J4** Cockpit de triage (3 colonnes, raccourcis clavier), sans enrichissement auto
-- [ ] **J5** Enrichissement contacts (résolution site, crawl, LLM Anthropic)
+- [~] **J5** Enrichissement contacts : **fait** = fiche RA (site/tel/adresse/capacité) +
+      crawl du site (email + tel + page contact), scoring des emails par préfixe, modal fiche
+      lieu. **Reste** = extraction LLM Sonnet pour les cas ambigus, sources additionnelles
+      (Instagram bio, Bandsintown, Shotgun), résolution de site via search API quand RA n'a
+      pas de website ou renvoie un 404.
 - [ ] **J6** Intégration CRM (promotion venue vers table contacts, dédoublonnage)
 - [ ] **J7** Fraîcheur (re-vérification 180 j), export CSV, garde-fous RGPD
 

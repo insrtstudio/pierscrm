@@ -392,6 +392,8 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
         "ALTER TABLE emails ADD COLUMN open_count INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE emails ADD COLUMN campaign_id INTEGER",
         "ALTER TABLE campaigns ADD COLUMN event_name TEXT",
+        "ALTER TABLE vi_venues ADD COLUMN telephone TEXT",
+        "ALTER TABLE vi_venues ADD COLUMN enriched_at TEXT",
     ] {
         let _ = conn.execute(stmt, []);
     }
