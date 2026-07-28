@@ -2,6 +2,32 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-07-29, étude booking + v0.7.3 pack de templates pro
+
+Contexte : l'utilisateur veut aligner l'app sur les standards des meilleurs bookers, pour des
+artistes EN DÉVELOPPEMENT (petits), avec un professionnalisme maximal pour débloquer des dates.
+
+- **Étude booking** produite par un sous-agent de recherche (29 outils, 25 sources : RA, Attack
+  Magazine, DJ TechTools, Sonicbids, gigmit, ZIPDJ). Publiée en Artifact lisible (Archivo-like,
+  accent rouge Insrt, thèmes clair/sombre) :
+  https://claude.ai/code/artifact/485d055c-f09b-42be-88dd-af4a24177359
+  Points clés pour émergents : fit musical avant le draw, humilité + chiffres honnêtes (ou
+  masqués si faibles), mail formule 4 lignes / 1 lien / téléphone / perso, le showcase no-fee
+  comme levier n°1 pour une première date, cadence 1-2 relances espacées avec du neuf, EPK carré,
+  ciblage par ville d'audience.
+- L'utilisateur a validé les 4 chantiers d'alignement : (1) pack templates, (2) système de
+  relance, (3) fiche EPK aux normes, (4) ciblage par ville. FAIT ce tour : #1.
+- **v0.7.3, pack de templates pro** (db.rs `seed_defaults` réécrit) : insertion idempotente PAR
+  NOM (n'écrase pas les éditions, arrive aussi sur installs existantes). 3 templates aux normes,
+  MULTI-ARTISTES via {{artist}} : "Prise de contact" (4 lignes, fit-first, humble), "Showcase
+  (sans cachet)" (levier émergent), "Relance" (courte, avec {{news}} = du neuf). Rappel :
+  render_template laisse {{var}} en littéral si non résolue ; {{artist}} vient de la campagne,
+  {{news}} est un input au cas par cas.
+
+RESTE (chantiers validés) : #2 relances (file à relancer J+7, max 2), #3 EPK aux normes (mix un
+clic, bio, dates, chiffres honnêtes, presse, rider, fee range, contact haut+bas, export PDF), #4
+ciblage par ville (villes d'audience par artiste -> tri des salles Venue Intelligence).
+
 ## 2026-07-29, v0.7.2, signature email + correction label Insrt
 
 - DKIM résolu côté utilisateur : le off/on Amen a régénéré la clé avec un NOUVEAU sélecteur

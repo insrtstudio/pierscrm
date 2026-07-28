@@ -427,27 +427,35 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// Seed a couple of default email templates on first run only.
+/// Vetted pack of professional booking templates, kept available on every launch.
+/// Inserted by name only when absent, so user edits are never overwritten and
+/// existing installs receive the pack too. Written to industry standards for
+/// artists in development: short (the "4-line" formula), one link, honest and
+/// humble tone, fit-first, plus the no-fee showcase that unlocks first dates.
+/// Multi-artist via {{artist}}; the recipient's promoter name is {{name}}.
 fn seed_defaults(conn: &rusqlite::Connection) -> Result<(), String> {
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM templates", [], |r| r.get(0))
-        .map_err(|e| e.to_string())?;
-    if count == 0 {
+    const PACK: &[(&str, &str, &str)] = &[
+        (
+            "Prise de contact",
+            "{{artist}} · booking {{venue}}",
+            "Hi {{name}},\n\nI look after bookings at Insrt, and I'm writing about {{artist}}, a house / tech-house artist we work with. I'm reaching out to {{venue}} in particular because your programming genuinely fits their sound, this isn't a mass mailout.\n\nHere's a recent mix so you can judge the fit for yourself: {{mix}}\n\nThey'd love to play, even an early or opening slot, and we bring our own crowd. If it could work I'll gladly send a full EPK and past dates.\n\nThanks for your time,",
+        ),
+        (
+            "Showcase (sans cachet)",
+            "showcase idea for {{venue}}",
+            "Hi {{name}},\n\nA quick idea for {{venue}}: a small free-entry showcase with {{artist}} and a couple of friends, early evening, house / tech-house. We bring our own crowd, you keep the bar, no fee either way. We just want a good room and a proper sound system.\n\nHere's {{artist}}'s latest mix so you get the sound: {{mix}}\n\nIf it's worth a chat I'll send over a full plan, times, artists and references. And if the timing is off, no worries at all, I'd love to stay on your radar.\n\nCheers,",
+        ),
+        (
+            "Relance",
+            "re: {{artist}} at {{venue}}",
+            "Hi {{name}},\n\nJust a short follow-up on my note about {{artist}} at {{venue}}, I know the inbox gets busy.\n\nSince I wrote: {{news}}. Still keen if a slot could work, even a small or early one.\n\nNo pressure at all, and thanks for reading.\n\nBest,",
+        ),
+    ];
+    for (name, subject, body) in PACK {
         conn.execute(
-            "INSERT INTO templates (name, subject, body) VALUES (?1, ?2, ?3)",
-            rusqlite::params![
-                "Slot pitch",
-                "playing at {{venue}} during ADE week?",
-                "Hi {{name}},\n\nPiers here, French DJ and producer, house and tech house, label Insrt. I'll be in Amsterdam for the whole of ADE week and I'm putting my dates together.\n\nI've been following what {{venue}} programmes for a while and it's honestly one of the rooms I'd most want to play. I wanted to ask directly if you have anything open that week, even an early slot or an opening set, I'm genuinely easy on timing and billing.\n\nI bring my own crowd and I'm not precious about where I sit on the lineup, I just want to play a room that takes the music seriously. Here's my latest mix so you can hear where I'm at: {{mix}}\n\nHappy to send a full EPK, past dates and a bit of press if useful. And if the week's already full, I'd love to stay in touch for a proper date later in the season.\n\nThanks for reading,\nPiers"
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-        conn.execute(
-            "INSERT INTO templates (name, subject, body) VALUES (?1, ?2, ?3)",
-            rusqlite::params![
-                "showcase idea for {{venue}} during ADE?",
-                "Hi {{name}},\n\nI'm Piers, a French producer and DJ running the label Insrt. We work in house and tech house, and we're putting a few things together in Amsterdam for ADE week.\n\nI'm reaching out to {{venue}} directly because the room and what you programme really fit what we do. The idea: a free-entry showcase in the early evening, three or four of us back to back, our own crowd coming through the door. You keep the bar, no fee either way, we just want a good room with a proper sound system.\n\nIf it's something you'd consider, I'll send over a full plan, times, the artists, and a couple of references from past parties. Here's a recent mix so you get the sound straight away: {{mix}}\n\nAnd if your week is already locked, no worries at all, I'd still love to be on your radar for the next one.\n\nCheers,\nPiers"
-            ],
+            "INSERT INTO templates (name, subject, body)
+             SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM templates WHERE name = ?1)",
+            rusqlite::params![name, subject, body],
         )
         .map_err(|e| e.to_string())?;
     }
