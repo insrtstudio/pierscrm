@@ -26,6 +26,17 @@ pour les décisions d'architecture.
 - RGPD : contexte mono utilisateur. Traçabilité par source_url + date de collecte, liste
   d'exclusion vi_exclusions, registre = export CSV local. Pas de notion d'utilisateur en base.
 
+## Pistes de sourcing à ajouter (demande utilisateur, 2026-07-28)
+
+- **Bandsintown comme seconde source.** Utile pour référencer des clubs et trouver plus de
+  lieux liés à des artistes clés (page artiste Bandsintown, ex. Cloonee). À traiter comme un
+  second moissonneur alimentant les mêmes tables vi_ (venues, evidence source_type='autre'
+  avec l'URL Bandsintown). À vérifier : API ou HTML, robustesse, dédoublonnage venue avec RA
+  (par nom_normalise + ville, puisque pas de ra_venue_id côté Bandsintown).
+- Enrichir la liste de référence dans la veine house / tech house : Franky Rizardo,
+  Mason Collective, etc. (Cloonee déjà en tier 1). Ajout possible dès maintenant via l'onglet
+  "Artistes de référence" de l'app, ou en seed.
+
 ## Dette et points à traiter plus tard
 
 - Worker sans app ouverte : évaluer un binaire worker séparé ou un cron OS (hors périmètre

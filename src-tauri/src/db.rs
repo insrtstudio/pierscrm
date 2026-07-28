@@ -404,6 +404,24 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
         "CREATE INDEX IF NOT EXISTS idx_emails_campaign ON emails(campaign_id)",
         [],
     );
+
+    // Patch existing Venue Intelligence areas: fix the Côte d'Azur slug and fill in
+    // area ids resolved after those rows were first seeded (only touches NULLs).
+    let _ = conn.execute(
+        "UPDATE vi_ra_areas SET slug='fr/nice', libelle='Nice' WHERE slug='fr/cotedazur'",
+        [],
+    );
+    for (slug, libelle, id) in VI_AREAS {
+        if let Some(area_id) = id {
+            let _ = conn.execute(
+                "UPDATE vi_ra_areas SET ra_area_id=?2, resolved_at=datetime('now'),
+                    libelle=COALESCE(libelle, ?3)
+                 WHERE slug=?1 AND ra_area_id IS NULL",
+                rusqlite::params![slug, area_id, libelle],
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -488,35 +506,76 @@ fn seed_venue_intelligence(conn: &rusqlite::Connection) -> Result<(), String> {
         }
     }
 
-    // ---- RA areas (target zones). ra_area_id resolved later. ----
+    // Extra reference artists requested later (added on every run, harmless if present).
+    for (nom, tier) in EXTRA_REF_ARTISTS {
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO vi_reference_artists (nom, nom_normalise, tier) VALUES (?1, ?2, ?3)",
+            rusqlite::params![nom, normalise(nom), tier],
+        );
+    }
+
+    // ---- RA areas (target zones), area ids pre-resolved via the RA API. ----
     let acount: i64 = conn
         .query_row("SELECT COUNT(*) FROM vi_ra_areas", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
     if acount == 0 {
-        let slugs = [
-            "fr/paris", "fr/lyon", "fr/marseille", "fr/bordeaux", "fr/nantes", "fr/lille",
-            "fr/toulouse", "fr/cotedazur", "be/brussels", "be/ghent", "be/antwerp", "ch/zurich",
-            "ch/geneva", "ch/lausanne", "ch/basel", "es/barcelona", "es/madrid", "es/valencia",
-            "es/ibiza", "es/mallorca", "es/malaga", "it/milan", "it/rome", "it/florence",
-            "it/riminiravenna", "it/naples", "it/sardinia", "it/bologna", "it/turin", "gr/athens",
-            "gr/mykonos", "gr/thessaloniki", "gr/santorini", "gr/crete",
-        ];
         let mut stmt = conn
-            .prepare("INSERT OR IGNORE INTO vi_ra_areas (slug, pays, libelle) VALUES (?1, ?2, ?3)")
+            .prepare(
+                "INSERT OR IGNORE INTO vi_ra_areas (slug, pays, libelle, ra_area_id, resolved_at)
+                 VALUES (?1, ?2, ?3, ?4, CASE WHEN ?4 IS NOT NULL THEN datetime('now') END)",
+            )
             .map_err(|e| e.to_string())?;
-        for slug in slugs {
-            let (pays, ville) = slug.split_once('/').unwrap_or(("", slug));
-            let libelle = ville
-                .chars()
-                .next()
-                .map(|c| c.to_uppercase().collect::<String>() + &ville[c.len_utf8()..])
-                .unwrap_or_else(|| ville.to_string());
-            stmt.execute(rusqlite::params![slug, pays.to_uppercase(), libelle])
+        for (slug, libelle, id) in VI_AREAS {
+            let pays = slug.split_once('/').map(|(c, _)| c.to_uppercase()).unwrap_or_default();
+            stmt.execute(rusqlite::params![slug, pays, libelle, id])
                 .map_err(|e| e.to_string())?;
         }
     }
     Ok(())
 }
+
+/// Requested house / tech-house names (Cloonee already in tier 1). Users add more
+/// from the "Artistes de référence" tab.
+const EXTRA_REF_ARTISTS: &[(&str, i64)] = &[("Franky Rizardo", 2), ("Mason Collective", 2)];
+
+/// Target RA areas with their resolved area id (None when RA has no such area,
+/// resolve or enter by hand in the app). Resolved once via the RA `area` query.
+const VI_AREAS: &[(&str, &str, Option<i64>)] = &[
+    ("fr/paris", "Paris", Some(44)),
+    ("fr/lyon", "Lyon", Some(337)),
+    ("fr/marseille", "Marseille", Some(338)),
+    ("fr/bordeaux", "Bordeaux", Some(617)),
+    ("fr/nantes", "Nantes", Some(536)),
+    ("fr/lille", "Lille", Some(619)),
+    ("fr/toulouse", "Toulouse", Some(618)),
+    ("fr/nice", "Nice", Some(614)),
+    ("be/brussels", "Brussels", Some(405)),
+    ("be/ghent", "Ghent", Some(545)),
+    ("be/antwerp", "Antwerp", Some(404)),
+    ("ch/zurich", "Zurich", Some(390)),
+    ("ch/geneva", "Geneva", Some(392)),
+    ("ch/lausanne", "Lausanne", Some(393)),
+    ("ch/basel", "Basel", Some(391)),
+    ("es/barcelona", "Barcelona", Some(20)),
+    ("es/madrid", "Madrid", Some(41)),
+    ("es/valencia", "Valencia", Some(607)),
+    ("es/ibiza", "Ibiza", Some(25)),
+    ("es/mallorca", "Mallorca", Some(661)),
+    ("es/malaga", "Malaga", Some(608)),
+    ("it/milan", "Milan", Some(347)),
+    ("it/rome", "Rome", Some(351)),
+    ("it/florence", "Florence", Some(352)),
+    ("it/naples", "Naples", Some(406)),
+    ("it/sardinia", "Sardinia", Some(673)),
+    ("it/bologna", "Bologna", Some(350)),
+    ("it/turin", "Turin", Some(348)),
+    ("it/riminiravenna", "Rimini Ravenna", None),
+    ("gr/athens", "Athens", Some(549)),
+    ("gr/mykonos", "Mykonos", Some(659)),
+    ("gr/thessaloniki", "Thessaloniki", Some(657)),
+    ("gr/crete", "Crete", Some(658)),
+    ("gr/santorini", "Santorini", None),
+];
 
 /// Seed a starter set of destination countries for touring artists.
 /// IMPORTANT: this is high-level orientation only — NOT legal advice. Every field

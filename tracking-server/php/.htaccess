@@ -1,0 +1,14 @@
+# PiersCRM tracking, reecriture du pixel + CORS sur le flux d'ouvertures.
+
+RewriteEngine On
+
+# /o/<token>.gif  ->  o.php?t=<token>
+RewriteRule ^o/([A-Za-z0-9_-]+)\.gif$ o.php?t=$1 [L]
+
+# L'app desktop lit opens.json en cross-origin, il lui faut cet en-tete.
+<IfModule mod_headers.c>
+  <FilesMatch "opens\.json$">
+    Header set Access-Control-Allow-Origin "*"
+    Header set Cache-Control "no-store"
+  </FilesMatch>
+</IfModule>
