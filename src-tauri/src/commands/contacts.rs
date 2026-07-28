@@ -139,3 +139,76 @@ pub fn delete_contacts(state: State<AppState>, ids: Vec<i64>) -> Result<(), Stri
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
+
+// ---------------- Follow-ups (booking cadence) ----------------
+
+#[derive(serde::Serialize)]
+pub struct Followup {
+    pub contact_id: i64,
+    pub name: String,
+    pub email: Option<String>,
+    pub venue: Option<String>,
+    pub area: Option<String>,
+    pub status: String,
+    pub last_email: String,
+    pub days_since: i64,
+    pub email_count: i64,
+    pub opened: bool,
+}
+
+/// Contacts due for a follow-up: emailed at least 7 days ago, still under the
+/// 2-relance ceiling the industry recommends, and not dismissed. Ordered oldest
+/// first so the most overdue surface at the top.
+#[tauri::command]
+pub fn list_followups(state: State<AppState>) -> Result<Vec<Followup>, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT c.id, c.name, c.email, c.venue, c.area, c.status,
+                    MAX(e.created_at) AS last_email,
+                    COUNT(e.id) AS cnt,
+                    MAX(CASE WHEN e.opened_at IS NOT NULL THEN 1 ELSE 0 END) AS opened,
+                    CAST(julianday('now') - julianday(MAX(e.created_at)) AS INTEGER) AS days
+             FROM contacts c
+             JOIN emails e ON e.contact_id = c.id AND e.status = 'sent'
+             WHERE COALESCE(c.followup_dismissed, 0) = 0
+             GROUP BY c.id
+             HAVING days >= 7 AND cnt < 3
+             ORDER BY days DESC
+             LIMIT 200",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(Followup {
+                contact_id: r.get(0)?,
+                name: r.get(1)?,
+                email: r.get(2)?,
+                venue: r.get(3)?,
+                area: r.get(4)?,
+                status: r.get(5)?,
+                last_email: r.get(6)?,
+                email_count: r.get(7)?,
+                opened: r.get::<_, i64>(8)? != 0,
+                days_since: r.get(9)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// Stop suggesting follow-ups for a contact (the "no response is a response" case).
+#[tauri::command]
+pub fn dismiss_followup(state: State<AppState>, contact_id: i64) -> Result<(), String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE contacts SET followup_dismissed = 1, updated_at = datetime('now') WHERE id = ?1",
+        params![contact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}

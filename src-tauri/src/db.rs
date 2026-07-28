@@ -81,6 +81,11 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
             press_quotes  TEXT,
             achievements  TEXT,
             links         TEXT,
+            mix_url       TEXT,
+            tech_rider    TEXT,
+            fee_range     TEXT,
+            stats         TEXT,
+            audience_cities TEXT,
             created_at    TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -394,6 +399,12 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
         "ALTER TABLE campaigns ADD COLUMN event_name TEXT",
         "ALTER TABLE vi_venues ADD COLUMN telephone TEXT",
         "ALTER TABLE vi_venues ADD COLUMN enriched_at TEXT",
+        "ALTER TABLE artists ADD COLUMN mix_url TEXT",
+        "ALTER TABLE artists ADD COLUMN tech_rider TEXT",
+        "ALTER TABLE artists ADD COLUMN fee_range TEXT",
+        "ALTER TABLE artists ADD COLUMN stats TEXT",
+        "ALTER TABLE artists ADD COLUMN audience_cities TEXT",
+        "ALTER TABLE contacts ADD COLUMN followup_dismissed INTEGER NOT NULL DEFAULT 0",
     ] {
         let _ = conn.execute(stmt, []);
     }

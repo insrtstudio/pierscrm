@@ -9,6 +9,7 @@ import type {
   EmailLog,
   Event,
   FilePreview,
+  Followup,
   ImportResult,
   Kpi,
   SendResult,
@@ -78,6 +79,9 @@ export const sendEmail = (p: {
   });
 export const listEmails = (contactId?: number) =>
   invoke<EmailLog[]>("list_emails", { contactId: contactId ?? null });
+export const listFollowups = () => invoke<Followup[]>("list_followups");
+export const dismissFollowup = (contactId: number) =>
+  invoke<void>("dismiss_followup", { contactId });
 export const sendBulk = (p: {
   campaign_id?: number | null;
   contact_ids: number[];

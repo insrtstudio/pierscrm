@@ -32,7 +32,7 @@ export function Timeline() {
   // Group by period preserving order.
   const groups: { period: string; items: Task[] }[] = [];
   for (const task of tasks) {
-    const p = task.period || "—";
+    const p = task.period || "·";
     let g = groups.find((x) => x.period === p);
     if (!g) {
       g = { period: p, items: [] };

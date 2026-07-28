@@ -60,6 +60,11 @@ pub fn save_artist(state: State<AppState>, artist: Artist) -> Result<i64, String
         artist.press_quotes,
         artist.achievements,
         artist.links,
+        artist.mix_url,
+        artist.tech_rider,
+        artist.fee_range,
+        artist.stats,
+        artist.audience_cities,
     ];
     match artist.id {
         Some(id) => {
@@ -68,14 +73,16 @@ pub fn save_artist(state: State<AppState>, artist: Artist) -> Result<i64, String
                     name=?1, real_name=?2, tagline=?3, bio=?4, genres=?5, city=?6, country=?7,
                     avatar=?8, email=?9, phone=?10, booking_email=?11, website=?12, instagram=?13,
                     soundcloud=?14, spotify=?15, apple_music=?16, beatport=?17, youtube=?18,
-                    press_quotes=?19, achievements=?20, links=?21, updated_at=datetime('now')
-                 WHERE id=?22",
+                    press_quotes=?19, achievements=?20, links=?21, mix_url=?22, tech_rider=?23,
+                    fee_range=?24, stats=?25, audience_cities=?26, updated_at=datetime('now')
+                 WHERE id=?27",
                 params![
                     artist.name, artist.real_name, artist.tagline, artist.bio, artist.genres,
                     artist.city, artist.country, artist.avatar, artist.email, artist.phone,
                     artist.booking_email, artist.website, artist.instagram, artist.soundcloud,
                     artist.spotify, artist.apple_music, artist.beatport, artist.youtube,
-                    artist.press_quotes, artist.achievements, artist.links, id
+                    artist.press_quotes, artist.achievements, artist.links, artist.mix_url,
+                    artist.tech_rider, artist.fee_range, artist.stats, artist.audience_cities, id
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -86,8 +93,9 @@ pub fn save_artist(state: State<AppState>, artist: Artist) -> Result<i64, String
                 "INSERT INTO artists
                     (name, real_name, tagline, bio, genres, city, country, avatar, email, phone,
                      booking_email, website, instagram, soundcloud, spotify, apple_music, beatport,
-                     youtube, press_quotes, achievements, links)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
+                     youtube, press_quotes, achievements, links, mix_url, tech_rider, fee_range,
+                     stats, audience_cities)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26)",
                 p,
             )
             .map_err(|e| e.to_string())?;

@@ -202,7 +202,7 @@ function BudgetTable({
                 </td>
               )}
               <td className="px-3 py-2.5 text-right tabular-nums font-medium">
-                {i.actual != null ? euro(i.actual) : "—"}
+                {i.actual != null ? euro(i.actual) : "·"}
               </td>
               <td className="max-w-[280px] truncate px-5 py-2.5 text-xs text-fg-subtle">
                 {i.notes}

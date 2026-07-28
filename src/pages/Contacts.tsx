@@ -238,16 +238,16 @@ export function Contacts() {
                       )}
                     </td>
                     <td className="px-3 py-2.5 text-fg-subtle">
-                      {c.area || c.venue || "—"}
+                      {c.area || c.venue || "·"}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-fg-subtle">
-                      {c.date || "—"}
+                      {c.date || "·"}
                     </td>
                     <td className="px-3 py-2.5">
                       {c.email ? (
                         <span className="text-xs">{c.email}</span>
                       ) : (
-                        <span className="text-xs text-fg-subtle">—</span>
+                        <span className="text-xs text-fg-subtle">·</span>
                       )}
                     </td>
                     <td className="px-3 py-2.5">

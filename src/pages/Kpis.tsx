@@ -72,12 +72,12 @@ export function Kpis() {
                 <div className="mt-4 flex items-end justify-between">
                   <div>
                     <div className="text-xs text-fg-subtle">{t("kpis.target")}</div>
-                    <div className="text-sm font-semibold">{k.target || "—"}</div>
+                    <div className="text-sm font-semibold">{k.target || "·"}</div>
                   </div>
                   <div className="text-right">
                     <div className="text-xs text-fg-subtle">{t("kpis.actual")}</div>
                     <div className="text-lg font-bold text-emerald-500">
-                      {k.actual || "—"}
+                      {k.actual || "·"}
                     </div>
                   </div>
                 </div>

@@ -2,6 +2,32 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-07-29, v0.8.0, alignement standards booking (3 features) + fixes UI
+
+Suite des 4 chantiers validés (pack templates = v0.7.3). Cette version livre les 3 restants +
+les corrections UI/UX bloquantes issues d'un audit par sous-agent (Explore).
+
+- **#3 EPK aux normes** : 5 colonnes artists (mix_url, tech_rider, fee_range, stats,
+  audience_cities) via ALTER + CREATE (from_row lit par nom, sûr). save_artist étendu. Éditeur
+  artiste : section "EPK & booking" (mix vedette, audience/chiffres honnêtes, fourchette cachet,
+  rider, villes d'audience). Rendu EPK : bloc mix un clic, stats, rider, fee dans le contact, et
+  contact répété en pied (standard booker : contact en haut ET en bas). Label "Insrt · EPK".
+- **#2 Relances** : commandes list_followups (contacts écrits >=7j, <3 emails, non dismiss, tri
+  ancienneté) + dismiss_followup ; colonne contacts.followup_dismissed. Onglet "Relances" dans
+  Emails (table jours/ouvert, bouton Relancer -> ComposeModal, bouton Ne plus relancer).
+- **#4 Ciblage par ville** : sélecteur d'artiste dans Lieux ; fait remonter et badge "Cible" les
+  salles dont la ville est dans audience_cities de l'artiste (normalisation accents, client-side).
+- **Fixes audit UI (blocking)** : sweep des tirets cadratins dans fr.ts (11 corrigés, séparateurs
+  FR) + hardcodés (ticker + wordmark sidebar "PIERSCRM — INSRT.STUDIO" -> "PIERSCRM · INSRT", qui
+  corrige AUSSI le mauvais label), placeholder Visa, placeholders de valeur nulle "—" -> "·".
+  Confirmation ajoutée sur la suppression de KPI (ArtistDetail), + aria-label.
+
+RESTE de l'audit UI (non bloquant, gros morceau pour un prochain passage "durcissement UI") :
+a11y des modals (role/aria/focus trap dans ui.tsx Modal, VenueFicheModal à passer sur Modal),
+aria-labels sur boutons icônes, actions cachées en hover (focus-within), contraste fg-faint,
+unifier tables (.tbl) / onglets (.segmented) / empty states (EmptyState) / badges (.badge),
+états loading/error des queries, formatters date/euro partagés, confirm thémé. Voir l'audit.
+
 ## 2026-07-29, étude booking + v0.7.3 pack de templates pro
 
 Contexte : l'utilisateur veut aligner l'app sur les standards des meilleurs bookers, pour des

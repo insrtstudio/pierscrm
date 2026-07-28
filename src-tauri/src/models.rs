@@ -269,6 +269,16 @@ pub struct Artist {
     pub achievements: Option<String>,
     pub links: Option<String>,
     #[serde(default)]
+    pub mix_url: Option<String>,
+    #[serde(default)]
+    pub tech_rider: Option<String>,
+    #[serde(default)]
+    pub fee_range: Option<String>,
+    #[serde(default)]
+    pub stats: Option<String>,
+    #[serde(default)]
+    pub audience_cities: Option<String>,
+    #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
@@ -299,6 +309,11 @@ impl Artist {
             press_quotes: row.get("press_quotes")?,
             achievements: row.get("achievements")?,
             links: row.get("links")?,
+            mix_url: row.get("mix_url")?,
+            tech_rider: row.get("tech_rider")?,
+            fee_range: row.get("fee_range")?,
+            stats: row.get("stats")?,
+            audience_cities: row.get("audience_cities")?,
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
         })

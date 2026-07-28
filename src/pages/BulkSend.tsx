@@ -288,7 +288,7 @@ export function BulkSend() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-xs font-medium">{c.name}</div>
-                    <div className="truncate text-2xs text-fg-subtle">{c.email || "—"}</div>
+                    <div className="truncate text-2xs text-fg-subtle">{c.email || "·"}</div>
                   </div>
                 </button>
               );

@@ -12,31 +12,35 @@ import {
   RefreshCw,
   Megaphone,
   Target,
+  Clock,
+  X,
 } from "lucide-react";
 import clsx from "clsx";
 import {
   applyOpens,
   deleteCampaign,
   deleteTemplate,
+  dismissFollowup,
   getSetting,
   listArtists,
   listCampaigns,
   listEmails,
+  listFollowups,
   listTemplates,
   saveCampaign,
   saveTemplate,
   sendEmail,
 } from "../lib/api";
-import type { Campaign, Template } from "../lib/types";
+import type { Campaign, Followup, Template } from "../lib/types";
 import { CAMPAIGN_STATUSES } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
 import { Modal, Field, useToast, useConfirm } from "../components/ui";
 import { BulkSend } from "./BulkSend";
-import { renderTemplate } from "../components/ComposeModal";
+import { ComposeModal, renderTemplate } from "../components/ComposeModal";
 
 const LINK_FIELDS = ["mix", "listen", "onepager", "epk"] as const;
 
-type Tab = "compose" | "bulk" | "campaigns" | "templates" | "log";
+type Tab = "compose" | "bulk" | "followups" | "campaigns" | "templates" | "log";
 
 const CAMPAIGN_COLORS = [
   "#6366f1", "#10b981", "#f59e0b", "#ec4899", "#0ea5e9", "#8b5cf6", "#ef4444", "#14b8a6",
@@ -52,7 +56,7 @@ const CAMPAIGN_STATUS_STYLE: Record<string, string> = {
 export function Emails() {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>("compose");
-  const tabs: Tab[] = ["compose", "bulk", "campaigns", "templates", "log"];
+  const tabs: Tab[] = ["compose", "bulk", "followups", "campaigns", "templates", "log"];
   const tabLabel = (tb: Tab) => (tb === "bulk" ? t("bulk.tab") : t(`emails.tab_${tb}`));
 
   useEffect(() => {
@@ -82,6 +86,7 @@ export function Emails() {
 
         {tab === "compose" && <ComposeTab />}
         {tab === "bulk" && <BulkSend />}
+        {tab === "followups" && <FollowupsTab />}
         {tab === "campaigns" && <CampaignsTab />}
         {tab === "templates" && <TemplatesTab />}
         {tab === "log" && <LogTab />}
@@ -228,6 +233,102 @@ function ComposeTab() {
 function daysDiff(dateStr: string): number {
   const d = new Date(dateStr);
   return Math.round((d.getTime() - Date.now()) / 86400000);
+}
+
+// ---------------- Follow-ups (booking cadence) ----------------
+
+function FollowupsTab() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const { data: followups = [] } = useQuery({ queryKey: ["followups"], queryFn: listFollowups });
+  const [relance, setRelance] = useState<Followup | null>(null);
+  const dismiss = useMutation({
+    mutationFn: (id: number) => dismissFollowup(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["followups"] }),
+  });
+
+  return (
+    <div className="space-y-4">
+      <p className="text-2xs text-fg-subtle">{t("emails.followups_hint")}</p>
+      {followups.length === 0 ? (
+        <div className="card">
+          <EmptyState icon={Clock} title={t("emails.followups_empty")} />
+        </div>
+      ) : (
+        <div className="card max-h-[calc(100vh-340px)] overflow-auto">
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>{t("contacts.name")}</th>
+                <th>{t("contacts.venue")}</th>
+                <th className="text-right">{t("emails.days_since")}</th>
+                <th>{t("emails.opened")}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {followups.map((f) => (
+                <tr key={f.contact_id}>
+                  <td className="font-semibold">{f.name}</td>
+                  <td className="text-fg-subtle">{f.venue || f.area || "·"}</td>
+                  <td className="text-right tabular">
+                    <span className={clsx("font-bold", f.days_since >= 14 && "text-accent")}>
+                      {t("emails.days_ago", { count: f.days_since })}
+                    </span>
+                  </td>
+                  <td>
+                    {f.opened ? (
+                      <span className="badge bg-emerald-500/15 text-emerald-500">{t("emails.opened_yes")}</span>
+                    ) : (
+                      <span className="badge bg-muted text-fg-subtle">{t("emails.opened_no")}</span>
+                    )}
+                  </td>
+                  <td className="text-right">
+                    <div className="flex justify-end gap-1">
+                      {f.email && (
+                        <button className="btn-outline py-1.5" onClick={() => setRelance(f)}>
+                          <Mail size={13} />
+                          {t("emails.followup_do")}
+                        </button>
+                      )}
+                      <button
+                        className="btn-ghost px-2 py-1.5"
+                        aria-label={t("emails.followup_stop")}
+                        title={t("emails.followup_stop")}
+                        onClick={() => dismiss.mutate(f.contact_id)}
+                      >
+                        <X size={15} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <ComposeModal
+        open={!!relance}
+        onClose={() => {
+          setRelance(null);
+          qc.invalidateQueries({ queryKey: ["followups"] });
+        }}
+        contact={
+          relance
+            ? ({
+                id: relance.contact_id,
+                name: relance.name,
+                email: relance.email,
+                venue: relance.venue,
+                area: relance.area,
+                status: "contacted",
+                category: "venue",
+              } as any)
+            : (null as any)
+        }
+      />
+    </div>
+  );
 }
 
 function CampaignsTab() {
@@ -417,7 +518,7 @@ function CampaignModal({
               value={form.artist_id ?? ""}
               onChange={(e) => set("artist_id", e.target.value ? Number(e.target.value) : null)}
             >
-              <option value="">—</option>
+              <option value="">·</option>
               {artists.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.name}

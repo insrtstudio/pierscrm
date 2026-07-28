@@ -83,11 +83,11 @@ function Ticker() {
         ?.slice(0, 3)
         .toUpperCase()}`;
       const artist = artists.find((a) => a.id === e.artist_id)?.name;
-      return `${(artist || e.title).toUpperCase()} — ${day}${
-        e.start_time ? " — " + e.start_time : ""
+      return `${(artist || e.title).toUpperCase()} · ${day}${
+        e.start_time ? " · " + e.start_time : ""
       }`;
     });
-    if (parts.length === 0) parts.push("PIERSCRM · INSRT.STUDIO · BOOKING & ARTIST MANAGEMENT");
+    if (parts.length === 0) parts.push("INSRT · BOOKING & ARTIST MANAGEMENT");
     return parts.join("   ●   ") + "   ●   ";
   }, [events, artists, months]);
 
@@ -130,7 +130,7 @@ export function Layout() {
           <div className="px-6 pb-8 pt-6">
             <div className="text-[42px] font-black leading-[0.85] tracking-tightest">P.</div>
             <div className="mt-2 text-2xs font-bold tracking-[0.2em]">
-              PIERSCRM — INSRT.STUDIO
+              PIERSCRM · INSRT
             </div>
           </div>
 

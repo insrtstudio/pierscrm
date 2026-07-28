@@ -46,6 +46,11 @@ export interface Artist {
   press_quotes?: string | null;
   achievements?: string | null;
   links?: string | null;
+  mix_url?: string | null;
+  tech_rider?: string | null;
+  fee_range?: string | null;
+  stats?: string | null;
+  audience_cities?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -121,6 +126,19 @@ export interface Event {
 }
 
 export const EVENT_STATUSES = ["hold", "confirmed", "cancelled"] as const;
+
+export interface Followup {
+  contact_id: number;
+  name: string;
+  email?: string | null;
+  venue?: string | null;
+  area?: string | null;
+  status: string;
+  last_email: string;
+  days_since: number;
+  email_count: number;
+  opened: boolean;
+}
 
 export interface EmailLog {
   id?: number;

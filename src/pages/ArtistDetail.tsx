@@ -176,6 +176,25 @@ export function ArtistDetail() {
             </div>
 
             <div className="space-y-5 p-6">
+              {artist.mix_url && (
+                <Section title={t("artists.featured_mix")}>
+                  <a
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      openUrl(normUrl(artist.mix_url as string)).catch(() => {});
+                    }}
+                    className="epk-link inline-flex items-center gap-2 border-2 border-accent px-4 py-2.5 text-sm font-semibold hover:bg-accent hover:text-accent-fg"
+                  >
+                    <Music2 size={16} /> {t("artists.listen_now")}
+                  </a>
+                </Section>
+              )}
+              {artist.stats && (
+                <Section title={t("artists.audience")}>
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed">{artist.stats}</p>
+                </Section>
+              )}
               {artist.bio && (
                 <Section title={t("artists.bio")}>
                   <p className="whitespace-pre-wrap text-sm leading-relaxed">
@@ -223,19 +242,30 @@ export function ArtistDetail() {
                   </div>
                 </Section>
               )}
-              {bookingContact && (
+              {artist.tech_rider && (
+                <Section title={t("artists.tech_rider")}>
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg-subtle">
+                    {artist.tech_rider}
+                  </p>
+                </Section>
+              )}
+              {(bookingContact || artist.fee_range) && (
                 <Section title={t("artists.contact_booking")}>
                   <div className="text-sm">
                     {artist.booking_email && <div>{artist.booking_email}</div>}
-                    {artist.phone && (
-                      <div className="text-fg-subtle">{artist.phone}</div>
+                    {artist.phone && <div className="text-fg-subtle">{artist.phone}</div>}
+                    {artist.fee_range && (
+                      <div className="mt-1 text-fg-subtle">
+                        {t("artists.fee_range")}: {artist.fee_range}
+                      </div>
                     )}
                   </div>
                 </Section>
               )}
             </div>
-            <div className="border-t border-border px-6 py-3 text-[10px] text-fg-subtle">
-              PiersCRM · EPK — {artist.name}
+            <div className="flex items-center justify-between border-t border-border px-6 py-3 text-[10px] text-fg-subtle">
+              <span>Insrt · EPK · {artist.name}</span>
+              {bookingContact && <span>{bookingContact}</span>}
             </div>
           </div>
         </div>
@@ -268,11 +298,11 @@ export function ArtistDetail() {
                     <div className="flex items-center gap-2">
                       <div className="text-right">
                         <span className="text-sm font-bold text-emerald-500">
-                          {k.actual || "—"}
+                          {k.actual || "·"}
                         </span>
                         <span className="text-[11px] text-fg-subtle">
                           {" "}
-                          / {k.target || "—"}
+                          / {k.target || "·"}
                         </span>
                       </div>
                       <div className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
@@ -284,7 +314,8 @@ export function ArtistDetail() {
                         </button>
                         <button
                           className="btn-ghost px-1 py-1 text-rose-500"
-                          onClick={() => delKpiMut.mutate(k.id!)}
+                          aria-label={t("common.delete")}
+                          onClick={() => confirm(t("common.confirm_delete")) && delKpiMut.mutate(k.id!)}
                         >
                           <Trash2 size={12} />
                         </button>
@@ -539,6 +570,30 @@ export function ArtistModal({
               </Field>
             ))}
           </div>
+        </div>
+
+        <div>
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-subtle">
+            {t("artists.section_epk")}
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+            <Field label={t("artists.featured_mix")} className="col-span-2">
+              <input {...inp("mix_url")} placeholder="https://soundcloud.com/..." />
+            </Field>
+            <Field label={t("artists.audience")}>
+              <input {...inp("stats")} placeholder="12k monthly, 8k IG..." />
+            </Field>
+            <Field label={t("artists.fee_range")}>
+              <input {...inp("fee_range")} placeholder="300-600 EUR + all-in" />
+            </Field>
+            <Field label={t("artists.tech_rider")} className="col-span-2">
+              <textarea {...inp("tech_rider")} className="input min-h-[60px]" placeholder="2x CDJ-3000, DJM-900..." />
+            </Field>
+            <Field label={t("artists.audience_cities")} className="col-span-2">
+              <input {...inp("audience_cities")} placeholder="Paris, Amsterdam, Berlin, Lyon" />
+            </Field>
+          </div>
+          <p className="mt-1.5 text-2xs text-fg-subtle">{t("artists.epk_hint")}</p>
         </div>
 
         <div>

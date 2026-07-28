@@ -57,6 +57,8 @@ pub fn run() {
             commands::contacts::update_contact_status,
             commands::contacts::delete_contact,
             commands::contacts::delete_contacts,
+            commands::contacts::list_followups,
+            commands::contacts::dismiss_followup,
             // import
             commands::import::preview_file,
             commands::import::import_file,

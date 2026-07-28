@@ -272,7 +272,7 @@ function DossierModal({
             className="input"
             value={form.title}
             onChange={(e) => set("title", e.target.value)}
-            placeholder="ADE 2026 — Piers"
+            placeholder="ADE 2026 · Piers"
           />
         </Field>
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">

@@ -403,7 +403,7 @@ export function Settings() {
           <div className="flex items-center justify-between">
             <div className="text-sm">
               <span className="text-fg-subtle">{t("update.current")} </span>
-              <span className="font-mono font-medium">v{version || "—"}</span>
+              <span className="font-mono font-medium">v{version || "·"}</span>
             </div>
             <button
               className="btn-primary"

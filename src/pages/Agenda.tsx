@@ -495,7 +495,7 @@ function EventModal({
               value={form.contact_id ?? ""}
               onChange={(e) => set("contact_id", e.target.value ? Number(e.target.value) : null)}
             >
-              <option value="">—</option>
+              <option value="">·</option>
               {bookings.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}

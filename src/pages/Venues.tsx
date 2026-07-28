@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
@@ -36,6 +36,7 @@ import {
   viStartHarvest,
   viStartEnrich,
   viVenueDetail,
+  listArtists,
 } from "../lib/api";
 import type {
   ViArea,
@@ -91,12 +92,34 @@ function VenuesTab() {
   const [search, setSearch] = useState("");
   const [enriching, setEnriching] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [targetArtist, setTargetArtist] = useState<number | "">("");
   const { data: venues = [] } = useQuery({
     queryKey: ["vi_venues", statut, search],
     queryFn: () => viListVenues({ statut, search, limit: 400 }),
     // While an enrichment run is filling in contacts, keep the list fresh.
     refetchInterval: enriching ? 4000 : false,
   });
+  const { data: artists = [] } = useQuery({ queryKey: ["artists"], queryFn: listArtists });
+
+  // City targeting: float venues in the chosen artist's audience cities to the top.
+  const cityNorm = (s: string) =>
+    s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+  const targetCities = useMemo(() => {
+    const a = artists.find((x) => x.id === targetArtist);
+    const raw = a?.audience_cities;
+    if (!raw) return null;
+    const list = raw.split(",").map(cityNorm).filter(Boolean);
+    return list.length ? list : null;
+  }, [artists, targetArtist]);
+  const isTarget = (ville?: string | null) =>
+    !!targetCities &&
+    !!ville &&
+    targetCities.some((c) => cityNorm(ville).includes(c) || c.includes(cityNorm(ville)));
+  const displayVenues = useMemo(() => {
+    if (!targetCities) return venues;
+    return [...venues].sort((a, b) => (isTarget(b.ville) ? 1 : 0) - (isTarget(a.ville) ? 1 : 0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venues, targetCities]);
 
   // Stop the auto-refresh once every enrich run has finished.
   useEffect(() => {
@@ -141,6 +164,19 @@ function VenuesTab() {
             </option>
           ))}
         </select>
+        <select
+          className="input w-auto"
+          value={targetArtist}
+          onChange={(e) => setTargetArtist(e.target.value ? Number(e.target.value) : "")}
+          title={t("venues.target_hint")}
+        >
+          <option value="">{t("venues.target_none")}</option>
+          {artists.map((a) => (
+            <option key={a.id} value={a.id}>
+              {t("venues.target_by", { name: a.name })}
+            </option>
+          ))}
+        </select>
         <button className="btn-primary ml-auto" onClick={enrich} disabled={enriching} title={t("venues.enrich_hint")}>
           <Sparkles size={15} className={enriching ? "animate-pulse" : ""} />
           {t("venues.enrich")}
@@ -167,7 +203,7 @@ function VenuesTab() {
               </tr>
             </thead>
             <tbody>
-              {venues.map((v) => (
+              {displayVenues.map((v) => (
                 <tr
                   key={v.id}
                   className="cursor-pointer hover:bg-muted"
@@ -176,7 +212,12 @@ function VenuesTab() {
                   <td className="text-right">
                     <span className="text-lg font-black tabular text-accent">{v.score_qualif}</span>
                   </td>
-                  <td className="font-semibold">{v.nom}</td>
+                  <td className="font-semibold">
+                    {v.nom}
+                    {isTarget(v.ville) && (
+                      <span className="badge ml-2 bg-accent text-accent-fg">{t("venues.target_match")}</span>
+                    )}
+                  </td>
                   <td className="text-fg-subtle">
                     {[v.ville, v.pays].filter(Boolean).join(", ")}
                   </td>
