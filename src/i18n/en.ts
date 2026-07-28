@@ -525,5 +525,17 @@ export const en = {
     tracking_note:
       "Best-effort: some mail clients block remote images, so “not opened” can also mean “images blocked”. It's an indicator, not proof.",
     tracking_url: "Public URL of your tracking server",
+    sig_section: "Email signature",
+    sig_help: "Automatically added to the bottom of every email you send. Edit it here anytime.",
+    sig_name: "Display name",
+    sig_role: "Role / tagline",
+    sig_label: "Label",
+    sig_phone: "Phone",
+    sig_booking_email: "Booking email",
+    sig_website: "Website",
+    sig_instagram: "Instagram",
+    sig_soundcloud: "SoundCloud",
+    sig_preview: "Preview",
+    sig_empty: "Fill at least one field to see the preview.",
   },
 };

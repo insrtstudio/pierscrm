@@ -29,6 +29,197 @@ fn load_smtp(state: &AppState) -> Result<SmtpConfig, String> {
     }
 }
 
+/// Editable email signature, stored as JSON under the `email_signature` setting
+/// and appended to every outgoing message (both the plain-text and HTML parts).
+#[derive(Deserialize, Default)]
+struct SignatureData {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    role: String,
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    phone: String,
+    #[serde(default)]
+    booking_email: String,
+    #[serde(default)]
+    website: String,
+    #[serde(default)]
+    instagram: String,
+    #[serde(default)]
+    soundcloud: String,
+}
+
+impl SignatureData {
+    fn is_empty(&self) -> bool {
+        [
+            &self.name,
+            &self.role,
+            &self.label,
+            &self.phone,
+            &self.booking_email,
+            &self.website,
+            &self.instagram,
+            &self.soundcloud,
+        ]
+        .iter()
+        .all(|s| s.trim().is_empty())
+    }
+}
+
+fn load_signature(conn: &rusqlite::Connection) -> Option<SignatureData> {
+    let raw = setting(conn, "email_signature")?;
+    let s: SignatureData = serde_json::from_str(&raw).ok()?;
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn norm_url(val: &str) -> String {
+    let v = val.trim();
+    if v.starts_with("http://") || v.starts_with("https://") {
+        v.to_string()
+    } else {
+        format!("https://{}", v)
+    }
+}
+
+/// Accept either a full URL or a bare handle (with or without a leading @).
+fn social_url(host: &str, val: &str) -> String {
+    let v = val.trim().trim_start_matches('@');
+    if v.starts_with("http://") || v.starts_with("https://") {
+        v.to_string()
+    } else {
+        format!("https://{}/{}", host, v.trim_start_matches(&format!("{}/", host)))
+    }
+}
+
+/// Render the signature block as (plain_text, html). Only non-empty fields show.
+fn render_signature(s: &SignatureData) -> (String, String) {
+    fn f(v: &str) -> &str {
+        v.trim()
+    }
+    // Plain text.
+    let mut plain: Vec<String> = Vec::new();
+    let title = match (f(&s.name).is_empty(), f(&s.role).is_empty()) {
+        (false, false) => format!("{} · {}", f(&s.name), f(&s.role)),
+        (false, true) => f(&s.name).to_string(),
+        (true, false) => f(&s.role).to_string(),
+        _ => String::new(),
+    };
+    if !title.is_empty() {
+        plain.push(title);
+    }
+    if !f(&s.label).is_empty() {
+        plain.push(f(&s.label).to_string());
+    }
+    let contact: Vec<String> = [f(&s.booking_email), f(&s.phone)]
+        .iter()
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
+        .collect();
+    if !contact.is_empty() {
+        plain.push(contact.join(" · "));
+    }
+    let mut links: Vec<String> = Vec::new();
+    if !f(&s.website).is_empty() {
+        links.push(norm_url(&s.website));
+    }
+    if !f(&s.instagram).is_empty() {
+        links.push(social_url("instagram.com", &s.instagram));
+    }
+    if !f(&s.soundcloud).is_empty() {
+        links.push(social_url("soundcloud.com", &s.soundcloud));
+    }
+    if !links.is_empty() {
+        plain.push(links.join(" · "));
+    }
+    let plain_out = if plain.is_empty() {
+        String::new()
+    } else {
+        format!("--\n{}", plain.join("\n"))
+    };
+
+    // HTML.
+    let mut rows: Vec<String> = Vec::new();
+    if !f(&s.name).is_empty() {
+        let role = if f(&s.role).is_empty() {
+            String::new()
+        } else {
+            format!(
+                " <span style=\"color:#777\">· {}</span>",
+                html_escape(f(&s.role))
+            )
+        };
+        rows.push(format!(
+            "<div style=\"font-weight:bold;color:#111\">{}{}</div>",
+            html_escape(f(&s.name)),
+            role
+        ));
+    } else if !f(&s.role).is_empty() {
+        rows.push(format!("<div>{}</div>", html_escape(f(&s.role))));
+    }
+    if !f(&s.label).is_empty() {
+        rows.push(format!(
+            "<div style=\"font-weight:600;color:#333\">{}</div>",
+            html_escape(f(&s.label))
+        ));
+    }
+    let mut contact_html: Vec<String> = Vec::new();
+    if !f(&s.booking_email).is_empty() {
+        contact_html.push(format!(
+            "<a href=\"mailto:{0}\" style=\"color:#555;text-decoration:none\">{0}</a>",
+            html_escape(f(&s.booking_email))
+        ));
+    }
+    if !f(&s.phone).is_empty() {
+        contact_html.push(html_escape(f(&s.phone)));
+    }
+    if !contact_html.is_empty() {
+        rows.push(format!("<div>{}</div>", contact_html.join(" · ")));
+    }
+    let mut link_html: Vec<String> = Vec::new();
+    let mut add_link = |url: String, label: &str| {
+        link_html.push(format!(
+            "<a href=\"{}\" style=\"color:#555\">{}</a>",
+            html_escape(&url),
+            label
+        ));
+    };
+    if !f(&s.website).is_empty() {
+        let url = norm_url(&s.website);
+        let disp = url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .trim_end_matches('/')
+            .to_string();
+        add_link(url.clone(), &html_escape(&disp));
+    }
+    if !f(&s.instagram).is_empty() {
+        add_link(social_url("instagram.com", &s.instagram), "Instagram");
+    }
+    if !f(&s.soundcloud).is_empty() {
+        add_link(social_url("soundcloud.com", &s.soundcloud), "SoundCloud");
+    }
+    if !link_html.is_empty() {
+        rows.push(format!("<div>{}</div>", link_html.join(" · ")));
+    }
+    let html_out = if rows.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<div style=\"margin-top:22px;padding-top:14px;border-top:1px solid #e6e6e6;\
+             font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.55;color:#555\">{}</div>",
+            rows.join("")
+        )
+    };
+
+    (plain_out, html_out)
+}
+
 fn build_transport(cfg: &SmtpConfig) -> Result<SmtpTransport, String> {
     // Sanitize inputs — stray whitespace / a pasted protocol prefix is a very
     // common cause of "535 authentication rejected".
@@ -94,7 +285,21 @@ fn render_template(input: &str, vars: &HashMap<String, String>) -> String {
 /// real <html> document. Sending both, with a plain-text alternative, avoids the
 /// SpamAssassin penalties for HTML-only / no-<html>-tag / image-heavy mail. The
 /// invisible tracking pixel goes only in the HTML part, only when configured.
-fn message_body(body: &str, tracking_base: &Option<String>, token: &str) -> MultiPart {
+fn message_body(
+    body: &str,
+    signature: &Option<SignatureData>,
+    tracking_base: &Option<String>,
+    token: &str,
+) -> MultiPart {
+    let (sig_plain, sig_html) = match signature {
+        Some(s) => render_signature(s),
+        None => (String::new(), String::new()),
+    };
+    let plain = if sig_plain.is_empty() {
+        body.to_string()
+    } else {
+        format!("{}\n\n{}", body, sig_plain)
+    };
     let pixel = match tracking_base {
         Some(base) => format!(
             "<img src=\"{}/o/{}.gif\" width=\"1\" height=\"1\" alt=\"\" style=\"display:none\"/>",
@@ -107,13 +312,14 @@ fn message_body(body: &str, tracking_base: &Option<String>, token: &str) -> Mult
         "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\
          <body style=\"margin:0;padding:0;background:#ffffff\">\
-         <div style=\"font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111111\">{}</div>{}\
+         <div style=\"font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111111\">{}</div>{}{}\
          </body></html>",
         html_escape(body).replace('\n', "<br/>"),
+        sig_html,
         pixel
     );
     MultiPart::alternative()
-        .singlepart(SinglePart::plain(body.to_string()))
+        .singlepart(SinglePart::plain(plain))
         .singlepart(SinglePart::html(html))
 }
 
@@ -122,6 +328,7 @@ fn build_message(
     to: &Mailbox,
     subject: &str,
     body: &str,
+    signature: &Option<SignatureData>,
     tracking_base: &Option<String>,
     token: &str,
 ) -> Result<Message, String> {
@@ -129,7 +336,7 @@ fn build_message(
         .from(from.clone())
         .to(to.clone())
         .subject(subject.to_string())
-        .multipart(message_body(body, tracking_base, token))
+        .multipart(message_body(body, signature, tracking_base, token))
         .map_err(|e| e.to_string())
 }
 
@@ -190,9 +397,9 @@ pub fn send_email(
 
     // Open-tracking: only if a public tracking base URL is configured.
     let token = gen_token();
-    let tracking_base = {
+    let (tracking_base, signature) = {
         let conn = state.pool.get().map_err(|e| e.to_string())?;
-        setting(&conn, "tracking_base_url")
+        (setting(&conn, "tracking_base_url"), load_signature(&conn))
     };
     let tracked = tracking_base.is_some();
 
@@ -200,7 +407,7 @@ pub fn send_email(
         .from(from_mbox)
         .to(to_mbox)
         .subject(subject.clone())
-        .multipart(message_body(&body, &tracking_base, &token))
+        .multipart(message_body(&body, &signature, &tracking_base, &token))
         .map_err(|e| e.to_string())?;
 
     let transport = build_transport(&cfg)?;
@@ -341,6 +548,7 @@ pub fn send_bulk(
 
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let tracking_base = setting(&conn, "tracking_base_url");
+    let signature = load_signature(&conn);
     // Throttle between sends: spreading mail out is the single biggest lever for
     // staying out of spam and under the mailbox rate limit. Default 1.2s, tunable
     // via the `bulk_delay_ms` setting (0 disables, capped at 60s).
@@ -456,7 +664,7 @@ pub fn send_bulk(
         };
 
         let token = gen_token();
-        let msg = build_message(&from_mbox, &to_mbox, &subj, &bod, &tracking_base, &token)?;
+        let msg = build_message(&from_mbox, &to_mbox, &subj, &bod, &signature, &tracking_base, &token)?;
         let (status, err) = match transport.send(&msg) {
             Ok(_) => ("sent", None),
             Err(e) => ("failed", Some(e.to_string())),

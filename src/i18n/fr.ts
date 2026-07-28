@@ -526,5 +526,17 @@ export const fr = {
     tracking_note:
       "Fiabilité : certains logiciels de mail bloquent les images distantes — un « non ouvert » peut donc aussi signifier « images bloquées ». C'est un indicateur, pas une preuve.",
     tracking_url: "URL publique de votre serveur de tracking",
+    sig_section: "Signature email",
+    sig_help: "Ajoutée automatiquement en bas de chaque email envoyé. Modifiable ici quand vous voulez.",
+    sig_name: "Nom affiché",
+    sig_role: "Rôle / accroche",
+    sig_label: "Label",
+    sig_phone: "Téléphone",
+    sig_booking_email: "Email de booking",
+    sig_website: "Site web",
+    sig_instagram: "Instagram",
+    sig_soundcloud: "SoundCloud",
+    sig_preview: "Aperçu",
+    sig_empty: "Renseignez au moins un champ pour voir l'aperçu.",
   },
 };

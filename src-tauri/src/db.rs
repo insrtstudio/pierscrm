@@ -437,17 +437,16 @@ fn seed_defaults(conn: &rusqlite::Connection) -> Result<(), String> {
             "INSERT INTO templates (name, subject, body) VALUES (?1, ?2, ?3)",
             rusqlite::params![
                 "Slot pitch",
-                "opening set for {{event}}?",
-                "Hey {{name}},\n\nI'm Piers, a producer/DJ from France. Been keeping an eye on {{event}} and really like what you're doing with it.\n\nI'm around in Amsterdam for the whole week and wanted to ask — any chance there's still an opening slot on {{date}}? Happy to do a short B2B too. No fee, I just want to play the right room.\n\nHere's a recent mix if you want a listen: {{mix}}\n\nEither way, hope it's a good one.\nPiers"
+                "playing at {{venue}} during ADE week?",
+                "Hi {{name}},\n\nPiers here, French DJ and producer, house and tech house, label Insrt. I'll be in Amsterdam for the whole of ADE week and I'm putting my dates together.\n\nI've been following what {{venue}} programmes for a while and it's honestly one of the rooms I'd most want to play. I wanted to ask directly if you have anything open that week, even an early slot or an opening set, I'm genuinely easy on timing and billing.\n\nI bring my own crowd and I'm not precious about where I sit on the lineup, I just want to play a room that takes the music seriously. Here's my latest mix so you can hear where I'm at: {{mix}}\n\nHappy to send a full EPK, past dates and a bit of press if useful. And if the week's already full, I'd love to stay in touch for a proper date later in the season.\n\nThanks for reading,\nPiers"
             ],
         )
         .map_err(|e| e.to_string())?;
         conn.execute(
             "INSERT INTO templates (name, subject, body) VALUES (?1, ?2, ?3)",
             rusqlite::params![
-                "Venue ask",
-                "something at {{venue}} during ADE week?",
-                "Hi {{name}},\n\nQuick one — are you doing anything on the early-week dates (Tue 20 / Wed 21 / Thu 22)?\n\nI'm Piers, a French producer/DJ. With my label Insrt.Studio we'd love to put on a small free-entry showcase at {{venue}}, early evening, a few of us playing. We'd bring our own crowd and you'd keep the bar — no fees either way.\n\nIf it sounds worth a chat I'm easy to reach. Here's a mix in the meantime: {{mix}}\n\nAnd if the timing's off, no worries at all — would still love to stay in touch.\nPiers — Insrt.Studio"
+                "showcase idea for {{venue}} during ADE?",
+                "Hi {{name}},\n\nI'm Piers, a French producer and DJ running the label Insrt. We work in house and tech house, and we're putting a few things together in Amsterdam for ADE week.\n\nI'm reaching out to {{venue}} directly because the room and what you programme really fit what we do. The idea: a free-entry showcase in the early evening, three or four of us back to back, our own crowd coming through the door. You keep the bar, no fee either way, we just want a good room with a proper sound system.\n\nIf it's something you'd consider, I'll send over a full plan, times, the artists, and a couple of references from past parties. Here's a recent mix so you get the sound straight away: {{mix}}\n\nAnd if your week is already locked, no worries at all, I'd still love to be on your radar for the next one.\n\nCheers,\nPiers"
             ],
         )
         .map_err(|e| e.to_string())?;

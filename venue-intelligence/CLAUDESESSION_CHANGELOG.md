@@ -2,6 +2,24 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-07-29, v0.7.2, signature email + correction label Insrt
+
+- DKIM résolu côté utilisateur : le off/on Amen a régénéré la clé avec un NOUVEAU sélecteur
+  `key-va2kejvjo6` (l'ancien `key_53r23h5unk` est caduc), publié et valide. mail-tester passe
+  de 4,3 à 8,6/10, DKIM/SPF/DMARC tous verts. Restent seulement HTML_IMAGE_ONLY (email court +
+  pixel, se règle en écrivant un peu plus de texte) et le rDNS mismatch (infra Amen, non
+  corrigeable). List-Unsubscribe : l'utilisateur ne le veut pas (démarchage nominatif, pas une
+  newsletter), donc non ajouté.
+- **Formulaire de signature** (Réglages > Signature email) : champs nom, rôle, label, tel,
+  email booking, site, Instagram, SoundCloud, stockés en JSON via set_setting("email_signature"),
+  avec aperçu live. Backend `SignatureData` + `render_signature` (plain + HTML), ajoutée
+  automatiquement en bas de chaque email (send_email et send_bulk via message_body). Gère
+  handles ou URLs pour les réseaux. Le texte de signature aide aussi à réduire HTML_IMAGE_ONLY.
+- **Correction label** : "Insrt.Studio" -> "Insrt" partout (placeholder from_name Settings.tsx,
+  deux templates seed db.rs). Les deux templates seed réécrits en versions étoffées, naturelles,
+  sans tiret cadratin, sans ligne de signature en dur (la signature s'ajoute toute seule).
+  Insrt.Studio = maison de musique d'illustration séparée, ne pas confondre.
+
 ## 2026-07-29, v0.7.1, deliverability email (multipart)
 
 Test mail-tester réel de l'utilisateur (score 4.3/10) : DKIM=fail "key not found in DNS"

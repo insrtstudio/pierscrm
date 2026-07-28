@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw, Info } from "lucide-react";
+import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw, Info, PenLine } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import i18n from "../i18n";
 import { checkForUpdate, installAndRelaunch } from "../lib/updater";
@@ -16,6 +16,27 @@ import {
 import type { SmtpConfig } from "../lib/types";
 import { PageHeader } from "../components/Layout";
 import { Field, useToast } from "../components/ui";
+
+type SignatureFields = {
+  name: string;
+  role: string;
+  label: string;
+  phone: string;
+  booking_email: string;
+  website: string;
+  instagram: string;
+  soundcloud: string;
+};
+const EMPTY_SIG: SignatureFields = {
+  name: "",
+  role: "",
+  label: "",
+  phone: "",
+  booking_email: "",
+  website: "",
+  instagram: "",
+  soundcloud: "",
+};
 
 export function Settings() {
   const { t } = useTranslation();
@@ -43,6 +64,45 @@ export function Settings() {
     qc.invalidateQueries({ queryKey: ["setting", "tracking_base_url"] });
     toast(t("settings.saved"), "ok");
   };
+
+  // ---- Email signature ----
+  const { data: sigRaw } = useQuery({
+    queryKey: ["setting", "email_signature"],
+    queryFn: () => getSetting("email_signature"),
+  });
+  const [sig, setSig] = useState<SignatureFields>(EMPTY_SIG);
+  useEffect(() => {
+    if (sigRaw) {
+      try {
+        setSig({ ...EMPTY_SIG, ...JSON.parse(sigRaw) });
+      } catch {
+        /* ignore malformed */
+      }
+    }
+  }, [sigRaw]);
+  const sinp = (k: keyof SignatureFields) => ({
+    className: "input",
+    value: sig[k],
+    onChange: (e: any) => setSig({ ...sig, [k]: e.target.value }),
+  });
+  const saveSig = async () => {
+    await setSetting("email_signature", JSON.stringify(sig));
+    qc.invalidateQueries({ queryKey: ["setting", "email_signature"] });
+    toast(t("settings.saved"), "ok");
+  };
+  const st = (v: string) => v.trim();
+  const sigPreview: string[] = [];
+  {
+    const title = [sig.name, sig.role].map(st).filter(Boolean).join(" · ");
+    if (title) sigPreview.push(title);
+    if (st(sig.label)) sigPreview.push(st(sig.label));
+    const contact = [sig.booking_email, sig.phone].map(st).filter(Boolean).join(" · ");
+    if (contact) sigPreview.push(contact);
+    const links = [st(sig.website), st(sig.instagram) && "Instagram", st(sig.soundcloud) && "SoundCloud"]
+      .filter(Boolean)
+      .join(" · ");
+    if (links) sigPreview.push(links);
+  }
 
   const { data: smtp } = useQuery({
     queryKey: ["smtp"],
@@ -225,7 +285,7 @@ export function Settings() {
               <input type="password" {...cinp("password")} />
             </Field>
             <Field label={t("settings.from_name")}>
-              <input {...cinp("from_name")} placeholder="Piers — Insrt.Studio" />
+              <input {...cinp("from_name")} placeholder="Piers | Insrt" />
             </Field>
             <Field label={t("settings.from_email")}>
               <input {...cinp("from_email")} placeholder="piers@insrt.fr" />
@@ -277,6 +337,61 @@ export function Settings() {
             </button>
           </div>
           <p className="mt-3 text-2xs text-fg-faint">{t("settings.tracking_note")}</p>
+        </div>
+
+        {/* Email signature */}
+        <div className="card p-6">
+          <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
+            <PenLine size={15} /> {t("settings.sig_section")}
+          </div>
+          <p className="mb-4 text-xs text-fg-subtle">{t("settings.sig_help")}</p>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+            <Field label={t("settings.sig_name")}>
+              <input {...sinp("name")} placeholder="Piers" />
+            </Field>
+            <Field label={t("settings.sig_role")}>
+              <input {...sinp("role")} placeholder="DJ & Producer · House / Tech House" />
+            </Field>
+            <Field label={t("settings.sig_label")}>
+              <input {...sinp("label")} placeholder="Insrt" />
+            </Field>
+            <Field label={t("settings.sig_phone")}>
+              <input {...sinp("phone")} placeholder="+33 6 12 34 56 78" />
+            </Field>
+            <Field label={t("settings.sig_booking_email")}>
+              <input {...sinp("booking_email")} placeholder="booking@insrt.fr" />
+            </Field>
+            <Field label={t("settings.sig_website")}>
+              <input {...sinp("website")} placeholder="insrt.fr" />
+            </Field>
+            <Field label={t("settings.sig_instagram")}>
+              <input {...sinp("instagram")} placeholder="@piers" />
+            </Field>
+            <Field label={t("settings.sig_soundcloud")}>
+              <input {...sinp("soundcloud")} placeholder="soundcloud.com/piers" />
+            </Field>
+          </div>
+
+          <div className="mt-4">
+            <div className="kicker mb-2">{t("settings.sig_preview")}</div>
+            <div className="panel p-4 text-xs leading-relaxed text-fg-subtle">
+              {sigPreview.length ? (
+                sigPreview.map((l, i) => (
+                  <div key={i} className={i === 0 ? "font-semibold text-fg" : ""}>
+                    {l}
+                  </div>
+                ))
+              ) : (
+                <span className="text-fg-faint">{t("settings.sig_empty")}</span>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-5 flex justify-end">
+            <button className="btn-primary" onClick={saveSig}>
+              {t("common.save")}
+            </button>
+          </div>
         </div>
 
         {/* Updates */}
