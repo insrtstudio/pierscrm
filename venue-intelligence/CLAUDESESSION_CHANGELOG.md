@@ -2,6 +2,19 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-07-29, v0.7.1, deliverability email (multipart)
+
+Test mail-tester réel de l'utilisateur (score 4.3/10) : DKIM=fail "key not found in DNS"
+(Amen signe avec le sélecteur `key_53r23h5unk` mais la clé publique n'est PAS publiée dans le
+DNS insrt.fr -> à corriger côté Amen, action utilisateur), et surtout des pénalités de format
+que le code produisait : HTML_MIME_NO_HTML_TAG (0.635, pas de balise <html>), MIME_HTML_ONLY
+(pas de partie text/plain), HTML_IMAGE_ONLY_08 (1.781). Correctif : `message_body()` construit
+un **multipart/alternative** = partie text/plain (le corps brut) + partie text/html enveloppée
+dans un vrai document `<!doctype html><html>...`. Le pixel de tracking reste uniquement dans la
+partie HTML. Appliqué aux deux chemins (send_email et send_bulk via build_message). SPF/DMARC
+déjà pass. rDNS mismatch = infra Amen, non corrigeable. List-Unsubscribe : noté, à ajouter (pas
+un malus de score, utile surtout au vrai volume). cargo check OK.
+
 ## 2026-07-29, J5, enrichissement des contacts (fiche par lieu)
 
 **Contexte** L'utilisateur : le moissonnage rend juste des noms, il veut une fiche par salle

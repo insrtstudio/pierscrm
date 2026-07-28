@@ -1,6 +1,6 @@
 use crate::models::SmtpConfig;
 use crate::AppState;
-use lettre::message::{header::ContentType, Mailbox};
+use lettre::message::{Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
 use rusqlite::params;
@@ -89,6 +89,34 @@ fn render_template(input: &str, vars: &HashMap<String, String>) -> String {
 }
 
 /// Build a single message (HTML + tracking pixel when configured, else plain text).
+/// Build a proper multipart/alternative body: a text/plain part (what filters
+/// and text-only clients read) plus a well-formed text/html part wrapped in a
+/// real <html> document. Sending both, with a plain-text alternative, avoids the
+/// SpamAssassin penalties for HTML-only / no-<html>-tag / image-heavy mail. The
+/// invisible tracking pixel goes only in the HTML part, only when configured.
+fn message_body(body: &str, tracking_base: &Option<String>, token: &str) -> MultiPart {
+    let pixel = match tracking_base {
+        Some(base) => format!(
+            "<img src=\"{}/o/{}.gif\" width=\"1\" height=\"1\" alt=\"\" style=\"display:none\"/>",
+            base.trim_end_matches('/'),
+            token
+        ),
+        None => String::new(),
+    };
+    let html = format!(
+        "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\
+         <body style=\"margin:0;padding:0;background:#ffffff\">\
+         <div style=\"font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111111\">{}</div>{}\
+         </body></html>",
+        html_escape(body).replace('\n', "<br/>"),
+        pixel
+    );
+    MultiPart::alternative()
+        .singlepart(SinglePart::plain(body.to_string()))
+        .singlepart(SinglePart::html(html))
+}
+
 fn build_message(
     from: &Mailbox,
     to: &Mailbox,
@@ -97,31 +125,12 @@ fn build_message(
     tracking_base: &Option<String>,
     token: &str,
 ) -> Result<Message, String> {
-    let builder = Message::builder()
+    Message::builder()
         .from(from.clone())
         .to(to.clone())
-        .subject(subject.to_string());
-    if let Some(base) = tracking_base {
-        let base = base.trim_end_matches('/');
-        let pixel = format!(
-            "<img src=\"{}/o/{}.gif\" width=\"1\" height=\"1\" alt=\"\" style=\"display:none\"/>",
-            base, token
-        );
-        let html = format!(
-            "<div style=\"font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111\">{}</div>{}",
-            html_escape(body).replace('\n', "<br/>"),
-            pixel
-        );
-        builder
-            .header(ContentType::TEXT_HTML)
-            .body(html)
-            .map_err(|e| e.to_string())
-    } else {
-        builder
-            .header(ContentType::TEXT_PLAIN)
-            .body(body.to_string())
-            .map_err(|e| e.to_string())
-    }
+        .subject(subject.to_string())
+        .multipart(message_body(body, tracking_base, token))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -187,32 +196,12 @@ pub fn send_email(
     };
     let tracked = tracking_base.is_some();
 
-    let builder = Message::builder()
+    let email = Message::builder()
         .from(from_mbox)
         .to(to_mbox)
-        .subject(subject.clone());
-
-    let email = if let Some(base) = &tracking_base {
-        let base = base.trim_end_matches('/');
-        let pixel = format!(
-            "<img src=\"{}/o/{}.gif\" width=\"1\" height=\"1\" alt=\"\" style=\"display:none\"/>",
-            base, token
-        );
-        let html = format!(
-            "<div style=\"font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111\">{}</div>{}",
-            html_escape(&body).replace('\n', "<br/>"),
-            pixel
-        );
-        builder
-            .header(ContentType::TEXT_HTML)
-            .body(html)
-            .map_err(|e| e.to_string())?
-    } else {
-        builder
-            .header(ContentType::TEXT_PLAIN)
-            .body(body.clone())
-            .map_err(|e| e.to_string())?
-    };
+        .subject(subject.clone())
+        .multipart(message_body(&body, &tracking_base, &token))
+        .map_err(|e| e.to_string())?;
 
     let transport = build_transport(&cfg)?;
     let (status, error) = match transport.send(&email) {
