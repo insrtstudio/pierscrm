@@ -13,8 +13,8 @@
     --border-strong: 168 164 164;
     --muted: 234 231 231;
     --fg: 32 30 29;
-    --fg-subtle: 110 106 104;
-    --fg-faint: 150 146 146;
+    --fg-subtle: 104 100 98;
+    --fg-faint: 122 118 115;
     --accent: 236 48 19;
     --accent-fg: 255 255 255;
     --accent-soft: 255 234 228;
@@ -32,8 +32,8 @@
     --border-strong: 58 53 50;
     --muted: 28 26 24;
     --fg: 243 242 242;
-    --fg-subtle: 168 162 156;
-    --fg-faint: 110 104 98;
+    --fg-subtle: 176 170 163;
+    --fg-faint: 140 133 126;
     --accent: 236 48 19;
     --accent-fg: 255 255 255;
     --accent-soft: 42 17 12;
@@ -100,7 +100,8 @@
   .btn {
     @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold
       font-heading uppercase tracking-wide transition-all duration-150 select-none whitespace-nowrap
-      disabled:opacity-45 disabled:pointer-events-none;
+      disabled:opacity-45 disabled:pointer-events-none
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg;
     letter-spacing: 0.04em;
   }
   .btn-primary {

@@ -7,14 +7,7 @@ export function StatusBadge({ status }: { status: string }) {
   const { t } = useTranslation();
   const style = STATUS_STYLES[status as Status] ?? "text-fg-subtle bg-muted";
   return (
-    <span
-      className={clsx(
-        "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap",
-        style
-      )}
-    >
-      {t(`status.${status}`, status)}
-    </span>
+    <span className={clsx("badge", style)}>{t(`status.${status}`, status)}</span>
   );
 }
 

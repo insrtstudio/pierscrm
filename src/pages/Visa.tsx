@@ -173,7 +173,7 @@ function DossiersTab() {
                   </div>
                 </div>
 
-                <div className="mt-4 flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                <div className="mt-4 flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                   <button className="btn-ghost px-2 py-1.5" onClick={() => setEditing(d)}>
                     <Pencil size={14} />
                   </button>

@@ -99,7 +99,7 @@ export function Timeline() {
                       </div>
                     )}
                   </div>
-                  <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                  <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                     <button
                       className="btn-ghost px-2 py-1.5"
                       onClick={() => setEditing(task)}

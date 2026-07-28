@@ -411,7 +411,7 @@ function CampaignsTab() {
                   <Stat label={t("campaigns.open_rate")} value={`${rate}%`} accent />
                 </div>
 
-                <div className="mt-3 flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                <div className="mt-3 flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                   <button className="btn-ghost px-2 py-1.5" onClick={() => setEditing(c)}>
                     <Pencil size={14} />
                   </button>
@@ -605,7 +605,7 @@ function TemplatesTab() {
                 <div className="text-sm font-semibold">{tpl.name}</div>
                 <div className="mt-0.5 truncate text-xs text-fg-subtle">{tpl.subject}</div>
               </div>
-              <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+              <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                 <button className="btn-ghost px-2 py-1.5" onClick={() => setEditing(tpl)}>
                   <Pencil size={14} />
                 </button>

@@ -229,10 +229,10 @@ function VenuesTab() {
                           {v.nb_emails > 1 ? v.nb_emails : ""}
                         </span>
                       ) : (
-                        <Mail size={13} className="text-fg-faint/40" />
+                        <Mail size={13} className="text-fg-faint" />
                       )}
-                      <Phone size={13} className={v.telephone ? "text-fg-subtle" : "text-fg-faint/40"} />
-                      <Globe size={13} className={v.site_web ? "text-fg-subtle" : "text-fg-faint/40"} />
+                      <Phone size={13} className={v.telephone ? "text-fg-subtle" : "text-fg-faint"} />
+                      <Globe size={13} className={v.site_web ? "text-fg-subtle" : "text-fg-faint"} />
                       {!v.enriched && (
                         <span className="badge bg-muted text-fg-faint">{t("venues.not_enriched")}</span>
                       )}

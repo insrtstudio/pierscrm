@@ -143,7 +143,7 @@ export function Layout() {
                 className={({ isActive }) =>
                   clsx(
                     "flex items-center justify-between px-6 py-2.5 transition-colors",
-                    "border-b border-accent-ink/15",
+                    "border-b border-accent-ink/15 outline-none focus-visible:bg-accent-ink/[0.2] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-ink",
                     isActive
                       ? "bg-accent-ink text-accent"
                       : "text-accent-ink hover:bg-accent-ink/[0.14]"

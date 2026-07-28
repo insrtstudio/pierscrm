@@ -171,6 +171,7 @@ function BudgetTable({
       <div className="border-b border-border px-5 py-3 text-sm font-semibold">
         {title}
       </div>
+      <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border text-left text-xs text-fg-subtle">
@@ -208,7 +209,7 @@ function BudgetTable({
                 {i.notes}
               </td>
               <td className="px-3 py-2.5">
-                <div className="flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                <div className="flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                   <button className="btn-ghost px-2 py-1.5" onClick={() => onEdit(i)}>
                     <Pencil size={14} />
                   </button>
@@ -224,6 +225,7 @@ function BudgetTable({
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

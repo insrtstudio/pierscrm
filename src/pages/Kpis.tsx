@@ -51,7 +51,7 @@ export function Kpis() {
                   <div className="text-xs font-medium uppercase tracking-wide text-accent">
                     {k.goal}
                   </div>
-                  <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                  <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                     <button
                       className="btn-ghost px-1.5 py-1"
                       onClick={() => setEditing(k)}

@@ -2,6 +2,29 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-07-29, v0.8.1, durcissement UI/UX (accessibilité, contraste, cohérence)
+
+Passe issue de l'audit UI (agent Explore). Priorité aux corrections CENTRALISÉES qui liftent
+toute l'app d'un coup, plus quelques gains de cohérence.
+
+- **Modal (ui.tsx)** : role="dialog", aria-modal, aria-labelledby lié au titre, focus initial,
+  PIÈGE DE FOCUS (Tab), scroll lock du body, restauration du focus à la fermeture, clic backdrop
+  pour fermer, aria-label sur la croix. Corrige l'a11y de TOUTES les modals.
+- **Toasts** : aria-live="polite" + role status/alert (annoncés aux lecteurs d'écran).
+- **Focus clavier** : anneau focus-visible sur `.btn` (styles.css) et sur la nav sidebar.
+- **Contraste (H4)** : tokens fg-subtle/fg-faint assombris (clair) / éclaircis (sombre) pour
+  passer le plancher WCAG ; icônes contact des salles passées de fg-faint/40 (invisible ~1.3:1)
+  à fg-faint plein.
+- **Actions au survol (H3)** : ajout de group-focus-within:opacity-100 partout (Contacts, Emails,
+  Visa, ArtistDetail, Kpis, Timeline, Budget) : accessibles au clavier et au toucher.
+- **Cohérence** : StatusBadge/Visa réalignés sur `.badge` (fini les deux styles de badge à
+  l'écran) ; wrapper overflow-x-auto sur la table Budget (P6).
+
+RESTE de l'audit (passe optionnelle) : sweep complet des aria-label sur boutons-icônes (H2),
+unification des tables hand-rolled sur `.tbl` (Contacts, Import), onglets Visa/Settings sur
+`.segmented`, empty states sur `EmptyState`, états loading/error des queries (H8), formatters
+date/euro partagés, confirm thémé (window.confirm encore utilisé). Voir l'audit complet.
+
 ## 2026-07-29, v0.8.0, alignement standards booking (3 features) + fixes UI
 
 Suite des 4 chantiers validés (pack templates = v0.7.3). Cette version livre les 3 restants +

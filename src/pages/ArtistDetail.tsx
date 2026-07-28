@@ -305,7 +305,7 @@ export function ArtistDetail() {
                           / {k.target || "·"}
                         </span>
                       </div>
-                      <div className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                      <div className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                         <button
                           className="btn-ghost px-1 py-1"
                           onClick={() => setKpiEdit(k)}
