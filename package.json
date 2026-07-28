@@ -1,7 +1,7 @@
 {
   "name": "pierscrm",
   "private": true,
-  "version": "0.5.5",
+  "version": "0.6.0",
   "type": "module",
   "description": "PiersCRM — desktop booking & artist management",
   "scripts": {

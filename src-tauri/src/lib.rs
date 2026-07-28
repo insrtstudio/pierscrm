@@ -83,6 +83,20 @@ pub fn run() {
             commands::visa::list_dossiers,
             commands::visa::save_dossier,
             commands::visa::delete_dossier,
+            // venue intelligence (J1)
+            commands::vi::vi_list_reference_artists,
+            commands::vi::vi_save_reference_artist,
+            commands::vi::vi_delete_reference_artist,
+            commands::vi::vi_list_areas,
+            commands::vi::vi_save_area,
+            commands::vi::vi_overview,
+            // venue intelligence (J2, harvest)
+            commands::harvest::vi_resolve_area,
+            commands::harvest::vi_resolve_all_areas,
+            commands::harvest::vi_start_harvest,
+            commands::harvest::vi_resume_run,
+            commands::harvest::vi_list_runs,
+            commands::harvest::vi_list_venues,
             // templates
             commands::data::list_templates,
             commands::data::save_template,

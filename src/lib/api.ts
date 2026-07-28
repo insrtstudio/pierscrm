@@ -154,3 +154,41 @@ export const getSetting = (key: string) => invoke<string | null>("get_setting", 
 export const setSetting = (key: string, value: string) =>
   invoke<void>("set_setting", { key, value });
 export const dashboardStats = () => invoke<DashboardStats>("dashboard_stats");
+
+// ---- Venue Intelligence ----
+import type {
+  ViArea,
+  ViReferenceArtist,
+  ViRun,
+  ViVenueRow,
+} from "./types";
+
+export const viListAreas = () => invoke<ViArea[]>("vi_list_areas");
+export const viSaveArea = (area: ViArea) => invoke<number>("vi_save_area", { area });
+export const viResolveArea = (id: number) => invoke<number | null>("vi_resolve_area", { id });
+export const viResolveAllAreas = () => invoke<number>("vi_resolve_all_areas");
+export const viListReferenceArtists = () =>
+  invoke<ViReferenceArtist[]>("vi_list_reference_artists");
+export const viSaveReferenceArtist = (artist: ViReferenceArtist) =>
+  invoke<number>("vi_save_reference_artist", { artist });
+export const viDeleteReferenceArtist = (id: number) =>
+  invoke<void>("vi_delete_reference_artist", { id });
+export const viStartHarvest = (p: {
+  area_ids: number[];
+  year_from: number;
+  year_to: number;
+}) =>
+  invoke<number>("vi_start_harvest", {
+    areaIds: p.area_ids,
+    yearFrom: p.year_from,
+    yearTo: p.year_to,
+  });
+export const viResumeRun = (runId: number) => invoke<void>("vi_resume_run", { runId });
+export const viListRuns = () => invoke<ViRun[]>("vi_list_runs");
+export const viListVenues = (p: {
+  statut?: string;
+  pays?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}) => invoke<ViVenueRow[]>("vi_list_venues", p);

@@ -381,6 +381,79 @@ impl VisaDossier {
     }
 }
 
+// ---------------- Venue Intelligence ----------------
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ViReferenceArtist {
+    pub id: Option<i64>,
+    pub nom: String,
+    #[serde(default)]
+    pub nom_normalise: Option<String>,
+    pub tier: i64,
+    pub genres: Option<String>,
+    #[serde(default = "default_true")]
+    pub actif: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl ViReferenceArtist {
+    pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(ViReferenceArtist {
+            id: row.get("id")?,
+            nom: row.get("nom")?,
+            nom_normalise: row.get("nom_normalise")?,
+            tier: row.get("tier")?,
+            genres: row.get("genres")?,
+            actif: row.get::<_, i64>("actif")? != 0,
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ViArea {
+    pub id: Option<i64>,
+    pub slug: String,
+    pub ra_area_id: Option<i64>,
+    pub libelle: Option<String>,
+    pub pays: Option<String>,
+    #[serde(default = "default_true")]
+    pub actif: bool,
+    #[serde(default)]
+    pub resolved_at: Option<String>,
+}
+
+impl ViArea {
+    pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(ViArea {
+            id: row.get("id")?,
+            slug: row.get("slug")?,
+            ra_area_id: row.get("ra_area_id")?,
+            libelle: row.get("libelle")?,
+            pays: row.get("pays")?,
+            actif: row.get::<_, i64>("actif")? != 0,
+            resolved_at: row.get("resolved_at")?,
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct ViOverview {
+    pub venues_total: i64,
+    pub venues_qualifie: i64,
+    pub venues_valide: i64,
+    pub evidence_total: i64,
+    pub contacts_total: i64,
+    pub promoters_total: i64,
+    pub reference_artists_total: i64,
+    pub reference_artists_actifs: i64,
+    pub areas_total: i64,
+    pub areas_resolues: i64,
+    pub runs_total: i64,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct SmtpConfig {
     #[serde(default)]

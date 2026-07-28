@@ -179,6 +179,69 @@ export interface SmtpConfig {
   encryption: "starttls" | "tls" | "none";
 }
 
+// ---- Venue Intelligence ----
+export interface ViArea {
+  id?: number;
+  slug: string;
+  ra_area_id?: number | null;
+  libelle?: string | null;
+  pays?: string | null;
+  actif: boolean;
+  resolved_at?: string | null;
+}
+
+export interface ViReferenceArtist {
+  id?: number;
+  nom: string;
+  nom_normalise?: string | null;
+  tier: number;
+  genres?: string | null;
+  actif: boolean;
+}
+
+export interface ViRun {
+  id: number;
+  type_: string;
+  statut: string;
+  params?: string | null;
+  stats?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  erreur?: string | null;
+  created_at?: string | null;
+  tasks_total: number;
+  tasks_done: number;
+  tasks_echec: number;
+}
+
+export interface ViVenueRow {
+  id: number;
+  nom: string;
+  ville?: string | null;
+  pays?: string | null;
+  region_cible?: string | null;
+  statut: string;
+  priorite: string;
+  score_qualif: number;
+  nb_events_periode: number;
+  nb_evidence: number;
+  top_promoter?: string | null;
+  ra_url?: string | null;
+  site_web?: string | null;
+  crm_contact_id?: number | null;
+}
+
+export interface ViRunProgress {
+  run_id: number;
+  statut: string;
+  tasks_total: number;
+  tasks_done: number;
+  tasks_echec: number;
+  venues: number;
+  evidence: number;
+  message?: string | null;
+}
+
 export interface SheetPreview {
   name: string;
   headers: string[];

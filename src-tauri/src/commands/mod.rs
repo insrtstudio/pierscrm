@@ -4,5 +4,8 @@ pub mod contacts;
 pub mod data;
 pub mod email;
 pub mod events;
+pub mod harvest;
 pub mod import;
+pub mod ra;
+pub mod vi;
 pub mod visa;

@@ -4,6 +4,37 @@ use std::path::Path;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
+/// Normalise a name for matching / dedup: lowercase, fold Latin diacritics to
+/// ASCII, drop every non-alphanumeric character. Used on both sides of the
+/// artist match and for venue dedup, so both sides collapse identically.
+/// (Manual folding, no extra crate: covers the reference-artist seed and the
+/// Latin-script venues this module targets.)
+pub fn normalise(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars().flat_map(char::to_lowercase) {
+        let folded = match ch {
+            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => 'a',
+            'ç' | 'ć' | 'č' | 'ĉ' | 'ċ' => 'c',
+            'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => 'e',
+            'ì' | 'í' | 'î' | 'ï' | 'ī' | 'ĭ' | 'į' | 'ı' => 'i',
+            'ñ' | 'ń' | 'ň' | 'ņ' => 'n',
+            'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ŏ' | 'ő' => 'o',
+            'ù' | 'ú' | 'û' | 'ü' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' => 'u',
+            'ý' | 'ÿ' => 'y',
+            'ß' => 's',
+            'š' | 'ś' | 'ş' => 's',
+            'ž' | 'ź' | 'ż' => 'z',
+            'ł' => 'l',
+            'đ' => 'd',
+            c => c,
+        };
+        if folded.is_ascii_alphanumeric() {
+            out.push(folded);
+        }
+    }
+    out
+}
+
 pub fn init_pool(db_path: &Path) -> Result<DbPool, String> {
     let manager = SqliteConnectionManager::file(db_path).with_init(|c| {
         c.execute_batch(
@@ -207,6 +238,147 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_emails_contact    ON emails(contact_id);
         CREATE INDEX IF NOT EXISTS idx_events_date       ON events(date);
         CREATE INDEX IF NOT EXISTS idx_events_artist     ON events(artist_id);
+
+        -- ===================================================================
+        -- Venue Intelligence (module vi_*). Tables prefixed vi_ to isolate the
+        -- module. INTEGER PK + unique slug instead of uuid (repo convention),
+        -- enums stored as TEXT, JSON stored as TEXT, timestamps as TEXT ISO.
+        -- French column names kept from the spec (snake_case, repo convention).
+        -- ===================================================================
+        CREATE TABLE IF NOT EXISTS vi_venues (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug              TEXT UNIQUE,
+            nom               TEXT NOT NULL,
+            nom_normalise     TEXT NOT NULL,
+            ville             TEXT,
+            pays              TEXT,
+            region_cible      TEXT,
+            type              TEXT,
+            capacite_est      INTEGER,
+            latitude          REAL,
+            longitude         REAL,
+            adresse           TEXT,
+            site_web          TEXT,
+            page_contact      TEXT,
+            instagram         TEXT,
+            ra_venue_id       INTEGER UNIQUE,
+            ra_url            TEXT,
+            saisonnalite      TEXT,
+            segment           TEXT,
+            accepte_demos     TEXT NOT NULL DEFAULT 'inconnu',
+            statut            TEXT NOT NULL DEFAULT 'candidat',
+            priorite          TEXT NOT NULL DEFAULT 'C',
+            score_qualif      INTEGER NOT NULL DEFAULT 0,
+            nb_events_periode INTEGER NOT NULL DEFAULT 0,
+            notes             TEXT,
+            crm_contact_id    INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+            verified_at       TEXT,
+            created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS vi_evidence (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            venue_id     INTEGER NOT NULL REFERENCES vi_venues(id) ON DELETE CASCADE,
+            artiste      TEXT NOT NULL,
+            artiste_tier INTEGER,
+            date_event   TEXT NOT NULL,
+            titre_event  TEXT,
+            source_url   TEXT NOT NULL,
+            source_type  TEXT NOT NULL DEFAULT 'ra',
+            created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(venue_id, artiste, date_event)
+        );
+
+        CREATE TABLE IF NOT EXISTS vi_contacts (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            venue_id      INTEGER NOT NULL REFERENCES vi_venues(id) ON DELETE CASCADE,
+            type          TEXT,
+            valeur        TEXT NOT NULL,
+            role_devine   TEXT,
+            score         INTEGER NOT NULL DEFAULT 0,
+            personne_nom  TEXT,
+            personne_role TEXT,
+            source_url    TEXT NOT NULL,
+            source_method TEXT,
+            confiance     REAL,
+            verifie       INTEGER NOT NULL DEFAULT 0,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(venue_id, type, valeur)
+        );
+
+        CREATE TABLE IF NOT EXISTS vi_promoters (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            venue_id INTEGER NOT NULL REFERENCES vi_venues(id) ON DELETE CASCADE,
+            nom      TEXT NOT NULL,
+            ra_url   TEXT,
+            nb_events INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(venue_id, nom)
+        );
+
+        CREATE TABLE IF NOT EXISTS vi_runs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            type        TEXT NOT NULL,
+            params      TEXT,
+            statut      TEXT NOT NULL DEFAULT 'en_attente',
+            started_at  TEXT,
+            finished_at TEXT,
+            stats       TEXT,
+            erreur      TEXT,
+            created_by  TEXT,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS vi_tasks (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id         INTEGER NOT NULL REFERENCES vi_runs(id) ON DELETE CASCADE,
+            type           TEXT NOT NULL,
+            payload        TEXT,
+            statut         TEXT NOT NULL DEFAULT 'en_attente',
+            tentatives     INTEGER NOT NULL DEFAULT 0,
+            max_tentatives INTEGER NOT NULL DEFAULT 3,
+            derniere_erreur TEXT,
+            locked_at      TEXT,
+            created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS vi_ra_areas (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug        TEXT UNIQUE,
+            ra_area_id  INTEGER,
+            libelle     TEXT,
+            pays        TEXT,
+            actif       INTEGER NOT NULL DEFAULT 1,
+            resolved_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS vi_reference_artists (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            nom           TEXT NOT NULL,
+            nom_normalise TEXT NOT NULL UNIQUE,
+            tier          INTEGER NOT NULL,
+            genres        TEXT,
+            actif         INTEGER NOT NULL DEFAULT 1
+        );
+
+        -- RGPD: contacts explicitly erased land here so a later run never re-adds them.
+        CREATE TABLE IF NOT EXISTS vi_exclusions (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            valeur_normalisee TEXT NOT NULL UNIQUE,
+            type              TEXT NOT NULL DEFAULT 'email',
+            raison            TEXT,
+            created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_vi_venues_statut ON vi_venues(statut);
+        CREATE INDEX IF NOT EXISTS idx_vi_venues_norm   ON vi_venues(nom_normalise);
+        CREATE INDEX IF NOT EXISTS idx_vi_venues_ra     ON vi_venues(ra_venue_id);
+        CREATE INDEX IF NOT EXISTS idx_vi_evidence_venue ON vi_evidence(venue_id);
+        CREATE INDEX IF NOT EXISTS idx_vi_contacts_venue ON vi_contacts(venue_id);
+        CREATE INDEX IF NOT EXISTS idx_vi_promoters_venue ON vi_promoters(venue_id);
+        CREATE INDEX IF NOT EXISTS idx_vi_tasks_run_statut ON vi_tasks(run_id, statut);
         "#,
     )
     .map_err(|e| e.to_string())?;
@@ -262,6 +434,87 @@ fn seed_defaults(conn: &rusqlite::Connection) -> Result<(), String> {
     }
 
     seed_visa_countries(conn)?;
+    seed_venue_intelligence(conn)?;
+    Ok(())
+}
+
+/// Seed the Venue Intelligence reference data on first run only:
+/// the reference-artist list (tiers 1/2/3, editable later from the UI) and the
+/// target RA areas (ra_area_id left NULL, resolved during harvest or by hand).
+fn seed_venue_intelligence(conn: &rusqlite::Connection) -> Result<(), String> {
+    // ---- Reference artists ----
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM vi_reference_artists", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if count == 0 {
+        let tier1 = [
+            "Black Coffee", "Solomun", "Jamie Jones", "Marco Carola", "Fisher", "Peggy Gou",
+            "The Martinez Brothers", "Loco Dice", "Seth Troxler", "Michael Bibi", "Chris Stussy",
+            "Dennis Ferrer", "Carl Cox", "Adam Beyer", "Eric Prydz", "Maceo Plex", "Dixon",
+            "Keinemusik", "&ME", "Rampa", "Adam Port", "Damian Lazarus", "Hot Since 82",
+            "Joseph Capriati", "Richy Ahmed", "Patrick Topping", "Archie Hamilton",
+            "East End Dubs", "Enzo Siragusa", "Sidney Charles", "Rossi.", "Prunk", "Toman",
+            "Mall Grab", "DJ Boring", "Folamour", "DJ Seinfeld", "Ross From Friends",
+            "Honey Dijon", "The Blessed Madonna", "Kerri Chandler", "Louie Vega",
+            "Masters At Work", "Todd Terry", "MK", "Gorgon City", "Sonny Fodera", "Cloonee",
+            "Dom Dolla", "John Summit", "Chris Lake", "Vintage Culture", "Meduza", "HUGEL",
+            "Purple Disco Machine", "Claptone", "Bedouin", "Acid Pauli", "Satori", "Monolink",
+            "Wehbba",
+        ];
+        let tier2 = [
+            "Apollonia", "Dyed Soundorom", "Dan Ghenacia", "Shonky", "Traumer", "Cassy",
+            "Nicolas Lutz", "Sonja Moonear", "Raresh", "Petre Inspirescu", "Rhadoo", "Praslea",
+            "Zip", "Ricardo Villalobos", "Binh", "Vera", "Yulia Niko", "ANOTR", "Kolter",
+            "Adiel", "Deborah De Luca", "Anfisa Letyago", "Amémé", "Salomé", "Trikk",
+            "Mind Against", "Tale Of Us", "Agents Of Time", "Adriatique", "Argy", "Colyn",
+            "Massano", "Kevin de Vries", "Innellea", "Mathame",
+        ];
+        let tier3 = [
+            "Moodymann", "Theo Parrish", "Gerd Janson", "Motor City Drum Ensemble", "Palms Trax",
+            "Young Marco", "Hunee", "Antal", "Job Jobse", "Jane Fitz", "Eris Drew", "Octo Octa",
+            "Roman Flügel", "DJ Harvey", "Leon Vynehall", "Floating Points", "Laurent Garnier",
+            "D'Julz", "Chloé", "Molly", "Clara 3000", "Kiddy Smile",
+        ];
+        let mut stmt = conn
+            .prepare(
+                "INSERT OR IGNORE INTO vi_reference_artists (nom, nom_normalise, tier) VALUES (?1, ?2, ?3)",
+            )
+            .map_err(|e| e.to_string())?;
+        for (tier, list) in [(1i64, &tier1[..]), (2, &tier2[..]), (3, &tier3[..])] {
+            for nom in list {
+                stmt.execute(rusqlite::params![nom, normalise(nom), tier])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    // ---- RA areas (target zones). ra_area_id resolved later. ----
+    let acount: i64 = conn
+        .query_row("SELECT COUNT(*) FROM vi_ra_areas", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if acount == 0 {
+        let slugs = [
+            "fr/paris", "fr/lyon", "fr/marseille", "fr/bordeaux", "fr/nantes", "fr/lille",
+            "fr/toulouse", "fr/cotedazur", "be/brussels", "be/ghent", "be/antwerp", "ch/zurich",
+            "ch/geneva", "ch/lausanne", "ch/basel", "es/barcelona", "es/madrid", "es/valencia",
+            "es/ibiza", "es/mallorca", "es/malaga", "it/milan", "it/rome", "it/florence",
+            "it/riminiravenna", "it/naples", "it/sardinia", "it/bologna", "it/turin", "gr/athens",
+            "gr/mykonos", "gr/thessaloniki", "gr/santorini", "gr/crete",
+        ];
+        let mut stmt = conn
+            .prepare("INSERT OR IGNORE INTO vi_ra_areas (slug, pays, libelle) VALUES (?1, ?2, ?3)")
+            .map_err(|e| e.to_string())?;
+        for slug in slugs {
+            let (pays, ville) = slug.split_once('/').unwrap_or(("", slug));
+            let libelle = ville
+                .chars()
+                .next()
+                .map(|c| c.to_uppercase().collect::<String>() + &ville[c.len_utf8()..])
+                .unwrap_or_else(|| ville.to_string());
+            stmt.execute(rusqlite::params![slug, pays.to_uppercase(), libelle])
+                .map_err(|e| e.to_string())?;
+        }
+    }
     Ok(())
 }
 

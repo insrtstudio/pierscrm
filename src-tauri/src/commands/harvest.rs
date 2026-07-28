@@ -1,0 +1,617 @@
+//! Venue Intelligence, J2 harvesting engine.
+//!
+//! A run (`vi_runs`) is split into atomic tasks (`vi_tasks`), one per area over a
+//! 90-day window. A single background worker (spawned on the Tauri async runtime)
+//! drains the queue: fetch RA listings, upsert venues / evidence / promoters, then
+//! qualify. Everything is persisted, so closing the app mid-run loses nothing:
+//! "Reprendre" reclaims unfinished tasks and continues. Progress streams to the UI
+//! via the `vi:run-progress` event.
+//!
+//! Politeness: 1.5 s between page requests, exponential backoff on 429/5xx, at most
+//! `max_tentatives` attempts per task, then the task is marked `echec` without
+//! blocking the run.
+
+use crate::commands::ra;
+use crate::db::{normalise, DbPool};
+use crate::AppState;
+use chrono::{Datelike, Duration, NaiveDate, Utc};
+use rusqlite::params;
+use serde::Serialize;
+use serde_json::json;
+use tauri::{AppHandle, Emitter, State};
+
+const PAGE_SIZE: i64 = 100;
+const POLITENESS_MS: u64 = 1500;
+const WINDOW_DAYS: i64 = 90;
+const STALE_LOCK_SECS: i64 = 300;
+
+// ---------------- Progress event ----------------
+
+#[derive(Serialize, Clone)]
+pub struct RunProgress {
+    pub run_id: i64,
+    pub statut: String,
+    pub tasks_total: i64,
+    pub tasks_done: i64,
+    pub tasks_echec: i64,
+    pub venues: i64,
+    pub evidence: i64,
+    pub message: Option<String>,
+}
+
+fn run_stats(pool: &DbPool, run_id: i64) -> RunProgress {
+    let conn = pool.get().unwrap();
+    let one = |sql: &str, p: &[&dyn rusqlite::ToSql]| -> i64 {
+        conn.query_row(sql, p, |r| r.get(0)).unwrap_or(0)
+    };
+    let total = one("SELECT COUNT(*) FROM vi_tasks WHERE run_id=?1", &[&run_id]);
+    let done = one(
+        "SELECT COUNT(*) FROM vi_tasks WHERE run_id=?1 AND statut='termine'",
+        &[&run_id],
+    );
+    let echec = one(
+        "SELECT COUNT(*) FROM vi_tasks WHERE run_id=?1 AND statut='echec'",
+        &[&run_id],
+    );
+    let statut: String = conn
+        .query_row("SELECT statut FROM vi_runs WHERE id=?1", params![run_id], |r| r.get(0))
+        .unwrap_or_else(|_| "en_cours".into());
+    RunProgress {
+        run_id,
+        statut,
+        tasks_total: total,
+        tasks_done: done,
+        tasks_echec: echec,
+        venues: one("SELECT COUNT(*) FROM vi_venues", &[]),
+        evidence: one("SELECT COUNT(*) FROM vi_evidence", &[]),
+        message: None,
+    }
+}
+
+fn emit(app: &AppHandle, pool: &DbPool, run_id: i64, message: Option<String>) {
+    let mut p = run_stats(pool, run_id);
+    p.message = message;
+    let _ = app.emit("vi:run-progress", p);
+}
+
+// ---------------- Date windows ----------------
+
+fn windows(year_from: i32, year_to: i32) -> Vec<(NaiveDate, NaiveDate)> {
+    let start = NaiveDate::from_ymd_opt(year_from, 1, 1).unwrap_or_else(|| Utc::now().date_naive());
+    let today = Utc::now().date_naive();
+    let mut end = NaiveDate::from_ymd_opt(year_to, 12, 31).unwrap_or(today);
+    if end > today {
+        end = today;
+    }
+    let mut out = Vec::new();
+    let mut cur = start;
+    while cur <= end {
+        let wend = (cur + Duration::days(WINDOW_DAYS - 1)).min(end);
+        out.push((cur, wend));
+        cur = wend + Duration::days(1);
+    }
+    out
+}
+
+fn iso_start(d: NaiveDate) -> String {
+    format!("{}T00:00:00.000Z", d.format("%Y-%m-%d"))
+}
+fn iso_end(d: NaiveDate) -> String {
+    format!("{}T23:59:59.999Z", d.format("%Y-%m-%d"))
+}
+
+// ---------------- Public commands ----------------
+
+/// Resolve one seeded area's RA id (via the GraphQL `area` query) and store it.
+#[tauri::command]
+pub async fn vi_resolve_area(state: State<'_, AppState>, id: i64) -> Result<Option<i64>, String> {
+    let (slug, pays): (String, Option<String>) = {
+        let conn = state.pool.get().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT slug, pays FROM vi_ra_areas WHERE id=?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?
+    };
+    let (country, url_name) = slug.split_once('/').unwrap_or(("", slug.as_str()));
+    let country = pays.unwrap_or_else(|| country.to_uppercase());
+    let client = ra::client();
+    let resolved = ra::resolve_area(&client, &country, url_name)
+        .await
+        .map_err(|e| e.message)?;
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE vi_ra_areas SET ra_area_id=?2, resolved_at=CASE WHEN ?2 IS NOT NULL THEN datetime('now') ELSE resolved_at END WHERE id=?1",
+        params![id, resolved],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(resolved)
+}
+
+/// Resolve every active, unresolved area. Returns how many got an id.
+#[tauri::command]
+pub async fn vi_resolve_all_areas(state: State<'_, AppState>) -> Result<i64, String> {
+    let todo: Vec<(i64, String, Option<String>)> = {
+        let conn = state.pool.get().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT id, slug, pays FROM vi_ra_areas WHERE actif=1 AND ra_area_id IS NULL")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    let client = ra::client();
+    let mut n = 0i64;
+    for (id, slug, pays) in todo {
+        let (country, url_name) = slug.split_once('/').unwrap_or(("", slug.as_str()));
+        let country = pays.unwrap_or_else(|| country.to_uppercase());
+        if let Ok(Some(area_id)) = ra::resolve_area(&client, &country, url_name).await {
+            let conn = state.pool.get().map_err(|e| e.to_string())?;
+            let _ = conn.execute(
+                "UPDATE vi_ra_areas SET ra_area_id=?2, resolved_at=datetime('now') WHERE id=?1",
+                params![id, area_id],
+            );
+            n += 1;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(POLITENESS_MS)).await;
+    }
+    Ok(n)
+}
+
+/// Start a harvest run over the given areas (vi_ra_areas ids; empty = all active
+/// resolved) and a year range. Creates the task queue and spawns the worker.
+#[tauri::command]
+pub async fn vi_start_harvest(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    area_ids: Vec<i64>,
+    year_from: i32,
+    year_to: i32,
+) -> Result<i64, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+
+    // Resolve target areas (must have a ra_area_id).
+    let mut areas: Vec<(i64, i64, String, String)> = Vec::new(); // vi_id, ra_id, name, country
+    {
+        let base = "SELECT id, ra_area_id, COALESCE(libelle, slug), COALESCE(pays,'') FROM vi_ra_areas WHERE actif=1 AND ra_area_id IS NOT NULL";
+        if area_ids.is_empty() {
+            let mut stmt = conn.prepare(base).map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .map_err(|e| e.to_string())?;
+            areas = rows.filter_map(|r| r.ok()).collect();
+        } else {
+            for aid in &area_ids {
+                if let Ok(row) = conn.query_row(
+                    &format!("{} AND id=?1", base),
+                    params![aid],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                ) {
+                    areas.push(row);
+                }
+            }
+        }
+    }
+    if areas.is_empty() {
+        return Err("Aucune zone résolue à moissonner. Résolvez d'abord les area ids.".into());
+    }
+
+    let wins = windows(year_from, year_to);
+    let params_json = json!({ "area_ids": area_ids, "year_from": year_from, "year_to": year_to,
+        "areas": areas.len(), "windows": wins.len() });
+
+    conn.execute(
+        "INSERT INTO vi_runs (type, params, statut, started_at) VALUES ('harvest', ?1, 'en_cours', datetime('now'))",
+        params![params_json.to_string()],
+    )
+    .map_err(|e| e.to_string())?;
+    let run_id = conn.last_insert_rowid();
+
+    // One task per area x window.
+    let mut stmt = conn
+        .prepare("INSERT INTO vi_tasks (run_id, type, payload, statut) VALUES (?1,'harvest_area_window',?2,'en_attente')")
+        .map_err(|e| e.to_string())?;
+    for (vi_id, ra_id, name, country) in &areas {
+        for (ws, we) in &wins {
+            let payload = json!({
+                "ra_area_id": ra_id, "vi_area_id": vi_id, "area_name": name, "country": country,
+                "gte": iso_start(*ws), "lte": iso_end(*we)
+            });
+            stmt.execute(params![run_id, payload.to_string()])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    drop(stmt);
+
+    spawn_worker(state.pool.clone(), app, run_id);
+    Ok(run_id)
+}
+
+/// Resume an interrupted run: reclaim stale/locked tasks, spawn the worker again.
+#[tauri::command]
+pub async fn vi_resume_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    run_id: i64,
+) -> Result<(), String> {
+    {
+        let conn = state.pool.get().map_err(|e| e.to_string())?;
+        // Reclaim tasks stuck 'en_cours' (crash mid-task) back to 'en_attente'.
+        conn.execute(
+            "UPDATE vi_tasks SET statut='en_attente', locked_at=NULL
+             WHERE run_id=?1 AND statut='en_cours'",
+            params![run_id],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE vi_runs SET statut='en_cours' WHERE id=?1",
+            params![run_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    spawn_worker(state.pool.clone(), app, run_id);
+    Ok(())
+}
+
+// ---------------- Worker ----------------
+
+fn spawn_worker(pool: DbPool, app: AppHandle, run_id: i64) {
+    tauri::async_runtime::spawn(async move {
+        let client = ra::client();
+        emit(&app, &pool, run_id, Some("Démarrage".into()));
+
+        loop {
+            // Claim the next pending task for this run.
+            let task: Option<(i64, String, i64, i64)> = {
+                let conn = pool.get().unwrap();
+                let claimed = conn.execute(
+                    "UPDATE vi_tasks SET statut='en_cours', locked_at=datetime('now'), updated_at=datetime('now')
+                     WHERE id = (SELECT id FROM vi_tasks WHERE run_id=?1 AND statut='en_attente' ORDER BY id LIMIT 1)",
+                    params![run_id],
+                );
+                match claimed {
+                    Ok(1) => conn
+                        .query_row(
+                            "SELECT id, payload, tentatives, max_tentatives FROM vi_tasks
+                             WHERE run_id=?1 AND statut='en_cours' ORDER BY locked_at DESC LIMIT 1",
+                            params![run_id],
+                            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                        )
+                        .ok(),
+                    _ => None,
+                }
+            };
+
+            let Some((task_id, payload, tentatives, max_tentatives)) = task else {
+                break; // no more pending tasks
+            };
+
+            match process_harvest_task(&client, &pool, &payload).await {
+                Ok(()) => {
+                    let conn = pool.get().unwrap();
+                    let _ = conn.execute(
+                        "UPDATE vi_tasks SET statut='termine', locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
+                        params![task_id],
+                    );
+                }
+                Err(e) => {
+                    let attempts = tentatives + 1;
+                    let conn = pool.get().unwrap();
+                    if !e.retryable || attempts >= max_tentatives {
+                        let _ = conn.execute(
+                            "UPDATE vi_tasks SET statut='echec', tentatives=?2, derniere_erreur=?3, locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
+                            params![task_id, attempts, e.message],
+                        );
+                    } else {
+                        let _ = conn.execute(
+                            "UPDATE vi_tasks SET statut='en_attente', tentatives=?2, derniere_erreur=?3, locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
+                            params![task_id, attempts, e.message],
+                        );
+                        // exponential backoff before it gets picked again
+                        let backoff = 1500u64 * (1 << attempts.min(4)) as u64;
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+                    }
+                }
+            }
+
+            emit(&app, &pool, run_id, None);
+            tokio::time::sleep(std::time::Duration::from_millis(POLITENESS_MS)).await;
+        }
+
+        // Qualification pass (fold of J3 so the run is testable end to end).
+        qualify(&pool);
+
+        // Finish: mark 'termine' unless everything failed.
+        {
+            let conn = pool.get().unwrap();
+            let remaining: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM vi_tasks WHERE run_id=?1 AND statut IN ('en_attente','en_cours')",
+                    params![run_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if remaining == 0 {
+                let _ = conn.execute(
+                    "UPDATE vi_runs SET statut='termine', finished_at=datetime('now'), stats=?2 WHERE id=?1",
+                    params![run_id, serde_json::to_string(&run_stats(&pool, run_id)).unwrap_or_default()],
+                );
+            }
+        }
+        emit(&app, &pool, run_id, Some("Terminé".into()));
+    });
+}
+
+async fn process_harvest_task(
+    client: &reqwest::Client,
+    pool: &DbPool,
+    payload: &str,
+) -> Result<(), ra::RaError> {
+    let v: serde_json::Value = serde_json::from_str(payload)
+        .map_err(|e| ra::RaError { message: e.to_string(), status: None, retryable: false })?;
+    let area_id = v["ra_area_id"].as_i64().unwrap_or(0);
+    let gte = v["gte"].as_str().unwrap_or("").to_string();
+    let lte = v["lte"].as_str().unwrap_or("").to_string();
+    let region = v["area_name"].as_str().unwrap_or("").to_string();
+
+    let mut page = 1i64;
+    loop {
+        let listings = ra::fetch_listings(client, area_id, &gte, &lte, page, PAGE_SIZE).await?;
+        let n = listings.data.len() as i64;
+        {
+            let conn = pool.get().unwrap();
+            for listing in &listings.data {
+                let Some(ev) = &listing.event else { continue };
+                let Some(venue) = &ev.venue else { continue };
+                let ra_venue_id: i64 = match venue.id.parse() {
+                    Ok(x) => x,
+                    Err(_) => continue,
+                };
+                let norm = normalise(&venue.name);
+                let slug = format!("{}-{}", norm, ra_venue_id);
+                let ville = venue.area.as_ref().and_then(|a| a.name.clone());
+                let pays = venue
+                    .area
+                    .as_ref()
+                    .and_then(|a| a.country.as_ref())
+                    .and_then(|c| c.url_code.clone());
+                let ra_url = venue
+                    .content_url
+                    .as_ref()
+                    .map(|u| format!("https://ra.co{}", u));
+
+                let _ = conn.execute(
+                    "INSERT INTO vi_venues (slug, nom, nom_normalise, ville, pays, region_cible, ra_venue_id, ra_url, nb_events_periode)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,1)
+                     ON CONFLICT(ra_venue_id) DO UPDATE SET
+                        nb_events_periode = nb_events_periode + 1,
+                        ville = COALESCE(vi_venues.ville, excluded.ville),
+                        pays = COALESCE(vi_venues.pays, excluded.pays),
+                        region_cible = COALESCE(vi_venues.region_cible, excluded.region_cible),
+                        ra_url = COALESCE(vi_venues.ra_url, excluded.ra_url),
+                        updated_at = datetime('now')",
+                    params![slug, venue.name, norm, ville, pays, region, ra_venue_id, ra_url],
+                );
+                let venue_id: i64 = match conn.query_row(
+                    "SELECT id FROM vi_venues WHERE ra_venue_id=?1",
+                    params![ra_venue_id],
+                    |r| r.get(0),
+                ) {
+                    Ok(x) => x,
+                    Err(_) => continue,
+                };
+
+                let date_event = ev.date.as_deref().unwrap_or("").chars().take(10).collect::<String>();
+                let source_url = ev
+                    .content_url
+                    .as_ref()
+                    .map(|u| format!("https://ra.co{}", u))
+                    .or_else(|| ra_url.clone())
+                    .unwrap_or_default();
+
+                // Evidence: exact match of normalised artist name against the active reference list.
+                for artist in &ev.artists {
+                    let an = normalise(&artist.name);
+                    if an.is_empty() {
+                        continue;
+                    }
+                    let tier: Option<i64> = conn
+                        .query_row(
+                            "SELECT tier FROM vi_reference_artists WHERE nom_normalise=?1 AND actif=1",
+                            params![an],
+                            |r| r.get(0),
+                        )
+                        .ok();
+                    if let Some(tier) = tier {
+                        if !date_event.is_empty() && !source_url.is_empty() {
+                            let _ = conn.execute(
+                                "INSERT OR IGNORE INTO vi_evidence (venue_id, artiste, artiste_tier, date_event, titre_event, source_url, source_type)
+                                 VALUES (?1,?2,?3,?4,?5,?6,'ra')",
+                                params![venue_id, artist.name, tier, date_event, ev.title, source_url],
+                            );
+                        }
+                    }
+                }
+
+                // Promoters aggregated per venue.
+                for promo in &ev.promoters {
+                    if promo.name.trim().is_empty() {
+                        continue;
+                    }
+                    let _ = conn.execute(
+                        "INSERT INTO vi_promoters (venue_id, nom, nb_events) VALUES (?1,?2,1)
+                         ON CONFLICT(venue_id, nom) DO UPDATE SET nb_events = nb_events + 1",
+                        params![venue_id, promo.name],
+                    );
+                }
+            }
+        }
+
+        if n < PAGE_SIZE {
+            break; // last (incomplete) page
+        }
+        page += 1;
+        tokio::time::sleep(std::time::Duration::from_millis(POLITENESS_MS)).await;
+    }
+    Ok(())
+}
+
+/// Compute score_qualif and statut for all non-decided venues.
+fn qualify(pool: &DbPool) {
+    let conn = pool.get().unwrap();
+    let _ = conn.execute(
+        "UPDATE vi_venues SET
+            score_qualif = MIN(100,
+                COALESCE((SELECT SUM(CASE artiste_tier WHEN 1 THEN 10 WHEN 2 THEN 6 WHEN 3 THEN 4 ELSE 4 END)
+                          FROM vi_evidence e WHERE e.venue_id = vi_venues.id), 0)
+                + CASE WHEN (SELECT COUNT(DISTINCT artiste) FROM vi_evidence e WHERE e.venue_id = vi_venues.id) >= 3
+                       THEN 10 ELSE 0 END),
+            statut = CASE
+                WHEN EXISTS(SELECT 1 FROM vi_evidence e WHERE e.venue_id = vi_venues.id) THEN 'qualifie'
+                WHEN nb_events_periode >= 12 THEN 'qualifie'
+                ELSE 'rejete' END,
+            updated_at = datetime('now')
+         WHERE statut NOT IN ('valide','archive')",
+        [],
+    );
+}
+
+// ---------------- Read side (runs + venues) ----------------
+
+#[derive(Serialize)]
+pub struct RunRow {
+    pub id: i64,
+    pub type_: String,
+    pub statut: String,
+    pub params: Option<String>,
+    pub stats: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub erreur: Option<String>,
+    pub created_at: Option<String>,
+    pub tasks_total: i64,
+    pub tasks_done: i64,
+    pub tasks_echec: i64,
+}
+
+#[tauri::command]
+pub fn vi_list_runs(state: State<AppState>) -> Result<Vec<RunRow>, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT r.id, r.type, r.statut, r.params, r.stats, r.started_at, r.finished_at, r.erreur, r.created_at,
+                    (SELECT COUNT(*) FROM vi_tasks t WHERE t.run_id=r.id),
+                    (SELECT COUNT(*) FROM vi_tasks t WHERE t.run_id=r.id AND t.statut='termine'),
+                    (SELECT COUNT(*) FROM vi_tasks t WHERE t.run_id=r.id AND t.statut='echec')
+             FROM vi_runs r ORDER BY r.id DESC LIMIT 100",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(RunRow {
+                id: r.get(0)?,
+                type_: r.get(1)?,
+                statut: r.get(2)?,
+                params: r.get(3)?,
+                stats: r.get(4)?,
+                started_at: r.get(5)?,
+                finished_at: r.get(6)?,
+                erreur: r.get(7)?,
+                created_at: r.get(8)?,
+                tasks_total: r.get(9)?,
+                tasks_done: r.get(10)?,
+                tasks_echec: r.get(11)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+#[derive(Serialize)]
+pub struct VenueRow {
+    pub id: i64,
+    pub nom: String,
+    pub ville: Option<String>,
+    pub pays: Option<String>,
+    pub region_cible: Option<String>,
+    pub statut: String,
+    pub priorite: String,
+    pub score_qualif: i64,
+    pub nb_events_periode: i64,
+    pub nb_evidence: i64,
+    pub top_promoter: Option<String>,
+    pub ra_url: Option<String>,
+    pub site_web: Option<String>,
+    pub crm_contact_id: Option<i64>,
+}
+
+#[tauri::command]
+pub fn vi_list_venues(
+    state: State<AppState>,
+    statut: Option<String>,
+    pays: Option<String>,
+    search: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<VenueRow>, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let mut sql = String::from(
+        "SELECT v.id, v.nom, v.ville, v.pays, v.region_cible, v.statut, v.priorite, v.score_qualif,
+                v.nb_events_periode,
+                (SELECT COUNT(*) FROM vi_evidence e WHERE e.venue_id=v.id),
+                (SELECT nom FROM vi_promoters p WHERE p.venue_id=v.id ORDER BY nb_events DESC LIMIT 1),
+                v.ra_url, v.site_web, v.crm_contact_id
+         FROM vi_venues v WHERE 1=1",
+    );
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(s) = statut.filter(|s| !s.is_empty() && s != "all") {
+        sql.push_str(" AND v.statut=?");
+        args.push(Box::new(s));
+    }
+    if let Some(p) = pays.filter(|s| !s.is_empty() && s != "all") {
+        sql.push_str(" AND v.pays=?");
+        args.push(Box::new(p));
+    }
+    if let Some(q) = search.filter(|s| !s.trim().is_empty()) {
+        sql.push_str(" AND (v.nom LIKE ? OR v.ville LIKE ?)");
+        let like = format!("%{}%", q);
+        args.push(Box::new(like.clone()));
+        args.push(Box::new(like));
+    }
+    sql.push_str(" ORDER BY v.score_qualif DESC, v.nb_events_periode DESC, v.nom COLLATE NOCASE");
+    sql.push_str(&format!(" LIMIT {} OFFSET {}", limit.unwrap_or(200).clamp(1, 1000), offset.unwrap_or(0).max(0)));
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+    let rows = stmt
+        .query_map(refs.as_slice(), |r| {
+            Ok(VenueRow {
+                id: r.get(0)?,
+                nom: r.get(1)?,
+                ville: r.get(2)?,
+                pays: r.get(3)?,
+                region_cible: r.get(4)?,
+                statut: r.get(5)?,
+                priorite: r.get(6)?,
+                score_qualif: r.get(7)?,
+                nb_events_periode: r.get(8)?,
+                nb_evidence: r.get(9)?,
+                top_promoter: r.get(10)?,
+                ra_url: r.get(11)?,
+                site_web: r.get(12)?,
+                crm_contact_id: r.get(13)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}

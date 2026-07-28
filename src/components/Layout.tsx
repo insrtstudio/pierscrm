@@ -19,6 +19,7 @@ const NAV: NavItem[] = [
   { to: "/contacts", key: "contacts" },
   { to: "/emails", key: "emails" },
   { to: "/import", key: "import" },
+  { to: "/venues", key: "venues" },
   { to: "/budget", key: "budget" },
   { to: "/visa", key: "visa" },
 ];
