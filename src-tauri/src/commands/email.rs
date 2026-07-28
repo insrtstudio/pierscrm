@@ -30,14 +30,25 @@ fn load_smtp(state: &AppState) -> Result<SmtpConfig, String> {
 }
 
 fn build_transport(cfg: &SmtpConfig) -> Result<SmtpTransport, String> {
-    if cfg.host.trim().is_empty() {
+    // Sanitize inputs — stray whitespace / a pasted protocol prefix is a very
+    // common cause of "535 authentication rejected".
+    let host = cfg
+        .host
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_string();
+    if host.is_empty() {
         return Err("SMTP host is not configured.".into());
     }
-    let creds = Credentials::new(cfg.username.clone(), cfg.password.clone());
+    let username = cfg.username.trim().to_string();
+    let password = cfg.password.trim().to_string();
+    let creds = Credentials::new(username, password);
     let builder = match cfg.encryption.as_str() {
-        "tls" => SmtpTransport::relay(&cfg.host).map_err(|e| e.to_string())?,
-        "none" => SmtpTransport::builder_dangerous(&cfg.host),
-        _ => SmtpTransport::starttls_relay(&cfg.host).map_err(|e| e.to_string())?,
+        "tls" => SmtpTransport::relay(&host).map_err(|e| e.to_string())?,
+        "none" => SmtpTransport::builder_dangerous(&host),
+        _ => SmtpTransport::starttls_relay(&host).map_err(|e| e.to_string())?,
     };
     Ok(builder.port(cfg.port).credentials(creds).build())
 }

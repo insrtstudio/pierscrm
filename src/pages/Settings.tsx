@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw } from "lucide-react";
+import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw, Info } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import i18n from "../i18n";
 import { checkForUpdate, installAndRelaunch } from "../lib/updater";
@@ -193,7 +193,11 @@ export function Settings() {
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
             <Mail size={15} /> {t("settings.email_section")}
           </div>
-          <p className="mb-4 text-xs text-fg-subtle">{t("settings.email_help")}</p>
+          <p className="mb-2 text-xs text-fg-subtle">{t("settings.email_help")}</p>
+          <div className="mb-4 panel flex gap-2.5 p-3 text-2xs leading-relaxed text-fg-subtle">
+            <Info size={14} className="mt-0.5 shrink-0 text-accent-2" />
+            <span>{t("settings.email_hint")}</span>
+          </div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
             <Field label={t("settings.host")} className="col-span-2">
               <input {...cinp("host")} placeholder="ssl0.ovh.net / smtp.gmail.com" />

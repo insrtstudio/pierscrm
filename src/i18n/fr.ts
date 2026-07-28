@@ -414,6 +414,8 @@ export const fr = {
     email_section: "Compte email (SMTP)",
     email_help:
       "Renseignez les identifiants SMTP de votre boîte de domaine. Les emails partent directement depuis l'app.",
+    email_hint:
+      "Identifiant = votre adresse email complète. Si votre compte a la double authentification (Gmail, Outlook, Google Workspace…), générez un « mot de passe d'application » et utilisez-le ici — votre mot de passe habituel sera refusé (erreur 535). Collez-le sans espaces.",
     host: "Serveur SMTP",
     port: "Port",
     username: "Identifiant",

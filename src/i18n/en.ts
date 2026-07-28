@@ -414,6 +414,8 @@ export const en = {
     email_section: "Email account (SMTP)",
     email_help:
       "Enter the SMTP credentials of your domain mailbox. Emails are sent straight from the app.",
+    email_hint:
+      "Username = your full email address. If your account has two-factor auth (Gmail, Outlook, Google Workspace…), generate an “app password” and use it here — your normal password will be rejected (error 535). Paste it without spaces.",
     host: "SMTP host",
     port: "Port",
     username: "Username",
