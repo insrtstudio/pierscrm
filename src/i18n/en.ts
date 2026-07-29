@@ -562,5 +562,9 @@ export const en = {
     sig_soundcloud: "SoundCloud",
     sig_preview: "Preview",
     sig_empty: "Fill at least one field to see the preview.",
+    enrich_section: "Venue website resolution (Serper)",
+    enrich_help: "When Resident Advisor has no website for a venue, the app finds it via a Google search (Serper), then crawls it for the email. Without a key, enrichment is limited to sites RA already knows.",
+    serper_key: "Serper API key",
+    serper_hint: "Create a free key at serper.dev (2,500 free queries, no card). Stored locally on this Mac, never shared.",
   },
 };

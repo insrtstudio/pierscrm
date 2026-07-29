@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw, Info, PenLine } from "lucide-react";
+import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw, Info, PenLine, Search } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import i18n from "../i18n";
 import { checkForUpdate, installAndRelaunch } from "../lib/updater";
@@ -62,6 +62,21 @@ export function Settings() {
   const saveTracking = async () => {
     await setSetting("tracking_base_url", trackVal.trim());
     qc.invalidateQueries({ queryKey: ["setting", "tracking_base_url"] });
+    toast(t("settings.saved"), "ok");
+  };
+
+  // ---- Serper (venue website resolution) ----
+  const { data: serperKey } = useQuery({
+    queryKey: ["setting", "serper_api_key"],
+    queryFn: () => getSetting("serper_api_key"),
+  });
+  const [serperVal, setSerperVal] = useState("");
+  useEffect(() => {
+    if (serperKey != null) setSerperVal(serperKey);
+  }, [serperKey]);
+  const saveSerper = async () => {
+    await setSetting("serper_api_key", serperVal.trim());
+    qc.invalidateQueries({ queryKey: ["setting", "serper_api_key"] });
     toast(t("settings.saved"), "ok");
   };
 
@@ -392,6 +407,30 @@ export function Settings() {
               {t("common.save")}
             </button>
           </div>
+        </div>
+
+        {/* Venue website resolution (Serper) */}
+        <div className="card p-6">
+          <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
+            <Search size={15} /> {t("settings.enrich_section")}
+          </div>
+          <p className="mb-4 text-xs text-fg-subtle">{t("settings.enrich_help")}</p>
+          <div className="flex items-end gap-3">
+            <Field label={t("settings.serper_key")} className="flex-1">
+              <input
+                type="password"
+                className="input"
+                value={serperVal}
+                onChange={(e) => setSerperVal(e.target.value)}
+                placeholder="serper.dev API key"
+                autoComplete="off"
+              />
+            </Field>
+            <button className="btn-primary" onClick={saveSerper}>
+              {t("common.save")}
+            </button>
+          </div>
+          <p className="mt-3 text-2xs text-fg-faint">{t("settings.serper_hint")}</p>
         </div>
 
         {/* Updates */}

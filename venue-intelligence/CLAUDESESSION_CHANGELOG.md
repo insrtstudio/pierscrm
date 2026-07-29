@@ -2,6 +2,23 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-07-29, v0.8.4, résolution de site via recherche web (Serper) au J5
+
+L'utilisateur a fourni une clé Serper. Testée en direct : `knowledgeGraph.website` donne le site
+officiel (ex. Lafayette London), sinon le 1er résultat organique propre (Shelter Amsterdam ->
+shelteramsterdam.nl). 1 crédit/requête, 2 500 offerts.
+
+- `enrich.rs` : `resolve_website_via_search(client, key, query)` POST vers google.serper.dev/search
+  (header X-API-KEY), prend knowledgeGraph.website puis le 1er organic hors SEARCH_SKIP (socials/
+  agrégateurs : facebook, instagram, ra.co, tripadvisor, songkick, bandsintown, wikipedia,
+  eventbrite, dice.fm, shotgun, etc.), renvoie l'origine scheme://host. Injecté dans
+  process_enrich_task en étape 1b : UNIQUEMENT quand RA n'a pas de site ET qu'une clé est présente
+  (requête "{nom} {ville} nightclub venue official website"), persiste le site trouvé puis crawle.
+  Politesse 400 ms. Clé lue depuis settings('serper_api_key').
+- Settings : section "Résolution des sites de salles (Serper)", champ password, stocké local via
+  set_setting, jamais commité. i18n FR/EN.
+- La clé Serper de l'utilisateur a été testée via curl (éphémère), JAMAIS écrite dans le repo.
+
 ## 2026-07-29, v0.8.3, finitions UI + faisabilité sources de découverte
 
 - **États vides** unifiés sur `EmptyState` : Artists (avec action "Nouveau"), Kpis, Timeline

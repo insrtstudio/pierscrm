@@ -563,5 +563,9 @@ export const fr = {
     sig_soundcloud: "SoundCloud",
     sig_preview: "Aperçu",
     sig_empty: "Renseignez au moins un champ pour voir l'aperçu.",
+    enrich_section: "Résolution des sites de salles (Serper)",
+    enrich_help: "Quand Resident Advisor n'a pas le site d'une salle, l'app le retrouve via une recherche Google (Serper), puis le crawle pour l'email. Sans clé, l'enrichissement se limite aux sites déjà connus de RA.",
+    serper_key: "Clé API Serper",
+    serper_hint: "Créez une clé gratuite sur serper.dev (2 500 requêtes offertes, sans carte). Stockée en local sur ce Mac, jamais partagée.",
   },
 };

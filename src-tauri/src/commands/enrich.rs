@@ -196,6 +196,57 @@ fn internal_links(html: &str, origin: &str) -> Vec<String> {
     out
 }
 
+/// Aggregators and socials that are never the venue's own booking site.
+const SEARCH_SKIP: &[&str] = &[
+    "facebook.", "instagram.", "twitter.", "x.com", "tripadvisor.", "ra.co",
+    "residentadvisor", "songkick.", "bandsintown.", "wikipedia.", "youtube.",
+    "youtu.be", "tiktok.", "linktr.ee", "google.", "yelp.", "foursquare.",
+    "eventbrite.", "dice.fm", "shotgun", "soundcloud.", "spotify.", "timeout.",
+    "designmynight.", "maps.", "yandex.", "bing.", "apple.com", "meetup.", "gmaps",
+];
+
+/// Resolve a venue's official website via the Serper (Google) search API, used
+/// only when RA has no website. Prefers the knowledge-graph site, else the first
+/// organic result that is not an aggregator/social. Returns a scheme://host origin.
+async fn resolve_website_via_search(
+    client: &reqwest::Client,
+    api_key: &str,
+    query: &str,
+) -> Option<String> {
+    let resp = client
+        .post("https://google.serper.dev/search")
+        .header("X-API-KEY", api_key)
+        .json(&json!({ "q": query, "num": 6 }))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let d: serde_json::Value = resp.json().await.ok()?;
+    if let Some(w) = d
+        .get("knowledgeGraph")
+        .and_then(|k| k.get("website"))
+        .and_then(|w| w.as_str())
+    {
+        if let Some(n) = normalize_site(w) {
+            return Some(origin_of(&n));
+        }
+    }
+    for item in d.get("organic").and_then(|o| o.as_array())?.iter() {
+        if let Some(link) = item.get("link").and_then(|l| l.as_str()) {
+            let low = link.to_lowercase();
+            if SEARCH_SKIP.iter().any(|b| low.contains(b)) {
+                continue;
+            }
+            if let Some(n) = normalize_site(link) {
+                return Some(origin_of(&n));
+            }
+        }
+    }
+    None
+}
+
 pub async fn process_enrich_task(
     ra_client: &reqwest::Client,
     pool: &DbPool,
@@ -249,6 +300,50 @@ pub async fn process_enrich_task(
             .ok()
             .flatten()
             .and_then(|s| normalize_site(&s));
+    }
+
+    // 1b. Still no website? Resolve it with a web search (Serper), if a key is set.
+    if site.is_none() {
+        let (nom, ville, api_key) = {
+            let conn = pool.get().unwrap();
+            let nv = conn
+                .query_row(
+                    "SELECT nom, ville FROM vi_venues WHERE id=?1",
+                    params![venue_id],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+                )
+                .unwrap_or((String::new(), None));
+            let key = conn
+                .query_row(
+                    "SELECT value FROM settings WHERE key='serper_api_key'",
+                    [],
+                    |r| r.get::<_, String>(0),
+                )
+                .ok()
+                .filter(|k| !k.trim().is_empty());
+            (nv.0, nv.1, key)
+        };
+        if let Some(key) = api_key {
+            if !nom.trim().is_empty() {
+                let query = format!(
+                    "{} {} nightclub venue official website",
+                    nom,
+                    ville.unwrap_or_default()
+                );
+                if let Some(found) =
+                    resolve_website_via_search(&crawl_client(), &key, &query).await
+                {
+                    let conn = pool.get().unwrap();
+                    let _ = conn.execute(
+                        "UPDATE vi_venues SET site_web = COALESCE(site_web, ?2), updated_at = datetime('now') WHERE id=?1",
+                        params![venue_id, found],
+                    );
+                    site = Some(found);
+                }
+                // Politeness / rate-limit courtesy toward the search API.
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            }
+        }
     }
 
     // 2. Crawl the venue site for emails (and a phone / contact page).
