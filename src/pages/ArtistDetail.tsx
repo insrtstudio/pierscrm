@@ -31,6 +31,7 @@ import {
 } from "../lib/api";
 import type { Artist, Kpi } from "../lib/types";
 import { Modal, Field, useToast, useConfirm } from "../components/ui";
+import { Loader, ErrorState } from "../components/Layout";
 import { ComposeModal } from "../components/ComposeModal";
 import { StatusBadge } from "../components/StatusBadge";
 
@@ -73,7 +74,12 @@ export function ArtistDetail() {
     }, 150);
   };
 
-  const { data: artist } = useQuery({
+  const {
+    data: artist,
+    isLoading: artistLoading,
+    isError: artistError,
+    refetch: refetchArtist,
+  } = useQuery({
     queryKey: ["artist", artistId],
     queryFn: () => getArtist(artistId),
     enabled: !!artistId,
@@ -105,6 +111,8 @@ export function ArtistDetail() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["kpis", artistId] }),
   });
 
+  if (artistLoading) return <div className="p-8"><Loader /></div>;
+  if (artistError) return <div className="p-8"><ErrorState onRetry={() => refetchArtist()} /></div>;
   if (!artist) return null;
 
   const links = LINK_FIELDS.filter((l) => artist[l.key]);

@@ -10,16 +10,10 @@ import {
   listEvents,
 } from "../lib/api";
 import { PageHeader, EmptyState } from "../components/Layout";
+import { euro } from "../lib/format";
 import { STATUS_DOT } from "../lib/constants";
 import { STATUSES, type Status } from "../lib/types";
 
-function euro(n: number) {
-  return new Intl.NumberFormat("fr-FR", {
-    style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: 0,
-  }).format(n || 0);
-}
 function isoToday() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(

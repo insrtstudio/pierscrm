@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import clsx from "clsx";
-import { Sun, Moon, type LucideIcon } from "lucide-react";
+import { Sun, Moon, RefreshCw, AlertTriangle, type LucideIcon } from "lucide-react";
 import { listArtists, listEvents } from "../lib/api";
 import { getTheme, toggleTheme, type Theme } from "../lib/theme";
 import { UpdateBanner } from "./UpdateBanner";
@@ -245,6 +245,40 @@ export function EmptyState({
         {hint && <div className="mt-1 text-sm text-fg-subtle">{hint}</div>}
       </div>
       {action}
+    </div>
+  );
+}
+
+export function Loader({ label }: { label?: string }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="flex items-center justify-center gap-2 py-16 text-sm text-fg-subtle"
+      role="status"
+      aria-live="polite"
+    >
+      <RefreshCw size={16} className="animate-spin" />
+      {label ?? t("common.loading")}
+    </div>
+  );
+}
+
+export function ErrorState({ onRetry }: { onRetry?: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-3 py-16 text-center"
+      role="alert"
+    >
+      <div className="flex h-12 w-12 items-center justify-center border-2 border-accent/40 text-accent">
+        <AlertTriangle size={22} />
+      </div>
+      <div className="text-sm text-fg-subtle">{t("common.load_error")}</div>
+      {onRetry && (
+        <button className="btn-outline" onClick={onRetry}>
+          {t("common.retry")}
+        </button>
+      )}
     </div>
   );
 }

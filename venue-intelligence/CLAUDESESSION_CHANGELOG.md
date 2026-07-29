@@ -2,6 +2,23 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-07-29, v0.8.2, durcissement UI (suite) : formatage, loading/error, cohérence
+
+- **Formatage partagé** `src/lib/format.ts` : euro() (locale FR/EN) + formatDate/formatDateTime
+  (parse les datetimes UTC de SQLite -> heure locale). Dédupliqué depuis Dashboard/Budget/Agenda.
+  Historique Emails : sent_at/opened_at n'affichent plus les chaînes DB brutes.
+- **États loading/error (H8)** : composants partagés Loader + ErrorState (Layout.tsx, avec
+  role/aria-live). Branchés sur ArtistDetail (corrige l'ÉCRAN BLANC au chargement, avant
+  `if(!artist) return null`) et sur la table Contacts (loading/error/empty distincts). Clés
+  common.load_error / common.retry.
+- **Cohérence** : onglets Visa passés sur `.segmented` (fini le 3e style d'onglets).
+- **aria-label** : nav mois Agenda (prev/next) + actions de ligne Contacts (mail/site/edit/
+  supprimer).
+
+RESTE (optionnel, rendements décroissants) : unifier les tables hand-rolled Contacts/Import sur
+`.tbl` (gros refactor), loading state Dashboard, sweep aria-label restant, confirm thémé
+(window.confirm), empty states bespoke restants (Artists/Kpis/Timeline).
+
 ## 2026-07-29, v0.8.1, durcissement UI/UX (accessibilité, contraste, cohérence)
 
 Passe issue de l'audit UI (agent Explore). Priorité aux corrections CENTRALISÉES qui liftent

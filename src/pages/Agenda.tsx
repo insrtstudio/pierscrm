@@ -14,6 +14,7 @@ import {
 import type { Artist, Event } from "../lib/types";
 import { EVENT_STATUSES } from "../lib/types";
 import { PageHeader } from "../components/Layout";
+import { euro } from "../lib/format";
 import { Modal, Field, useToast, useConfirm } from "../components/ui";
 
 // Warm, on-brand ramp (reds → warm neutrals) so artists stay distinguishable
@@ -150,10 +151,18 @@ export function Agenda() {
         {/* Month nav */}
         <div className="mb-4 flex items-center gap-3">
           <div className="flex items-center gap-1">
-            <button className="btn-outline px-2 py-2" onClick={() => setCursor(addMonths(cursor, -1))}>
+            <button
+              className="btn-outline px-2 py-2"
+              aria-label={t("agenda.prev_month")}
+              onClick={() => setCursor(addMonths(cursor, -1))}
+            >
               <ChevronLeft size={16} />
             </button>
-            <button className="btn-outline px-2 py-2" onClick={() => setCursor(addMonths(cursor, 1))}>
+            <button
+              className="btn-outline px-2 py-2"
+              aria-label={t("agenda.next_month")}
+              onClick={() => setCursor(addMonths(cursor, 1))}
+            >
               <ChevronRight size={16} />
             </button>
           </div>
@@ -355,11 +364,7 @@ function EventHoverCard({
             {[ev.venue, ev.city].filter(Boolean).join(" · ")}
           </div>
         )}
-        {ev.fee != null && (
-          <div className="font-bold text-fg">
-            {new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(ev.fee)}
-          </div>
-        )}
+        {ev.fee != null && <div className="font-bold text-fg">{euro(ev.fee)}</div>}
         {ev.notes && <div className="line-clamp-3 pt-1 leading-relaxed">{ev.notes}</div>}
       </div>
     </div>,

@@ -8,15 +8,9 @@ import {
   saveBudgetItem,
 } from "../lib/api";
 import type { BudgetItem } from "../lib/types";
+import { euro } from "../lib/format";
 import { PageHeader } from "../components/Layout";
 import { Modal, Field, useToast, useConfirm } from "../components/ui";
-
-const euro = (n: number) =>
-  new Intl.NumberFormat("fr-FR", {
-    style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: 0,
-  }).format(n || 0);
 
 export function Budget() {
   const { t } = useTranslation();

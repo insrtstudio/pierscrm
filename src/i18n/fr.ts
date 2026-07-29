@@ -118,6 +118,8 @@ export const fr = {
     loading: "Chargement…",
     confirm_delete: "Supprimer cet élément ?",
     empty: "Rien pour le moment",
+    load_error: "Impossible de charger les données.",
+    retry: "Réessayer",
     total: "Total",
     actions: "Actions",
     yes: "Oui",
@@ -337,6 +339,8 @@ export const fr = {
   agenda: {
     title: "Agenda",
     subtitle: "Les événements de vos artistes, mois par mois",
+    prev_month: "Mois précédent",
+    next_month: "Mois suivant",
     new_event: "Nouvel événement",
     edit_event: "Modifier l'événement",
     today: "Aujourd'hui",

@@ -21,7 +21,7 @@ import {
 import type { Contact, Status } from "../lib/types";
 import { STATUSES } from "../lib/types";
 import { CATEGORIES } from "../lib/constants";
-import { PageHeader } from "../components/Layout";
+import { PageHeader, Loader, ErrorState } from "../components/Layout";
 import { StatusBadge, StatusSelect, PriorityBadge } from "../components/StatusBadge";
 import { Modal, Field, useToast, useConfirm } from "../components/ui";
 import { ComposeModal } from "../components/ComposeModal";
@@ -39,7 +39,12 @@ export function Contacts() {
   const [editing, setEditing] = useState<Contact | null>(null);
   const [composing, setComposing] = useState<Contact | null>(null);
 
-  const { data: contacts = [] } = useQuery({
+  const {
+    data: contacts = [],
+    isLoading: contactsLoading,
+    isError: contactsError,
+    refetch: refetchContacts,
+  } = useQuery({
     queryKey: ["contacts", category, status, search],
     queryFn: () => listContacts({ category, status, search }),
   });
@@ -202,7 +207,21 @@ export function Contacts() {
                 </tr>
               </thead>
               <tbody>
-                {contacts.length === 0 && (
+                {contactsLoading && (
+                  <tr>
+                    <td colSpan={7}>
+                      <Loader />
+                    </td>
+                  </tr>
+                )}
+                {contactsError && !contactsLoading && (
+                  <tr>
+                    <td colSpan={7}>
+                      <ErrorState onRetry={() => refetchContacts()} />
+                    </td>
+                  </tr>
+                )}
+                {!contactsLoading && !contactsError && contacts.length === 0 && (
                   <tr>
                     <td
                       colSpan={7}
@@ -263,6 +282,7 @@ export function Contacts() {
                         {c.email && (
                           <button
                             title={t("contacts.compose")}
+                            aria-label={t("contacts.compose")}
                             className="btn-ghost px-2 py-1.5"
                             onClick={() => setComposing(c)}
                           >
@@ -272,6 +292,7 @@ export function Contacts() {
                         {c.website && (
                           <button
                             title={t("contacts.open_site")}
+                            aria-label={t("contacts.open_site")}
                             className="btn-ghost px-2 py-1.5"
                             onClick={() => {
                               const url = c.website!.startsWith("http")
@@ -285,6 +306,7 @@ export function Contacts() {
                         )}
                         <button
                           title={t("common.edit")}
+                            aria-label={t("common.edit")}
                           className="btn-ghost px-2 py-1.5"
                           onClick={() => setEditing(c)}
                         >
@@ -292,6 +314,7 @@ export function Contacts() {
                         </button>
                         <button
                           title={t("common.delete")}
+                            aria-label={t("common.delete")}
                           className="btn-ghost px-2 py-1.5 text-rose-500"
                           onClick={() => {
                             if (confirm(t("common.confirm_delete")))

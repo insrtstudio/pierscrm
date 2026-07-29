@@ -61,15 +61,13 @@ export function Visa() {
           <span>{t("visa.disclaimer")}</span>
         </div>
 
-        <div className="mb-5 inline-flex rounded-lg border border-border bg-surface p-1">
+        <div className="segmented mb-5">
           {(["dossiers", "countries"] as Tab[]).map((tb) => (
             <button
               key={tb}
+              data-active={tab === tb}
               onClick={() => setTab(tb)}
-              className={clsx(
-                "rounded-md px-4 py-1.5 text-sm font-medium transition-colors",
-                tab === tb ? "bg-accent text-accent-fg" : "text-fg-subtle hover:text-fg"
-              )}
+              className="segmented-item"
             >
               {t(`visa.tab_${tb}`)}
             </button>

@@ -118,6 +118,8 @@ export const en = {
     loading: "Loading…",
     confirm_delete: "Delete this item?",
     empty: "Nothing yet",
+    load_error: "Couldn't load the data.",
+    retry: "Retry",
     total: "Total",
     actions: "Actions",
     yes: "Yes",
@@ -337,6 +339,8 @@ export const en = {
   agenda: {
     title: "Agenda",
     subtitle: "Your artists' events, month by month",
+    prev_month: "Previous month",
+    next_month: "Next month",
     new_event: "New event",
     edit_event: "Edit event",
     today: "Today",

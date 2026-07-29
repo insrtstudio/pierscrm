@@ -37,6 +37,7 @@ import { PageHeader, EmptyState } from "../components/Layout";
 import { Modal, Field, useToast, useConfirm } from "../components/ui";
 import { BulkSend } from "./BulkSend";
 import { ComposeModal, renderTemplate } from "../components/ComposeModal";
+import { formatDateTime } from "../lib/format";
 
 const LINK_FIELDS = ["mix", "listen", "onepager", "epk"] as const;
 
@@ -775,7 +776,7 @@ function LogTab() {
                     {e.opened_at ? (
                       <span
                         className="inline-flex items-center gap-1 text-xs font-medium text-emerald-500"
-                        title={`${e.opened_at}${e.open_count > 1 ? ` · ${e.open_count}×` : ""}`}
+                        title={`${formatDateTime(e.opened_at)}${e.open_count > 1 ? ` · ${e.open_count}×` : ""}`}
                       >
                         <Eye size={13} />
                         {t("emails.opened")}
@@ -788,7 +789,7 @@ function LogTab() {
                       </span>
                     )}
                   </td>
-                  <td className="whitespace-nowrap text-xs text-fg-subtle">{e.sent_at}</td>
+                  <td className="whitespace-nowrap text-xs text-fg-subtle">{formatDateTime(e.sent_at)}</td>
                 </tr>
               ))}
             </tbody>
