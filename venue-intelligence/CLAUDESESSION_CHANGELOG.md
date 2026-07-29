@@ -2,6 +2,21 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-07-29, v0.8.3, finitions UI + faisabilité sources de découverte
+
+- **États vides** unifiés sur `EmptyState` : Artists (avec action "Nouveau"), Kpis, Timeline
+  (fini les 3 blocs bespoke). aria-label ajoutés : bouton "Ouvrir sur RA" (Venues), fermeture
+  bandeau de mise à jour (UpdateBanner).
+- **Sources de découverte additionnelles, verdict de faisabilité (testé)** : Bandsintown a
+  FERMÉ son API publique (renvoie "explicit deny in an identity-based policy" même avec un
+  app_id, il faut un partenariat officiel). Instagram = scraping avec login/anti-bot, fragile.
+  Shotgun = SPA sans API publique. => Aucune des 3 n'est exploitable de façon fiable côté
+  serveur ce soir. La vraie voie pour couvrir l'email des salles sans email sur leur site =
+  un résolveur de site via search API (Brave/Serper, nécessite une clé), déjà prévu au J5.
+- **Délibérément NON faits** (risque > gain, tables fonctionnelles) : confirm thémé (16 appels
+  window.confirm sync à convertir en async sur 11 fichiers, risque de suppression sans
+  confirmation), unification des tables Contacts/Import sur `.tbl` (chaque cellule à reprendre).
+
 ## 2026-07-29, v0.8.2, durcissement UI (suite) : formatage, loading/error, cohérence
 
 - **Formatage partagé** `src/lib/format.ts` : euro() (locale FR/EN) + formatDate/formatDateTime

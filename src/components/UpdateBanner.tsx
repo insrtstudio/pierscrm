@@ -53,6 +53,7 @@ export function UpdateBanner() {
         {!busy && (
           <button
             className="btn-ghost px-2 py-1.5"
+            aria-label={t("common.close")}
             onClick={() => setDismissed(true)}
           >
             <X size={15} />

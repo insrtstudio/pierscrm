@@ -249,6 +249,7 @@ function VenuesTab() {
                       <button
                         className="btn-ghost px-2 py-1.5"
                         title={t("venues.open_ra")}
+                        aria-label={t("venues.open_ra")}
                         onClick={(e) => {
                           e.stopPropagation();
                           openUrl(v.ra_url!).catch(() => {});

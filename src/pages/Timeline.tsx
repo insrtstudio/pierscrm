@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, ListChecks } from "lucide-react";
 import clsx from "clsx";
 import { deleteTask, listTasks, saveTask } from "../lib/api";
 import type { Task } from "../lib/types";
-import { PageHeader } from "../components/Layout";
+import { PageHeader, EmptyState } from "../components/Layout";
 import { Modal, Field, useToast, useConfirm } from "../components/ui";
 
 export function Timeline() {
@@ -60,8 +60,8 @@ export function Timeline() {
       />
       <div className="space-y-6 px-8 pb-10">
         {groups.length === 0 && (
-          <div className="card py-16 text-center text-sm text-fg-subtle">
-            {t("common.empty")}
+          <div className="card">
+            <EmptyState icon={ListChecks} title={t("common.empty")} />
           </div>
         )}
         {groups.map((g) => (

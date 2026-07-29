@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Plus, Pencil, Trash2, Target } from "lucide-react";
 import { deleteKpi, listKpis, saveKpi } from "../lib/api";
 import type { Kpi } from "../lib/types";
-import { PageHeader } from "../components/Layout";
+import { PageHeader, EmptyState } from "../components/Layout";
 import { Modal, Field, useToast, useConfirm } from "../components/ui";
 
 export function Kpis() {
@@ -39,9 +39,8 @@ export function Kpis() {
       />
       <div className="px-8 pb-10">
         {kpis.length === 0 ? (
-          <div className="card flex flex-col items-center gap-2 py-16 text-sm text-fg-subtle">
-            <Target size={28} className="opacity-40" />
-            {t("common.empty")}
+          <div className="card">
+            <EmptyState icon={Target} title={t("common.empty")} />
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
