@@ -164,6 +164,7 @@ import type {
   ViArea,
   ViReferenceArtist,
   ViRun,
+  ViRunTask,
   ViVenueFiche,
   ViVenueRow,
 } from "./types";
@@ -189,6 +190,9 @@ export const viStartHarvest = (p: {
     yearTo: p.year_to,
   });
 export const viResumeRun = (runId: number) => invoke<void>("vi_resume_run", { runId });
+export const viStopRun = (runId: number) => invoke<void>("vi_stop_run", { runId });
+export const viRunTasks = (runId: number, onlyFailed = true) =>
+  invoke<ViRunTask[]>("vi_run_tasks", { runId, onlyFailed });
 export const viListRuns = () => invoke<ViRun[]>("vi_list_runs");
 export const viListVenues = (p: {
   statut?: string;

@@ -13,7 +13,7 @@
 
 use crate::commands::ra;
 use crate::db::{normalise, DbPool};
-use crate::AppState;
+use crate::{AppState, CancelSet};
 use chrono::{Datelike, Duration, NaiveDate, Utc};
 use rusqlite::params;
 use serde::Serialize;
@@ -225,7 +225,7 @@ pub async fn vi_start_harvest(
     }
     drop(stmt);
 
-    spawn_worker(state.pool.clone(), app, run_id);
+    spawn_worker(state.pool.clone(), state.cancels.clone(), app, run_id);
     Ok(run_id)
 }
 
@@ -251,103 +251,228 @@ pub async fn vi_resume_run(
         )
         .map_err(|e| e.to_string())?;
     }
-    spawn_worker(state.pool.clone(), app, run_id);
+    spawn_worker(state.pool.clone(), state.cancels.clone(), app, run_id);
     Ok(())
 }
 
 // ---------------- Worker ----------------
 
-pub fn spawn_worker(pool: DbPool, app: AppHandle, run_id: i64) {
-    tauri::async_runtime::spawn(async move {
-        let client = ra::client();
-        emit(&app, &pool, run_id, Some("Démarrage".into()));
+fn setting_i64(conn: &rusqlite::Connection, key: &str) -> Option<i64> {
+    conn.query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| {
+        r.get::<_, String>(0)
+    })
+    .ok()
+    .and_then(|s| s.trim().parse().ok())
+}
 
-        loop {
-            // Claim the next pending task for this run.
-            let task: Option<(i64, String, String, i64, i64)> = {
-                let conn = pool.get().unwrap();
-                let claimed = conn.execute(
-                    "UPDATE vi_tasks SET statut='en_cours', locked_at=datetime('now'), updated_at=datetime('now')
-                     WHERE id = (SELECT id FROM vi_tasks WHERE run_id=?1 AND statut='en_attente' ORDER BY id LIMIT 1)",
-                    params![run_id],
-                );
-                match claimed {
-                    Ok(1) => conn
-                        .query_row(
-                            "SELECT id, type, payload, tentatives, max_tentatives FROM vi_tasks
-                             WHERE run_id=?1 AND statut='en_cours' ORDER BY locked_at DESC LIMIT 1",
-                            params![run_id],
-                            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-                        )
-                        .ok(),
-                    _ => None,
-                }
-            };
+/// A run's completion stats, stored as JSON in vi_runs.stats and shown as a bento.
+/// "new" counts use created_at >= started_at (one run at a time in practice).
+fn run_final_stats(pool: &DbPool, run_id: i64) -> String {
+    let conn = pool.get().unwrap();
+    let one = |sql: &str, p: &[&dyn rusqlite::ToSql]| -> i64 {
+        conn.query_row(sql, p, |r| r.get(0)).unwrap_or(0)
+    };
+    let (started, rtype): (Option<String>, String) = conn
+        .query_row(
+            "SELECT started_at, type FROM vi_runs WHERE id=?1",
+            params![run_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((None, String::new()));
+    let st: &str = started.as_deref().unwrap_or("");
+    let duration = one(
+        "SELECT CAST((julianday('now') - julianday(?1)) * 86400 AS INTEGER)",
+        &[&st],
+    )
+    .max(0);
+    json!({
+        "type": rtype,
+        "duration_secs": duration,
+        "tasks_total": one("SELECT COUNT(*) FROM vi_tasks WHERE run_id=?1", &[&run_id]),
+        "tasks_done": one("SELECT COUNT(*) FROM vi_tasks WHERE run_id=?1 AND statut='termine'", &[&run_id]),
+        "tasks_echec": one("SELECT COUNT(*) FROM vi_tasks WHERE run_id=?1 AND statut='echec'", &[&run_id]),
+        "venues_total": one("SELECT COUNT(*) FROM vi_venues", &[]),
+        "venues_new": one("SELECT COUNT(*) FROM vi_venues WHERE created_at >= ?1", &[&st]),
+        "evidence_total": one("SELECT COUNT(*) FROM vi_evidence", &[]),
+        "evidence_new": one("SELECT COUNT(*) FROM vi_evidence WHERE created_at >= ?1", &[&st]),
+        "qualified": one("SELECT COUNT(*) FROM vi_venues WHERE statut='qualifie'", &[]),
+        "emails_total": one("SELECT COUNT(*) FROM vi_contacts WHERE type='email'", &[]),
+        "venues_with_email": one("SELECT COUNT(DISTINCT venue_id) FROM vi_contacts WHERE type='email'", &[]),
+    })
+    .to_string()
+}
 
-            let Some((task_id, task_type, payload, tentatives, max_tentatives)) = task else {
-                break; // no more pending tasks
-            };
-
-            let result = match task_type.as_str() {
-                "enrich_venue" => {
-                    crate::commands::enrich::process_enrich_task(&client, &pool, &payload).await
-                }
-                _ => process_harvest_task(&client, &pool, &payload).await,
-            };
-            match result {
-                Ok(()) => {
-                    let conn = pool.get().unwrap();
-                    let _ = conn.execute(
-                        "UPDATE vi_tasks SET statut='termine', locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
-                        params![task_id],
-                    );
-                }
-                Err(e) => {
-                    let attempts = tentatives + 1;
-                    let conn = pool.get().unwrap();
-                    if !e.retryable || attempts >= max_tentatives {
-                        let _ = conn.execute(
-                            "UPDATE vi_tasks SET statut='echec', tentatives=?2, derniere_erreur=?3, locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
-                            params![task_id, attempts, e.message],
-                        );
-                    } else {
-                        let _ = conn.execute(
-                            "UPDATE vi_tasks SET statut='en_attente', tentatives=?2, derniere_erreur=?3, locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
-                            params![task_id, attempts, e.message],
-                        );
-                        // exponential backoff before it gets picked again
-                        let backoff = 1500u64 * (1 << attempts.min(4)) as u64;
-                        tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
-                    }
-                }
-            }
-
-            emit(&app, &pool, run_id, None);
-            tokio::time::sleep(std::time::Duration::from_millis(POLITENESS_MS)).await;
+/// One worker: drains pending tasks for the run until empty or the run is stopped.
+/// The claim is a single atomic UPDATE ... RETURNING, so several workers never
+/// grab the same task (SQLite serialises the writes; WAL + busy_timeout handle
+/// contention).
+async fn drain(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i64, politeness: u64) {
+    let client = ra::client();
+    loop {
+        if cancels.lock().unwrap().contains(&run_id) {
+            break;
         }
-
-        // Qualification pass (fold of J3 so the run is testable end to end).
-        qualify(&pool);
-
-        // Finish: mark 'termine' unless everything failed.
-        {
+        let task: Option<(i64, String, String, i64, i64)> = {
             let conn = pool.get().unwrap();
-            let remaining: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM vi_tasks WHERE run_id=?1 AND statut IN ('en_attente','en_cours')",
-                    params![run_id],
-                    |r| r.get(0),
-                )
-                .unwrap_or(0);
-            if remaining == 0 {
+            conn.query_row(
+                "UPDATE vi_tasks SET statut='en_cours', locked_at=datetime('now'), updated_at=datetime('now')
+                 WHERE id = (SELECT id FROM vi_tasks WHERE run_id=?1 AND statut='en_attente' ORDER BY id LIMIT 1)
+                 RETURNING id, type, payload, tentatives, max_tentatives",
+                params![run_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .ok()
+        };
+        let Some((task_id, task_type, payload, tentatives, max_tentatives)) = task else {
+            break; // no more pending tasks
+        };
+
+        let result = match task_type.as_str() {
+            "enrich_venue" => {
+                crate::commands::enrich::process_enrich_task(&client, &pool, &payload).await
+            }
+            _ => process_harvest_task(&client, &pool, &payload).await,
+        };
+        match result {
+            Ok(()) => {
+                let conn = pool.get().unwrap();
                 let _ = conn.execute(
-                    "UPDATE vi_runs SET statut='termine', finished_at=datetime('now'), stats=?2 WHERE id=?1",
-                    params![run_id, serde_json::to_string(&run_stats(&pool, run_id)).unwrap_or_default()],
+                    "UPDATE vi_tasks SET statut='termine', locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
+                    params![task_id],
                 );
             }
+            Err(e) => {
+                let attempts = tentatives + 1;
+                let conn = pool.get().unwrap();
+                if !e.retryable || attempts >= max_tentatives {
+                    let _ = conn.execute(
+                        "UPDATE vi_tasks SET statut='echec', tentatives=?2, derniere_erreur=?3, locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
+                        params![task_id, attempts, e.message],
+                    );
+                } else {
+                    let _ = conn.execute(
+                        "UPDATE vi_tasks SET statut='en_attente', tentatives=?2, derniere_erreur=?3, locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
+                        params![task_id, attempts, e.message],
+                    );
+                    let backoff = 1500u64 * (1 << attempts.min(4)) as u64;
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+                }
+            }
         }
-        emit(&app, &pool, run_id, Some("Terminé".into()));
+
+        emit(&app, &pool, run_id, None);
+        tokio::time::sleep(std::time::Duration::from_millis(politeness)).await;
+    }
+}
+
+/// Spawn the run: N concurrent workers (setting `vi_workers`, default 3) drain the
+/// task queue, then a single finalisation marks the run and stores its stats.
+pub fn spawn_worker(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i64) {
+    tauri::async_runtime::spawn(async move {
+        emit(&app, &pool, run_id, Some("Démarrage".into()));
+        let (workers, politeness) = {
+            let conn = pool.get().unwrap();
+            let w = setting_i64(&conn, "vi_workers").unwrap_or(3).clamp(1, 6);
+            let p = setting_i64(&conn, "vi_politeness_ms").unwrap_or(1000).clamp(200, 5000) as u64;
+            (w, p)
+        };
+
+        let mut handles = Vec::new();
+        for _ in 0..workers {
+            let (pool, cancels, app) = (pool.clone(), cancels.clone(), app.clone());
+            handles.push(tauri::async_runtime::spawn(drain(
+                pool, cancels, app, run_id, politeness,
+            )));
+        }
+        for h in handles {
+            let _ = h.await;
+        }
+
+        let cancelled = cancels.lock().unwrap().remove(&run_id);
+
+        qualify(&pool);
+        let conn = pool.get().unwrap();
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM vi_tasks WHERE run_id=?1 AND statut IN ('en_attente','en_cours')",
+                params![run_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let statut = if cancelled || remaining > 0 { "arrete" } else { "termine" };
+        let stats = run_final_stats(&pool, run_id);
+        let _ = conn.execute(
+            "UPDATE vi_runs SET statut=?2, finished_at=datetime('now'), stats=?3 WHERE id=?1",
+            params![run_id, statut, stats],
+        );
+        drop(conn);
+        emit(
+            &app,
+            &pool,
+            run_id,
+            Some(if cancelled { "Arrêté".into() } else { "Terminé".into() }),
+        );
     });
+}
+
+#[derive(Serialize)]
+pub struct TaskRow {
+    pub id: i64,
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub statut: String,
+    pub tentatives: i64,
+    pub erreur: Option<String>,
+    pub payload: Option<String>,
+}
+
+/// Task-level log for a run (failed tasks by default), so the UI can explain
+/// exactly what went wrong on a run.
+#[tauri::command]
+pub fn vi_run_tasks(
+    state: State<AppState>,
+    run_id: i64,
+    only_failed: Option<bool>,
+) -> Result<Vec<TaskRow>, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let sql = if only_failed.unwrap_or(true) {
+        "SELECT id, type, statut, tentatives, derniere_erreur, payload FROM vi_tasks
+         WHERE run_id=?1 AND statut='echec' ORDER BY id LIMIT 300"
+    } else {
+        "SELECT id, type, statut, tentatives, derniere_erreur, payload FROM vi_tasks
+         WHERE run_id=?1 ORDER BY id LIMIT 500"
+    };
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![run_id], |r| {
+            Ok(TaskRow {
+                id: r.get(0)?,
+                type_: r.get(1)?,
+                statut: r.get(2)?,
+                tentatives: r.get(3)?,
+                erreur: r.get(4)?,
+                payload: r.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// Ask a running run to stop. Workers see the flag on their next loop and exit;
+/// the run is marked 'arrete' and stays resumable.
+#[tauri::command]
+pub fn vi_stop_run(state: State<AppState>, run_id: i64) -> Result<(), String> {
+    state.cancels.lock().unwrap().insert(run_id);
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let _ = conn.execute(
+        "UPDATE vi_runs SET statut='arrete' WHERE id=?1 AND statut='en_cours'",
+        params![run_id],
+    );
+    Ok(())
 }
 
 async fn process_harvest_task(

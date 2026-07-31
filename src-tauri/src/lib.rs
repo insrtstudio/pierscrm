@@ -4,11 +4,17 @@ mod menu;
 mod models;
 
 use db::DbPool;
+use std::collections::HashSet;
 use std::fs;
+use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
+
+/// Run ids the user has asked to stop. Workers check this each loop and exit.
+pub type CancelSet = Arc<Mutex<HashSet<i64>>>;
 
 pub struct AppState {
     pub pool: DbPool,
+    pub cancels: CancelSet,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -39,7 +45,10 @@ pub fn run() {
             fs::create_dir_all(&dir).ok();
             let db_path = dir.join("pierscrm.db");
             let pool = db::init_pool(&db_path).expect("failed to init database");
-            app.manage(AppState { pool });
+            app.manage(AppState {
+                pool,
+                cancels: Arc::new(Mutex::new(HashSet::new())),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -99,6 +108,8 @@ pub fn run() {
             commands::harvest::vi_resume_run,
             commands::harvest::vi_list_runs,
             commands::harvest::vi_list_venues,
+            commands::harvest::vi_stop_run,
+            commands::harvest::vi_run_tasks,
             // venue intelligence (J5, enrichment)
             commands::enrich::vi_start_enrich,
             commands::enrich::vi_venue_detail,

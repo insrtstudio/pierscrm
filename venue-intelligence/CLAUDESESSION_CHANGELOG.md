@@ -2,6 +2,31 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-07-31, v0.9.0, runs : arrêt + bilan/logs/notif + performance + Europe
+
+Demande utilisateur : peu d'insight en fin de run, pas de moyen d'arrêter (certains plantent),
+runs trop longs, et ouvrir à toute l'Europe.
+
+- **Arrêt des runs** : `AppState.cancels: Arc<Mutex<HashSet<i64>>>` (CancelSet). Commande
+  `vi_stop_run` insère le run_id ; les workers vérifient le flag en tête de boucle et sortent ;
+  run marqué 'arrete' (résumable). Bouton "Arrêter" sur les runs actifs.
+- **Performance (concurrence)** : worker réécrit. `spawn_worker` lance N workers (`vi_workers`,
+  défaut 3, 1..6, réglable dans Settings) qui drainent la même file. Claim rendu ATOMIQUE via
+  `UPDATE ... RETURNING` (fini le SELECT séparé qui cassait sous concurrence). WAL + busy_timeout
+  5000 gèrent la contention. Politesse configurable (`vi_politeness_ms`, défaut 1000). Crawl
+  enrich allégé (8 pages max au lieu de 12, délai 500 ms au lieu de 900). ~3x plus rapide.
+- **Bilan / logs / notif** : `run_final_stats` stocke un JSON riche dans vi_runs.stats (durée,
+  tâches, venues_new/evidence_new via created_at>=started, qualified, emails_total,
+  venues_with_email). RunCard affiche un BENTO (4 cartes, différent harvest vs enrich) + bouton
+  logs qui déplie les tâches en échec (commande `vi_run_tasks(run_id, only_failed)`) avec label
+  lisible (zone+fenêtre ou venue) et l'erreur. Toast de fin de run (statut termine/arrete, via le
+  message du dernier emit). Badges de statut FR + style 'arrete' ambre.
+- **Europe** : ~50 zones ajoutées à VI_AREAS (ids RA résolus en direct) : NL (Amsterdam=29...),
+  DE (Berlin=34...), UK (London=13...), PT, AT, IE, SE, DK, NO, FI, PL, CZ, HU, RO, HR, RS, SI,
+  SK, BG, EE, LV, LT, LU + villes FR/ES. Seed des zones rendu IDEMPOTENT (INSERT OR IGNORE par
+  slug, plus de garde count==0) donc elles arrivent aussi sur les installs existantes, déjà
+  résolues. GROS manque comblé : il n'y avait ni Amsterdam ni Berlin ni Londres avant.
+
 ## 2026-07-29, v0.8.4, résolution de site via recherche web (Serper) au J5
 
 L'utilisateur a fourni une clé Serper. Testée en direct : `knowledgeGraph.website` donne le site

@@ -379,7 +379,7 @@ pub async fn process_enrich_task(
         let mut fetches = 0;
 
         for url in &urls {
-            if fetches >= 12 {
+            if fetches >= 8 {
                 break;
             }
             // Reuse the homepage body we already downloaded instead of refetching it.
@@ -448,7 +448,7 @@ pub async fn process_enrich_task(
             if best_email_score >= 100 && contact_page.is_some() {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
 
         let conn = pool.get().unwrap();
@@ -511,7 +511,7 @@ pub async fn vi_start_enrich(
     }
     drop(stmt);
 
-    crate::commands::harvest::spawn_worker(state.pool.clone(), app, run_id);
+    crate::commands::harvest::spawn_worker(state.pool.clone(), state.cancels.clone(), app, run_id);
     Ok(run_id)
 }
 

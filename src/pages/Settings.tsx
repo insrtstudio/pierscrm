@@ -80,6 +80,22 @@ export function Settings() {
     toast(t("settings.saved"), "ok");
   };
 
+  // ---- Harvest performance (concurrent workers) ----
+  const { data: workersRaw } = useQuery({
+    queryKey: ["setting", "vi_workers"],
+    queryFn: () => getSetting("vi_workers"),
+  });
+  const [workers, setWorkers] = useState("3");
+  useEffect(() => {
+    if (workersRaw) setWorkers(workersRaw);
+  }, [workersRaw]);
+  const saveWorkers = async (v: string) => {
+    setWorkers(v);
+    await setSetting("vi_workers", v);
+    qc.invalidateQueries({ queryKey: ["setting", "vi_workers"] });
+    toast(t("settings.saved"), "ok");
+  };
+
   // ---- Email signature ----
   const { data: sigRaw } = useQuery({
     queryKey: ["setting", "email_signature"],
@@ -431,6 +447,30 @@ export function Settings() {
             </button>
           </div>
           <p className="mt-3 text-2xs text-fg-faint">{t("settings.serper_hint")}</p>
+        </div>
+
+        {/* Harvest performance */}
+        <div className="card p-6">
+          <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
+            <RefreshCw size={15} /> {t("settings.perf_section")}
+          </div>
+          <p className="mb-4 text-xs text-fg-subtle">{t("settings.perf_help")}</p>
+          <div className="flex items-end gap-3">
+            <Field label={t("settings.perf_workers")}>
+              <select
+                className="input w-28"
+                value={workers}
+                onChange={(e) => saveWorkers(e.target.value)}
+              >
+                {[1, 2, 3, 4, 5, 6].map((n) => (
+                  <option key={n} value={String(n)}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <p className="pb-2 text-2xs text-fg-faint">{t("settings.perf_hint")}</p>
+          </div>
         </div>
 
         {/* Updates */}

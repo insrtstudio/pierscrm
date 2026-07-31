@@ -298,6 +298,30 @@ export interface ViVenueFiche {
   promoters: ViPromoterRow[];
 }
 
+export interface ViRunTask {
+  id: number;
+  type: string;
+  statut: string;
+  tentatives: number;
+  erreur?: string | null;
+  payload?: string | null;
+}
+
+export interface ViRunStats {
+  type?: string;
+  duration_secs?: number;
+  tasks_total?: number;
+  tasks_done?: number;
+  tasks_echec?: number;
+  venues_total?: number;
+  venues_new?: number;
+  evidence_total?: number;
+  evidence_new?: number;
+  qualified?: number;
+  emails_total?: number;
+  venues_with_email?: number;
+}
+
 export interface ViRunProgress {
   run_id: number;
   statut: string;

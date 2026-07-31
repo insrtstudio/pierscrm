@@ -20,6 +20,9 @@ import {
   Copy,
   CalendarDays,
   Users,
+  Square,
+  ChevronDown,
+  AlertTriangle,
 } from "lucide-react";
 import clsx from "clsx";
 import {
@@ -30,6 +33,8 @@ import {
   viResolveAllAreas,
   viResolveArea,
   viResumeRun,
+  viStopRun,
+  viRunTasks,
   viSaveArea,
   viSaveReferenceArtist,
   viDeleteReferenceArtist,
@@ -43,6 +48,7 @@ import type {
   ViReferenceArtist,
   ViRun,
   ViRunProgress,
+  ViRunStats,
   ViVenueFiche,
 } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
@@ -476,12 +482,37 @@ function RunsTab() {
   useEffect(() => {
     const un = listen<ViRunProgress>("vi:run-progress", (e) => {
       setProgress((p) => ({ ...p, [e.payload.run_id]: e.payload }));
-      if (e.payload.statut === "termine") qc.invalidateQueries({ queryKey: ["vi_runs"] });
+      const done = e.payload.statut === "termine" || e.payload.statut === "arrete";
+      if (done) {
+        qc.invalidateQueries({ queryKey: ["vi_runs"] });
+        qc.invalidateQueries({ queryKey: ["vi_venues"] });
+      }
+      // The final emit carries a message ("Terminé"/"Arrêté"): notify once.
+      if (done && e.payload.message) {
+        toast(
+          t("venues.run_finished", {
+            id: e.payload.run_id,
+            venues: e.payload.venues,
+            evidence: e.payload.evidence,
+          }),
+          "ok"
+        );
+      }
     });
     return () => {
       un.then((f) => f());
     };
-  }, [qc]);
+  }, [qc, toast, t]);
+
+  const stop = async (id: number) => {
+    try {
+      await viStopRun(id);
+      qc.invalidateQueries({ queryKey: ["vi_runs"] });
+      toast(t("venues.stopping"), "ok");
+    } catch (e: any) {
+      toast(e?.toString?.() ?? "error", "error");
+    }
+  };
 
   const launch = async () => {
     const ids = [...selected];
@@ -579,23 +610,42 @@ function RunsTab() {
             <EmptyState icon={Radio} title={t("venues.no_runs")} />
           </div>
         ) : (
-          runs.map((r) => <RunCard key={r.id} run={r} live={progress[r.id]} onResume={() => resume(r.id)} />)
+          runs.map((r) => (
+            <RunCard
+              key={r.id}
+              run={r}
+              live={progress[r.id]}
+              onResume={() => resume(r.id)}
+              onStop={() => stop(r.id)}
+            />
+          ))
         )}
       </div>
     </div>
   );
 }
 
+function fmtDuration(secs?: number) {
+  if (!secs || secs < 0) return "-";
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  if (m < 60) return `${m}m ${s}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
 function RunCard({
   run,
   live,
   onResume,
+  onStop,
 }: {
   run: ViRun;
   live?: ViRunProgress;
   onResume: () => void;
+  onStop: () => void;
 }) {
   const { t } = useTranslation();
+  const [showLogs, setShowLogs] = useState(false);
   const total = live?.tasks_total ?? run.tasks_total;
   const done = live?.tasks_done ?? run.tasks_done;
   const echec = live?.tasks_echec ?? run.tasks_echec;
@@ -603,6 +653,30 @@ function RunCard({
   const pct = total ? Math.round(((done + echec) / total) * 100) : 0;
   const active = statut === "en_cours";
   const canResume = statut !== "termine" && !active;
+  const isEnrich = run.type_ === "enrich";
+
+  const stats: ViRunStats | null = run.stats ? safeParse(run.stats) : null;
+  const { data: failed = [] } = useQuery({
+    queryKey: ["vi_run_tasks", run.id],
+    queryFn: () => viRunTasks(run.id, true),
+    enabled: showLogs && echec > 0,
+  });
+
+  const bento: { label: string; value: string | number; tone?: string }[] = stats
+    ? isEnrich
+      ? [
+          { label: t("venues.b_with_email"), value: stats.venues_with_email ?? 0, tone: "text-emerald-500" },
+          { label: t("venues.b_emails"), value: stats.emails_total ?? 0 },
+          { label: t("venues.b_duration"), value: fmtDuration(stats.duration_secs) },
+          { label: t("venues.errors"), value: stats.tasks_echec ?? 0, tone: (stats.tasks_echec ?? 0) > 0 ? "text-accent" : undefined },
+        ]
+      : [
+          { label: t("venues.b_venues_new"), value: stats.venues_new ?? 0, tone: "text-accent" },
+          { label: t("venues.b_evidence_new"), value: stats.evidence_new ?? 0, tone: "text-accent-2" },
+          { label: t("venues.b_qualified"), value: stats.qualified ?? 0, tone: "text-emerald-500" },
+          { label: t("venues.b_duration"), value: fmtDuration(stats.duration_secs) },
+        ]
+    : [];
 
   return (
     <div className="card p-4">
@@ -612,29 +686,35 @@ function RunCard({
           <span className="font-bold">
             {t("venues.run")} #{run.id}
           </span>
+          <span className="badge bg-muted text-fg-subtle">
+            {isEnrich ? t("venues.enrich") : t("venues.tab_runs")}
+          </span>
           <span
             className={clsx(
               "badge",
               statut === "termine"
                 ? "bg-emerald-500/15 text-emerald-500"
+                : statut === "arrete"
+                ? "bg-amber-500/15 text-amber-500"
                 : active
                 ? "bg-accent text-accent-fg"
                 : "bg-muted text-fg-subtle"
             )}
           >
-            {statut}
+            {t(`venues.rs_${statut}`, statut)}
           </span>
         </div>
         <div className="flex items-center gap-3 text-2xs tabular text-fg-subtle">
-          {live && (
-            <>
-              <span>
-                {live.venues} {t("venues.venues_found")}
-              </span>
-              <span className="text-accent-2">
-                {live.evidence} {t("venues.evidence_found")}
-              </span>
-            </>
+          {active && live && (
+            <span>
+              {live.venues} {t("venues.venues_found")} · {live.evidence} {t("venues.evidence_found")}
+            </span>
+          )}
+          {active && (
+            <button className="btn-outline py-1.5 text-accent" onClick={onStop}>
+              <Square size={12} />
+              {t("venues.stop")}
+            </button>
           )}
           {canResume && (
             <button className="btn-outline py-1.5" onClick={onResume}>
@@ -644,6 +724,7 @@ function RunCard({
           )}
         </div>
       </div>
+
       <div className="mt-3 flex items-center gap-3">
         <div className="h-2 flex-1 overflow-hidden bg-muted">
           <div className="h-full bg-accent transition-all" style={{ width: `${pct}%` }} />
@@ -653,8 +734,65 @@ function RunCard({
           {echec > 0 && ` · ${echec} ${t("venues.errors")}`}
         </span>
       </div>
+
+      {/* Bento summary once finished */}
+      {bento.length > 0 && (
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {bento.map((b, i) => (
+            <div key={i} className="border-2 border-border px-3 py-2">
+              <div className={clsx("text-lg font-black tabular", b.tone ?? "text-fg")}>{b.value}</div>
+              <div className="text-2xs uppercase tracking-wide text-fg-faint">{b.label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Logs: failed tasks */}
+      {echec > 0 && (
+        <div className="mt-3">
+          <button
+            className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-accent"
+            onClick={() => setShowLogs((v) => !v)}
+          >
+            <AlertTriangle size={12} />
+            {t("venues.view_logs", { count: echec })}
+            <ChevronDown size={12} className={clsx("transition-transform", showLogs && "rotate-180")} />
+          </button>
+          {showLogs && (
+            <div className="mt-2 max-h-56 space-y-1.5 overflow-auto">
+              {failed.map((tk) => (
+                <div key={tk.id} className="border border-border bg-surface-2 px-3 py-2 text-2xs">
+                  <div className="font-mono text-fg-subtle">{taskLabel(tk.payload)}</div>
+                  <div className="mt-0.5 text-accent">{tk.erreur || t("venues.unknown_error")}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+function safeParse(s: string): ViRunStats | null {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+// Short human label for a task from its JSON payload (area window or venue id).
+function taskLabel(payload?: string | null): string {
+  if (!payload) return "";
+  try {
+    const p = JSON.parse(payload);
+    if (p.area_name) return `${p.area_name} · ${(p.gte || "").slice(0, 10)} → ${(p.lte || "").slice(0, 10)}`;
+    if (p.venue_id) return `venue #${p.venue_id}`;
+    return payload.slice(0, 80);
+  } catch {
+    return payload.slice(0, 80);
+  }
 }
 
 // ---------------- Areas ----------------

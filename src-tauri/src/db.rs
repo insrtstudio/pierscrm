@@ -535,10 +535,10 @@ fn seed_venue_intelligence(conn: &rusqlite::Connection) -> Result<(), String> {
     }
 
     // ---- RA areas (target zones), area ids pre-resolved via the RA API. ----
-    let acount: i64 = conn
-        .query_row("SELECT COUNT(*) FROM vi_ra_areas", [], |r| r.get(0))
-        .map_err(|e| e.to_string())?;
-    if acount == 0 {
+    // Idempotent by slug (UNIQUE): existing rows are preserved, new areas (the
+    // Europe-wide expansion) are added on every launch, so existing installs get
+    // them too without wiping the user's manual edits.
+    {
         let mut stmt = conn
             .prepare(
                 "INSERT OR IGNORE INTO vi_ra_areas (slug, pays, libelle, ra_area_id, resolved_at)
@@ -595,6 +595,60 @@ const VI_AREAS: &[(&str, &str, Option<i64>)] = &[
     ("gr/thessaloniki", "Thessaloniki", Some(657)),
     ("gr/crete", "Crete", Some(658)),
     ("gr/santorini", "Santorini", None),
+    // ---- Europe-wide expansion (RA area ids resolved live) ----
+    ("nl/amsterdam", "Amsterdam", Some(29)),
+    ("nl/rotterdam", "Rotterdam", Some(174)),
+    ("nl/utrecht", "Utrecht", Some(175)),
+    ("nl/thehague", "The Hague", Some(178)),
+    ("nl/eindhoven", "Eindhoven", Some(177)),
+    ("de/berlin", "Berlin", Some(34)),
+    ("de/cologne", "Cologne", Some(143)),
+    ("de/frankfurt", "Frankfurt", Some(147)),
+    ("de/hamburg", "Hamburg", Some(148)),
+    ("de/munich", "Munich", Some(151)),
+    ("de/leipzig", "Leipzig", Some(149)),
+    ("de/stuttgart", "Stuttgart", Some(152)),
+    ("de/dusseldorf", "Dusseldorf", Some(145)),
+    ("de/mannheim", "Mannheim", Some(153)),
+    ("uk/london", "London", Some(13)),
+    ("uk/manchester", "Manchester", Some(344)),
+    ("uk/glasgow", "Glasgow", Some(340)),
+    ("uk/leeds", "Leeds", Some(346)),
+    ("uk/bristol", "Bristol", Some(446)),
+    ("uk/birmingham", "Birmingham", Some(516)),
+    ("uk/liverpool", "Liverpool", Some(343)),
+    ("uk/sheffield", "Sheffield", Some(520)),
+    ("uk/brighton", "Brighton", Some(535)),
+    ("uk/edinburgh", "Edinburgh", Some(341)),
+    ("uk/newcastle", "Newcastle", Some(345)),
+    ("uk/nottingham", "Nottingham", Some(544)),
+    ("pt/lisbon", "Lisbon", Some(53)),
+    ("at/vienna", "Vienna", Some(450)),
+    ("ie/dublin", "Dublin", Some(386)),
+    ("se/stockholm", "Stockholm", Some(396)),
+    ("dk/copenhagen", "Copenhagen", Some(402)),
+    ("no/oslo", "Oslo", Some(408)),
+    ("fi/helsinki", "Helsinki", Some(407)),
+    ("pl/warsaw", "Warsaw", Some(454)),
+    ("pl/krakow", "Krakow", Some(455)),
+    ("pl/wroclaw", "Wroclaw", Some(668)),
+    ("cz/prague", "Prague", Some(451)),
+    ("hu/budapest", "Budapest", Some(449)),
+    ("ro/bucharest", "Bucharest", Some(381)),
+    ("hr/zagreb", "Zagreb", Some(559)),
+    ("rs/belgrade", "Belgrade", Some(562)),
+    ("si/ljubljana", "Ljubljana", Some(563)),
+    ("sk/bratislava", "Bratislava", Some(568)),
+    ("bg/sofia", "Sofia", Some(558)),
+    ("ee/tallinn", "Tallinn", Some(566)),
+    ("lv/riga", "Riga", Some(560)),
+    ("lt/vilnius", "Vilnius", Some(561)),
+    ("lu/luxembourg", "Luxembourg", Some(199)),
+    ("es/seville", "Seville", None),
+    ("es/bilbao", "Bilbao", Some(612)),
+    ("fr/strasbourg", "Strasbourg", Some(615)),
+    ("fr/montpellier", "Montpellier", Some(339)),
+    ("fr/rennes", "Rennes", Some(620)),
 ];
 
 /// Seed a starter set of destination countries for touring artists.
