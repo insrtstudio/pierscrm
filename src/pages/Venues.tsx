@@ -101,19 +101,23 @@ function VenuesTab() {
   const [pays, setPays] = useState("all");
   const [search, setSearch] = useState("");
   const [hasEmail, setHasEmail] = useState(false);
+  const [hasPhone, setHasPhone] = useState(false);
+  const [hasWebsite, setHasWebsite] = useState(false);
   const [contactedF, setContactedF] = useState(false);
   const [playedF, setPlayedF] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
   const [targetArtist, setTargetArtist] = useState<number | "">("");
   const { data: venues = [] } = useQuery({
-    queryKey: ["vi_venues", statut, pays, search, hasEmail, contactedF, playedF],
+    queryKey: ["vi_venues", statut, pays, search, hasEmail, hasPhone, hasWebsite, contactedF, playedF],
     queryFn: () =>
       viListVenues({
         statut,
         pays,
         search,
         has_email: hasEmail || undefined,
+        has_phone: hasPhone || undefined,
+        has_website: hasWebsite || undefined,
         contacted: contactedF || undefined,
         played: playedF || undefined,
         limit: 500,
@@ -273,6 +277,53 @@ function VenuesTab() {
           <Sparkles size={15} className={enriching ? "animate-pulse" : ""} />
           {t("venues.enrich")}
         </button>
+      </div>
+
+      {/* Quick filter chips */}
+      <div className="flex flex-wrap items-center gap-2">
+        {(
+          [
+            { on: hasEmail, set: setHasEmail, label: t("venues.s_with_email"), icon: Mail },
+            { on: hasPhone, set: setHasPhone, label: t("venues.f_phone"), icon: Phone },
+            { on: hasWebsite, set: setHasWebsite, label: t("venues.f_website"), icon: Globe },
+            { on: contactedF, set: setContactedF, label: t("venues.s_contacted"), icon: CheckCheck },
+            { on: playedF, set: setPlayedF, label: t("venues.s_played"), icon: Disc3 },
+          ] as const
+        ).map((c, i) => {
+          const Icon = c.icon;
+          return (
+            <button
+              key={i}
+              onClick={() => c.set((v) => !v)}
+              className={clsx(
+                "badge cursor-pointer border-2 transition-colors",
+                c.on
+                  ? "border-accent bg-accent text-accent-fg"
+                  : "border-border text-fg-subtle hover:border-accent-2 hover:text-fg"
+              )}
+              aria-pressed={c.on}
+            >
+              <Icon size={11} /> {c.label}
+            </button>
+          );
+        })}
+        {(hasEmail || hasPhone || hasWebsite || contactedF || playedF) && (
+          <button
+            className="text-2xs uppercase tracking-wide text-accent hover:underline"
+            onClick={() => {
+              setHasEmail(false);
+              setHasPhone(false);
+              setHasWebsite(false);
+              setContactedF(false);
+              setPlayedF(false);
+            }}
+          >
+            {t("venues.clear_filters")}
+          </button>
+        )}
+        <span className="ml-auto text-2xs tabular text-fg-subtle">
+          {t("venues.count_venues", { count: venues.length })}
+        </span>
       </div>
 
       {venues.length === 0 ? (

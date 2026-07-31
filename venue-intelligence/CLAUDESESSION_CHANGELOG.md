@@ -2,6 +2,16 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-07-31, v0.9.2, puces de filtres rapides sur les lieux
+
+Demande : filtres plus spécifiques (avec email, avec téléphone...).
+
+- `vi_list_venues` : params `has_phone` (v.telephone non vide OU vi_contacts type telephone) et
+  `has_website` (v.site_web non vide) ajoutés aux filtres existants.
+- Venues.tsx : rangée de PUCES à activer (Avec email, Avec téléphone, Avec site, Contacté, Déjà
+  joué), état combinable, bouton "Effacer les filtres", compteur de résultats. Les puces et les
+  cartes cliquables du bento partagent le même état.
+
 ## 2026-07-31, v0.9.1, dashboard des lieux (stats, filtres, contacté, a joué)
 
 Demande : dashboard des lieux (total, recherche efficace, déjà contacté, nos artistes y ont joué).

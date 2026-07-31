@@ -708,6 +708,8 @@ pub fn vi_list_venues(
     pays: Option<String>,
     search: Option<String>,
     has_email: Option<bool>,
+    has_phone: Option<bool>,
+    has_website: Option<bool>,
     contacted: Option<bool>,
     played: Option<bool>,
     limit: Option<i64>,
@@ -748,6 +750,15 @@ pub fn vi_list_venues(
     }
     if has_email == Some(true) {
         sql.push_str(" AND EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email')");
+    }
+    if has_phone == Some(true) {
+        sql.push_str(
+            " AND ((v.telephone IS NOT NULL AND trim(v.telephone) != '')
+                   OR EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='telephone'))",
+        );
+    }
+    if has_website == Some(true) {
+        sql.push_str(" AND v.site_web IS NOT NULL AND trim(v.site_web) != ''");
     }
     if contacted == Some(true) {
         sql.push_str(&format!(" AND {}", CONTACTED_SQL));

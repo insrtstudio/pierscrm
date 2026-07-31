@@ -200,6 +200,8 @@ export const viListVenues = (p: {
   pays?: string;
   search?: string;
   has_email?: boolean;
+  has_phone?: boolean;
+  has_website?: boolean;
   contacted?: boolean;
   played?: boolean;
   limit?: number;
