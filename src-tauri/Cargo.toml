@@ -41,7 +41,8 @@ tokio = { version = "1", features = ["time"] }
 regex = "1"
 
 [profile.release]
-panic = "abort"
+# NOT "abort": a panic in a background harvest/enrich worker must never take the
+# whole app down. With unwind, a panicked task aborts alone and the app survives.
 codegen-units = 1
 lto = true
 opt-level = "s"

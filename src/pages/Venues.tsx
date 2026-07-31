@@ -889,6 +889,14 @@ function RunCard({
         </span>
       </div>
 
+      {/* Live activity: what the workers are doing right now */}
+      {active && live?.message && (
+        <div className="mt-2 flex items-center gap-2 text-2xs text-fg-subtle">
+          <RefreshCw size={11} className="animate-spin text-accent-2 shrink-0" />
+          <span className="truncate font-mono">{live.message}</span>
+        </div>
+      )}
+
       {/* Bento summary once finished */}
       {bento.length > 0 && (
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">

@@ -236,6 +236,13 @@ pub async fn vi_resume_run(
     state: State<'_, AppState>,
     run_id: i64,
 ) -> Result<(), String> {
+    // Clear any stale stop flag first, otherwise the resumed run would inherit the
+    // cancel and immediately exit doing nothing.
+    state
+        .cancels
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&run_id);
     {
         let conn = state.pool.get().map_err(|e| e.to_string())?;
         // Reclaim tasks stuck 'en_cours' (crash mid-task) back to 'en_attente'.
@@ -302,6 +309,25 @@ fn run_final_stats(pool: &DbPool, run_id: i64) -> String {
     .to_string()
 }
 
+/// Human-readable "what am I doing right now" line for the current task, shown
+/// live in the UI (area + window for harvest, venue name for enrichment).
+fn describe_task(pool: &DbPool, task_type: &str, payload: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(payload).unwrap_or(serde_json::Value::Null);
+    if task_type == "enrich_venue" {
+        let vid = v["venue_id"].as_i64().unwrap_or(0);
+        let nom: Option<String> = pool.get().ok().and_then(|c| {
+            c.query_row("SELECT nom FROM vi_venues WHERE id=?1", params![vid], |r| r.get(0))
+                .ok()
+        });
+        format!("Enrichissement : {}", nom.unwrap_or_else(|| format!("lieu #{}", vid)))
+    } else {
+        let area = v["area_name"].as_str().unwrap_or("?");
+        let gte = v["gte"].as_str().unwrap_or("").get(0..7).unwrap_or("");
+        let lte = v["lte"].as_str().unwrap_or("").get(0..7).unwrap_or("");
+        format!("Moissonnage : {} ({} → {})", area, gte, lte)
+    }
+}
+
 /// One worker: drains pending tasks for the run until empty or the run is stopped.
 /// The claim is a single atomic UPDATE ... RETURNING, so several workers never
 /// grab the same task (SQLite serialises the writes; WAL + busy_timeout handle
@@ -309,23 +335,33 @@ fn run_final_stats(pool: &DbPool, run_id: i64) -> String {
 async fn drain(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i64, politeness: u64) {
     let client = ra::client();
     loop {
-        if cancels.lock().unwrap().contains(&run_id) {
+        if cancels.lock().unwrap_or_else(|e| e.into_inner()).contains(&run_id) {
             break;
         }
-        let task: Option<(i64, String, String, i64, i64)> = {
-            let conn = pool.get().unwrap();
-            conn.query_row(
+        // Never unwrap a starved pool: back off and retry instead of panicking.
+        let conn = match pool.get() {
+            Ok(c) => c,
+            Err(_) => {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                continue;
+            }
+        };
+        let task: Option<(i64, String, String, i64, i64)> = conn
+            .query_row(
                 "UPDATE vi_tasks SET statut='en_cours', locked_at=datetime('now'), updated_at=datetime('now')
                  WHERE id = (SELECT id FROM vi_tasks WHERE run_id=?1 AND statut='en_attente' ORDER BY id LIMIT 1)
                  RETURNING id, type, payload, tentatives, max_tentatives",
                 params![run_id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
-            .ok()
-        };
+            .ok();
+        drop(conn);
         let Some((task_id, task_type, payload, tentatives, max_tentatives)) = task else {
             break; // no more pending tasks
         };
+
+        // Tell the UI exactly what this worker is doing right now.
+        emit(&app, &pool, run_id, Some(describe_task(&pool, &task_type, &payload)));
 
         let result = match task_type.as_str() {
             "enrich_venue" => {
@@ -335,25 +371,29 @@ async fn drain(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i64, po
         };
         match result {
             Ok(()) => {
-                let conn = pool.get().unwrap();
-                let _ = conn.execute(
-                    "UPDATE vi_tasks SET statut='termine', locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
-                    params![task_id],
-                );
+                if let Ok(conn) = pool.get() {
+                    let _ = conn.execute(
+                        "UPDATE vi_tasks SET statut='termine', locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
+                        params![task_id],
+                    );
+                }
             }
             Err(e) => {
                 let attempts = tentatives + 1;
-                let conn = pool.get().unwrap();
-                if !e.retryable || attempts >= max_tentatives {
-                    let _ = conn.execute(
-                        "UPDATE vi_tasks SET statut='echec', tentatives=?2, derniere_erreur=?3, locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
-                        params![task_id, attempts, e.message],
-                    );
-                } else {
-                    let _ = conn.execute(
-                        "UPDATE vi_tasks SET statut='en_attente', tentatives=?2, derniere_erreur=?3, locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
-                        params![task_id, attempts, e.message],
-                    );
+                if let Ok(conn) = pool.get() {
+                    if !e.retryable || attempts >= max_tentatives {
+                        let _ = conn.execute(
+                            "UPDATE vi_tasks SET statut='echec', tentatives=?2, derniere_erreur=?3, locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
+                            params![task_id, attempts, e.message],
+                        );
+                    } else {
+                        let _ = conn.execute(
+                            "UPDATE vi_tasks SET statut='en_attente', tentatives=?2, derniere_erreur=?3, locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
+                            params![task_id, attempts, e.message],
+                        );
+                    }
+                }
+                if e.retryable && attempts < max_tentatives {
                     let backoff = 1500u64 * (1 << attempts.min(4)) as u64;
                     tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
                 }
@@ -388,7 +428,7 @@ pub fn spawn_worker(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i6
             let _ = h.await;
         }
 
-        let cancelled = cancels.lock().unwrap().remove(&run_id);
+        let cancelled = cancels.lock().unwrap_or_else(|e| e.into_inner()).remove(&run_id);
 
         qualify(&pool);
         let conn = pool.get().unwrap();
@@ -466,7 +506,7 @@ pub fn vi_run_tasks(
 /// the run is marked 'arrete' and stays resumable.
 #[tauri::command]
 pub fn vi_stop_run(state: State<AppState>, run_id: i64) -> Result<(), String> {
-    state.cancels.lock().unwrap().insert(run_id);
+    state.cancels.lock().unwrap_or_else(|e| e.into_inner()).insert(run_id);
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let _ = conn.execute(
         "UPDATE vi_runs SET statut='arrete' WHERE id=?1 AND statut='en_cours'",

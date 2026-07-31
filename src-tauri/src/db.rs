@@ -43,8 +43,12 @@ pub fn init_pool(db_path: &Path) -> Result<DbPool, String> {
              PRAGMA busy_timeout = 5000;",
         )
     });
+    // Headroom for several concurrent workers + the UI's polling queries. WAL lets
+    // readers and one writer coexist; a shorter connection timeout means a starved
+    // getter fails fast (and is handled) instead of hanging for 30s.
     let pool = Pool::builder()
-        .max_size(8)
+        .max_size(16)
+        .connection_timeout(std::time::Duration::from_secs(10))
         .build(manager)
         .map_err(|e| e.to_string())?;
     {

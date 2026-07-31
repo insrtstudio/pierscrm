@@ -2,6 +2,26 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-07-31, v0.9.3, correctifs de CRASH (runs longs / stop+relance) + activité live
+
+Bug utilisateur : l'app crashe sur les runs longs et sur stop puis relance d'un run complexe.
+CAUSE RACINE : `panic = "abort"` (profil release) + `pool.get().unwrap()` ×17 dans les workers
+avec pool max_size=8. Sous charge (3 workers + polling UI + crawl), le pool s'épuise, get()
+échoue, unwrap panique, et abort tue TOUTE l'app.
+
+- **Cargo.toml** : retiré `panic = "abort"` -> unwind. Une panique de worker n'abat plus l'app
+  (le task meurt seul, `let _ = h.await` l'ignore).
+- **db.rs** : pool max_size 8 -> 16 + connection_timeout 10s (échoue vite au lieu de hang 30s).
+- **harvest.rs drain** : claim et enregistrement du résultat ne unwrap plus le pool (retry/skip
+  gracieux). Verrou d'annulation `cancels.lock()` rendu poison-safe (unwrap_or_else into_inner)
+  sur les 3 sites, sinon un worker qui panique empoisonne le mutex et cascade.
+- **vi_resume_run** : retire le run_id du CancelSet AVANT de relancer (sinon le run repris hérite
+  du flag stop et ne fait rien). Corrige le bug stop+relance.
+- **Activité live** : `describe_task` -> message émis à chaque tâche ("Moissonnage : Berlin
+  (2024-01 → 2024-03)" ou "Enrichissement : Fabric"). RunCard affiche cette ligne sous la barre
+  de progression quand le run est actif. Le toast de fin ne se déclenche toujours qu'au dernier
+  emit (statut done + message), pas sur les emits de tâche (statut en_cours).
+
 ## 2026-07-31, v0.9.2, puces de filtres rapides sur les lieux
 
 Demande : filtres plus spécifiques (avec email, avec téléphone...).
