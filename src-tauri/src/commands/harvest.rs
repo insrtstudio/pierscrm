@@ -664,6 +664,19 @@ pub fn vi_list_runs(state: State<AppState>) -> Result<Vec<RunRow>, String> {
     Ok(out)
 }
 
+// A venue is "contacted" when it's linked to a CRM contact, or a matching
+// contact (by venue/name) has actually been engaged. "played" when one of our
+// events happened there, or a matching booking is confirmed. Name-matched
+// because RA venues aren't hard-linked to the pipeline yet (that is J6).
+const CONTACTED_SQL: &str = "(v.crm_contact_id IS NOT NULL OR EXISTS(
+    SELECT 1 FROM contacts c
+    WHERE (lower(trim(c.venue))=lower(trim(v.nom)) OR lower(trim(c.name))=lower(trim(v.nom)))
+      AND (c.first_contact IS NOT NULL OR c.status IN ('contacted','followed_up','in_discussion','confirmed','declined'))))";
+const PLAYED_SQL: &str = "(EXISTS(SELECT 1 FROM events e WHERE lower(trim(e.venue))=lower(trim(v.nom)))
+    OR EXISTS(SELECT 1 FROM contacts c
+        WHERE (lower(trim(c.venue))=lower(trim(v.nom)) OR lower(trim(c.name))=lower(trim(v.nom)))
+          AND c.status='confirmed'))";
+
 #[derive(Serialize)]
 pub struct VenueRow {
     pub id: i64,
@@ -684,6 +697,8 @@ pub struct VenueRow {
     pub nb_emails: i64,
     pub enriched: bool,
     pub crm_contact_id: Option<i64>,
+    pub contacted: bool,
+    pub played: bool,
 }
 
 #[tauri::command]
@@ -692,11 +707,14 @@ pub fn vi_list_venues(
     statut: Option<String>,
     pays: Option<String>,
     search: Option<String>,
+    has_email: Option<bool>,
+    contacted: Option<bool>,
+    played: Option<bool>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<VenueRow>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
-    let mut sql = String::from(
+    let mut sql = format!(
         "SELECT v.id, v.nom, v.ville, v.pays, v.region_cible, v.statut, v.priorite, v.score_qualif,
                 v.nb_events_periode,
                 (SELECT COUNT(*) FROM vi_evidence e WHERE e.venue_id=v.id),
@@ -705,8 +723,12 @@ pub fn vi_list_venues(
                 (SELECT valeur FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email' ORDER BY c.score DESC, c.id LIMIT 1),
                 (SELECT COUNT(*) FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email'),
                 (v.enriched_at IS NOT NULL),
-                v.crm_contact_id
+                v.crm_contact_id,
+                {contacted} AS is_contacted,
+                {played} AS has_played
          FROM vi_venues v WHERE 1=1",
+        contacted = CONTACTED_SQL,
+        played = PLAYED_SQL,
     );
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     if let Some(s) = statut.filter(|s| !s.is_empty() && s != "all") {
@@ -718,10 +740,20 @@ pub fn vi_list_venues(
         args.push(Box::new(p));
     }
     if let Some(q) = search.filter(|s| !s.trim().is_empty()) {
-        sql.push_str(" AND (v.nom LIKE ? OR v.ville LIKE ?)");
-        let like = format!("%{}%", q);
+        sql.push_str(" AND (v.nom LIKE ? OR v.ville LIKE ? OR v.adresse LIKE ?)");
+        let like = format!("%{}%", q.trim());
+        args.push(Box::new(like.clone()));
         args.push(Box::new(like.clone()));
         args.push(Box::new(like));
+    }
+    if has_email == Some(true) {
+        sql.push_str(" AND EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email')");
+    }
+    if contacted == Some(true) {
+        sql.push_str(&format!(" AND {}", CONTACTED_SQL));
+    }
+    if played == Some(true) {
+        sql.push_str(&format!(" AND {}", PLAYED_SQL));
     }
     sql.push_str(" ORDER BY v.score_qualif DESC, v.nb_events_periode DESC, v.nom COLLATE NOCASE");
     sql.push_str(&format!(" LIMIT {} OFFSET {}", limit.unwrap_or(200).clamp(1, 1000), offset.unwrap_or(0).max(0)));
@@ -749,6 +781,8 @@ pub fn vi_list_venues(
                 nb_emails: r.get(15)?,
                 enriched: r.get::<_, i64>(16)? != 0,
                 crm_contact_id: r.get(17)?,
+                contacted: r.get::<_, i64>(18)? != 0,
+                played: r.get::<_, i64>(19)? != 0,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -757,4 +791,68 @@ pub fn vi_list_venues(
         out.push(r.map_err(|e| e.to_string())?);
     }
     Ok(out)
+}
+
+// ---------------- Venue dashboard stats ----------------
+
+#[derive(Serialize)]
+pub struct CountryCount {
+    pub pays: String,
+    pub n: i64,
+}
+
+#[derive(Serialize)]
+pub struct VenueStats {
+    pub total: i64,
+    pub qualifie: i64,
+    pub valide: i64,
+    pub candidat: i64,
+    pub rejete: i64,
+    pub enriched: i64,
+    pub with_email: i64,
+    pub contacted: i64,
+    pub played: i64,
+    pub countries: i64,
+    pub top_countries: Vec<CountryCount>,
+}
+
+#[tauri::command]
+pub fn vi_venue_stats(state: State<AppState>) -> Result<VenueStats, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let one = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
+    let by_statut = |s: &str| -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM vi_venues WHERE statut=?1",
+            params![s],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
+    };
+
+    let mut top_countries = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT COALESCE(pays,'?') AS p, COUNT(*) n FROM vi_venues GROUP BY p ORDER BY n DESC LIMIT 8",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok(CountryCount { pays: r.get(0)?, n: r.get(1)? })
+        }) {
+            for r in rows.flatten() {
+                top_countries.push(r);
+            }
+        }
+    }
+
+    Ok(VenueStats {
+        total: one("SELECT COUNT(*) FROM vi_venues"),
+        qualifie: by_statut("qualifie"),
+        valide: by_statut("valide"),
+        candidat: by_statut("candidat"),
+        rejete: by_statut("rejete"),
+        enriched: one("SELECT COUNT(*) FROM vi_venues WHERE enriched_at IS NOT NULL"),
+        with_email: one("SELECT COUNT(DISTINCT venue_id) FROM vi_contacts WHERE type='email'"),
+        contacted: one(&format!("SELECT COUNT(*) FROM vi_venues v WHERE {}", CONTACTED_SQL)),
+        played: one(&format!("SELECT COUNT(*) FROM vi_venues v WHERE {}", PLAYED_SQL)),
+        countries: one("SELECT COUNT(DISTINCT pays) FROM vi_venues WHERE pays IS NOT NULL"),
+        top_countries,
+    })
 }

@@ -2,6 +2,22 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-07-31, v0.9.1, dashboard des lieux (stats, filtres, contacté, a joué)
+
+Demande : dashboard des lieux (total, recherche efficace, déjà contacté, nos artistes y ont joué).
+
+- `vi_venue_stats` : total, par statut, enriched, with_email, contacted, played, countries,
+  top_countries (top 8). Bento de 8 cartes en haut de l'onglet Lieux ; les cartes with_email /
+  contacted / played sont cliquables et togglent le filtre correspondant.
+- `vi_list_venues` étendu : colonnes `contacted` et `played` par ligne + filtres has_email /
+  contacted / played + filtre pays (select alimenté par top_countries) ; recherche élargie à
+  l'adresse. Badges "Déjà joué" et "Contacté" sur les lignes.
+- **contacted / played** calculés par CORRESPONDANCE DE NOM (lower/trim) contre `contacts` et
+  `events`, car les vi_venues ne sont pas encore hard-linkées au pipeline (ce sera le J6) :
+  CONTACTED_SQL = crm_contact_id non nul OU contact matchant engagé (first_contact ou statut
+  avancé) ; PLAYED_SQL = event matchant OU booking confirmé matchant. Constantes réutilisées dans
+  la liste ET les stats. Limite portée à 500.
+
 ## 2026-07-31, v0.9.0, runs : arrêt + bilan/logs/notif + performance + Europe
 
 Demande utilisateur : peu d'insight en fin de run, pas de moyen d'arrêter (certains plantent),

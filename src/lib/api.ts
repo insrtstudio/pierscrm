@@ -167,6 +167,7 @@ import type {
   ViRunTask,
   ViVenueFiche,
   ViVenueRow,
+  ViVenueStats,
 } from "./types";
 
 export const viListAreas = () => invoke<ViArea[]>("vi_list_areas");
@@ -198,9 +199,13 @@ export const viListVenues = (p: {
   statut?: string;
   pays?: string;
   search?: string;
+  has_email?: boolean;
+  contacted?: boolean;
+  played?: boolean;
   limit?: number;
   offset?: number;
 }) => invoke<ViVenueRow[]>("vi_list_venues", p);
+export const viVenueStats = () => invoke<ViVenueStats>("vi_venue_stats");
 export const viStartEnrich = (force?: boolean) =>
   invoke<number>("vi_start_enrich", { force: force ?? false });
 export const viVenueDetail = (id: number) =>

@@ -23,6 +23,8 @@ import {
   Square,
   ChevronDown,
   AlertTriangle,
+  CheckCheck,
+  Disc3,
 } from "lucide-react";
 import clsx from "clsx";
 import {
@@ -30,6 +32,7 @@ import {
   viListReferenceArtists,
   viListRuns,
   viListVenues,
+  viVenueStats,
   viResolveAllAreas,
   viResolveArea,
   viResumeRun,
@@ -95,14 +98,32 @@ function VenuesTab() {
   const toast = useToast();
   const qc = useQueryClient();
   const [statut, setStatut] = useState("qualifie");
+  const [pays, setPays] = useState("all");
   const [search, setSearch] = useState("");
+  const [hasEmail, setHasEmail] = useState(false);
+  const [contactedF, setContactedF] = useState(false);
+  const [playedF, setPlayedF] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
   const [targetArtist, setTargetArtist] = useState<number | "">("");
   const { data: venues = [] } = useQuery({
-    queryKey: ["vi_venues", statut, search],
-    queryFn: () => viListVenues({ statut, search, limit: 400 }),
+    queryKey: ["vi_venues", statut, pays, search, hasEmail, contactedF, playedF],
+    queryFn: () =>
+      viListVenues({
+        statut,
+        pays,
+        search,
+        has_email: hasEmail || undefined,
+        contacted: contactedF || undefined,
+        played: playedF || undefined,
+        limit: 500,
+      }),
     // While an enrichment run is filling in contacts, keep the list fresh.
+    refetchInterval: enriching ? 4000 : false,
+  });
+  const { data: stats } = useQuery({
+    queryKey: ["vi_venue_stats"],
+    queryFn: viVenueStats,
     refetchInterval: enriching ? 4000 : false,
   });
   const { data: artists = [] } = useQuery({ queryKey: ["artists"], queryFn: listArtists });
@@ -153,8 +174,65 @@ function VenuesTab() {
     }
   };
 
+  const statChips: { key: string; label: string; value: number; tone?: string; active?: boolean; onClick?: () => void }[] =
+    stats
+      ? [
+          { key: "total", label: t("venues.s_total"), value: stats.total, tone: "text-fg" },
+          { key: "qualifie", label: t("venues.st_qualifie"), value: stats.qualifie, tone: "text-accent" },
+          { key: "valide", label: t("venues.st_valide"), value: stats.valide, tone: "text-emerald-500" },
+          { key: "enriched", label: t("venues.s_enriched"), value: stats.enriched },
+          {
+            key: "email",
+            label: t("venues.s_with_email"),
+            value: stats.with_email,
+            tone: "text-emerald-500",
+            active: hasEmail,
+            onClick: () => setHasEmail((v) => !v),
+          },
+          {
+            key: "contacted",
+            label: t("venues.s_contacted"),
+            value: stats.contacted,
+            active: contactedF,
+            onClick: () => setContactedF((v) => !v),
+          },
+          {
+            key: "played",
+            label: t("venues.s_played"),
+            value: stats.played,
+            tone: "text-accent-2",
+            active: playedF,
+            onClick: () => setPlayedF((v) => !v),
+          },
+          { key: "countries", label: t("venues.s_countries"), value: stats.countries },
+        ]
+      : [];
+
   return (
     <div className="space-y-4">
+      {/* Dashboard bento */}
+      {statChips.length > 0 && (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
+          {statChips.map((c) => (
+            <button
+              key={c.key}
+              onClick={c.onClick}
+              disabled={!c.onClick}
+              className={clsx(
+                "border-2 px-3 py-2 text-left transition-colors",
+                c.active ? "border-accent bg-accent/5" : "border-border",
+                c.onClick && "hover:border-accent-2 cursor-pointer",
+                !c.onClick && "cursor-default"
+              )}
+              title={c.onClick ? t("venues.click_to_filter") : undefined}
+            >
+              <div className={clsx("text-xl font-black tabular", c.tone ?? "text-fg")}>{c.value}</div>
+              <div className="text-2xs uppercase tracking-wide text-fg-faint">{c.label}</div>
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         <input
           className="input max-w-xs flex-1"
@@ -167,6 +245,14 @@ function VenuesTab() {
           {["qualifie", "valide", "candidat", "rejete"].map((s) => (
             <option key={s} value={s}>
               {t(`venues.st_${s}`)}
+            </option>
+          ))}
+        </select>
+        <select className="input w-auto" value={pays} onChange={(e) => setPays(e.target.value)}>
+          <option value="all">{t("venues.all_countries")}</option>
+          {(stats?.top_countries ?? []).map((c) => (
+            <option key={c.pays} value={c.pays}>
+              {c.pays} ({c.n})
             </option>
           ))}
         </select>
@@ -188,7 +274,6 @@ function VenuesTab() {
           {t("venues.enrich")}
         </button>
       </div>
-      <p className="text-2xs text-fg-subtle">{t("venues.enrich_hint")}</p>
 
       {venues.length === 0 ? (
         <div className="card">
@@ -219,10 +304,28 @@ function VenuesTab() {
                     <span className="text-lg font-black tabular text-accent">{v.score_qualif}</span>
                   </td>
                   <td className="font-semibold">
-                    {v.nom}
-                    {isTarget(v.ville) && (
-                      <span className="badge ml-2 bg-accent text-accent-fg">{t("venues.target_match")}</span>
-                    )}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span>{v.nom}</span>
+                      {v.played && (
+                        <span
+                          className="badge bg-accent-2/15 text-accent-2"
+                          title={t("venues.played_hint")}
+                        >
+                          <Disc3 size={11} /> {t("venues.played")}
+                        </span>
+                      )}
+                      {v.contacted && (
+                        <span
+                          className="badge bg-emerald-500/15 text-emerald-500"
+                          title={t("venues.contacted_hint")}
+                        >
+                          <CheckCheck size={11} /> {t("venues.contacted_badge")}
+                        </span>
+                      )}
+                      {isTarget(v.ville) && (
+                        <span className="badge bg-accent text-accent-fg">{t("venues.target_match")}</span>
+                      )}
+                    </div>
                   </td>
                   <td className="text-fg-subtle">
                     {[v.ville, v.pays].filter(Boolean).join(", ")}

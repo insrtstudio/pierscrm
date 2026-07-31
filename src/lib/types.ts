@@ -251,6 +251,27 @@ export interface ViVenueRow {
   nb_emails: number;
   enriched: boolean;
   crm_contact_id?: number | null;
+  contacted: boolean;
+  played: boolean;
+}
+
+export interface CountryCount {
+  pays: string;
+  n: number;
+}
+
+export interface ViVenueStats {
+  total: number;
+  qualifie: number;
+  valide: number;
+  candidat: number;
+  rejete: number;
+  enriched: number;
+  with_email: number;
+  contacted: number;
+  played: number;
+  countries: number;
+  top_countries: CountryCount[];
 }
 
 export interface ViContactRow {

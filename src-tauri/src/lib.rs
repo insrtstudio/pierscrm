@@ -108,6 +108,7 @@ pub fn run() {
             commands::harvest::vi_resume_run,
             commands::harvest::vi_list_runs,
             commands::harvest::vi_list_venues,
+            commands::harvest::vi_venue_stats,
             commands::harvest::vi_stop_run,
             commands::harvest::vi_run_tasks,
             // venue intelligence (J5, enrichment)
