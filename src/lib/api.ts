@@ -206,7 +206,21 @@ export const viListVenues = (p: {
   played?: boolean;
   limit?: number;
   offset?: number;
-}) => invoke<ViVenueRow[]>("vi_list_venues", p);
+}) =>
+  // Tauri maps camelCase JS -> snake_case Rust params, so multi-word args MUST be
+  // sent camelCased (hasEmail), not snake_cased, or they silently stay None.
+  invoke<ViVenueRow[]>("vi_list_venues", {
+    statut: p.statut,
+    pays: p.pays,
+    search: p.search,
+    hasEmail: p.has_email,
+    hasPhone: p.has_phone,
+    hasWebsite: p.has_website,
+    contacted: p.contacted,
+    played: p.played,
+    limit: p.limit,
+    offset: p.offset,
+  });
 export const viVenueStats = () => invoke<ViVenueStats>("vi_venue_stats");
 export const viStartEnrich = (force?: boolean) =>
   invoke<number>("vi_start_enrich", { force: force ?? false });

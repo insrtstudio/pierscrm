@@ -2,6 +2,14 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-07-31, v0.9.4, fix filtres has_email/has_phone/has_website (camelCase Tauri)
+
+Bug : filtrer "Avec email" sortait tous les lieux (y compris sans email). Cause : `viListVenues`
+passait l'objet params BRUT avec des clés snake_case (`has_email`...). Tauri v2 mappe camelCase JS
+-> snake_case Rust ; une clé snake_case multi-mots n'est donc PAS reconnue et le param reste None
+(filtre ignoré). `contacted`/`played` (un seul mot) marchaient, pas les `has_*`. Fix : l'API mappe
+explicitement en camelCase (hasEmail/hasPhone/hasWebsite). Les autres commandes le faisaient déjà.
+
 ## 2026-07-31, v0.9.3, correctifs de CRASH (runs longs / stop+relance) + activité live
 
 Bug utilisateur : l'app crashe sur les runs longs et sur stop puis relance d'un run complexe.
