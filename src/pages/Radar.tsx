@@ -37,7 +37,7 @@ const GENRE_PRESETS = [
   "electronica",
   "disco",
 ];
-const SOURCES = ["spotify", "deezer"] as const;
+const SOURCES = ["spotify", "deezer", "youtube", "labels"] as const;
 
 export function Radar() {
   const { t } = useTranslation();

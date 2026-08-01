@@ -80,6 +80,21 @@ export function Settings() {
     toast(t("settings.saved"), "ok");
   };
 
+  // ---- Radar: YouTube Data API key ----
+  const { data: ytKey } = useQuery({
+    queryKey: ["setting", "youtube_api_key"],
+    queryFn: () => getSetting("youtube_api_key"),
+  });
+  const [ytVal, setYtVal] = useState("");
+  useEffect(() => {
+    if (ytKey != null) setYtVal(ytKey);
+  }, [ytKey]);
+  const saveYt = async () => {
+    await setSetting("youtube_api_key", ytVal.trim());
+    qc.invalidateQueries({ queryKey: ["setting", "youtube_api_key"] });
+    toast(t("settings.saved"), "ok");
+  };
+
   // ---- Pulse credentials (Spotify + Meta) ----
   const PULSE_KEYS = [
     "spotify_client_id",
@@ -504,6 +519,30 @@ export function Settings() {
             </Field>
             <p className="pb-2 text-2xs text-fg-faint">{t("settings.perf_hint")}</p>
           </div>
+        </div>
+
+        {/* Radar (YouTube) */}
+        <div className="card p-6">
+          <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
+            <Search size={15} /> {t("settings.radar_section")}
+          </div>
+          <p className="mb-4 text-xs text-fg-subtle">{t("settings.radar_help")}</p>
+          <div className="flex items-end gap-3">
+            <Field label={t("settings.youtube_key")} className="flex-1">
+              <input
+                type="password"
+                className="input"
+                value={ytVal}
+                onChange={(e) => setYtVal(e.target.value)}
+                placeholder="YouTube Data API v3 key"
+                autoComplete="off"
+              />
+            </Field>
+            <button className="btn-primary" onClick={saveYt}>
+              {t("common.save")}
+            </button>
+          </div>
+          <p className="mt-3 text-2xs text-fg-faint">{t("settings.youtube_hint")}</p>
         </div>
 
         {/* Pulse (Spotify + Meta) */}

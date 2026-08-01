@@ -135,9 +135,81 @@ pub async fn process_harvest_task(pool: &DbPool, payload: &str) -> Result<(), Ra
                 );
             }
         }
+        "labels" => {
+            let labels = crate::commands::musicbrainz::search_labels(&genre, limit.min(50))
+                .await
+                .map_err(|e| err(format!("MusicBrainz: {}", e), true))?;
+            for l in labels {
+                let name = l.name.clone().unwrap_or_default();
+                if name.is_empty() {
+                    continue;
+                }
+                let site = crate::commands::musicbrainz::label_homepage(&l.id).await;
+                let country = l.area.as_ref().and_then(|a| a.name.clone());
+                upsert_label(pool, &l.id, &name, country.as_deref(), &genre, site.as_deref());
+                tokio::time::sleep(std::time::Duration::from_millis(1100)).await; // MB: 1 req/s
+            }
+        }
+        "youtube" => {
+            let key = {
+                let conn = pool.get().map_err(|e| err(e.to_string(), true))?;
+                setting(&conn, "youtube_api_key")
+            };
+            let key = key.ok_or_else(|| err("Clé YouTube non configurée (Réglages > Radar).", false))?;
+            let ids = crate::commands::youtube::search_channel_ids(&key, &format!("{} music", genre), 40)
+                .await
+                .map_err(|e| err(e, true))?;
+            for chunk in ids.chunks(50) {
+                let chans = crate::commands::youtube::channels(&key, chunk)
+                    .await
+                    .map_err(|e| err(e, true))?;
+                for c in chans {
+                    let sn = c.snippet.unwrap_or(crate::commands::youtube::ChannelSnippet {
+                        title: None,
+                        description: None,
+                        custom_url: None,
+                        country: None,
+                    });
+                    let name = sn.title.unwrap_or_default();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let editorial = is_editorial(&name) || name.to_lowercase().ends_with("- topic");
+                    let subs = c.statistics.and_then(|s| s.subscriber_count).and_then(|s| s.parse::<i64>().ok());
+                    let url = sn
+                        .custom_url
+                        .map(|u| format!("https://youtube.com/{}", u))
+                        .unwrap_or_else(|| format!("https://youtube.com/channel/{}", c.id));
+                    upsert_curator(
+                        pool, "youtube", &c.id, &name, &name, Some(&url), subs, None, &genre,
+                        sn.description.as_deref(), editorial,
+                    );
+                }
+            }
+        }
         _ => return Err(err("source inconnue", false)),
     }
     Ok(())
+}
+
+fn upsert_label(pool: &DbPool, mbid: &str, name: &str, country: Option<&str>, genre: &str, site: Option<&str>) {
+    let Ok(conn) = pool.get() else { return };
+    let norm = normalise(name);
+    let _ = conn.execute(
+        "INSERT INTO radar_curators (source, external_id, kind, nom, nom_normalise, pays, genre, site_web, editorial)
+         VALUES ('musicbrainz',?1,'label',?2,?3,?4,?5,?6,0)
+         ON CONFLICT(source, external_id) DO UPDATE SET
+            site_web=COALESCE(radar_curators.site_web, excluded.site_web),
+            pays=COALESCE(radar_curators.pays, excluded.pays), updated_at=datetime('now')",
+        params![mbid, name, norm, country, genre, site],
+    );
+    if let Ok(cid) = conn.query_row(
+        "SELECT id FROM radar_curators WHERE source='musicbrainz' AND external_id=?1",
+        params![mbid],
+        |r| r.get::<_, i64>(0),
+    ) {
+        qualify_one(&conn, cid);
+    }
 }
 
 fn upsert_curator(
@@ -305,7 +377,7 @@ pub async fn radar_harvest(
     limit: Option<i64>,
 ) -> Result<i64, String> {
     let genres: Vec<String> = genres.into_iter().map(|g| g.trim().to_string()).filter(|g| !g.is_empty()).collect();
-    let sources: Vec<String> = sources.into_iter().filter(|s| s == "spotify" || s == "deezer").collect();
+    let sources: Vec<String> = sources.into_iter().filter(|s| ["spotify","deezer","labels","youtube"].contains(&s.as_str())).collect();
     if genres.is_empty() || sources.is_empty() {
         return Err("Choisissez au moins un genre et une source.".into());
     }

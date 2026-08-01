@@ -2,6 +2,26 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-08-01, v0.11.1, Radar : sources Labels (MusicBrainz) + YouTube + verdict DSP
+
+Demande : ajouter Beatport, Apple Music, Amazon Music, Tidal, YouTube Music. Verdict de faisabilite
+teste en direct et donne a l'utilisateur : Beatport API=401 (partenaire), Tidal=creds fermes, Apple
+Music=token dev payant, Amazon=aucune API. Et surtout ces 4 sont EDITORIAUX (pas d'email a
+recuperer). Les 2 qui servent l'objectif email : YouTube (chaines de curateurs, email public
+frequent) et Labels (demo@ sur les sites). Construites ; Apple/Amazon/Tidal ecartees (explique).
+
+- **musicbrainz.rs** : search_labels (query tag:"genre") + label_homepage (inc=url-rels, official
+  homepage ou 1er url non-social). Base ouverte, pas de cle, User-Agent + 1 req/s.
+- **youtube.rs** : YouTube Data API v3, search_channel_ids (type=channel) + channels (snippet+stats,
+  description = filon email). Cle youtube_api_key dans settings.
+- **radar.rs** : sources "labels" (upsert_label kind=label, homepage puis enrichissement crawl pour
+  demo@) et "youtube" (kind=channel, mine description, editorial si "- topic"/vevo). radar_harvest
+  accepte spotify/deezer/labels/youtube.
+- Reglages : section Radar (YouTube) avec la cle Data API. UI Radar : 4 sources selectionnables.
+
+Beatport reste indirectement couvert par Labels (sa vraie valeur = les labels). Apple/Amazon/Tidal
+= non construites (editorial + acces ferme), documente.
+
 ## 2026-08-01, v0.11.0, module Radar (curateurs playlists Spotify + Deezer, emails self-sourced)
 
 Demande : intégrer une base de curateurs/labels/A&R avec emails, comme intellijend/Indie Bible mais
