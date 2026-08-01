@@ -353,6 +353,49 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
             updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS radar_curators (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            source        TEXT NOT NULL,           -- spotify | deezer
+            external_id   TEXT NOT NULL,
+            kind          TEXT NOT NULL DEFAULT 'playlist', -- playlist | label | ar | publisher
+            nom           TEXT NOT NULL,
+            nom_normalise TEXT NOT NULL,
+            owner_name    TEXT,
+            url           TEXT,
+            followers     INTEGER,
+            nb_tracks     INTEGER,
+            genre         TEXT,
+            pays          TEXT,
+            description   TEXT,
+            site_web      TEXT,
+            statut        TEXT NOT NULL DEFAULT 'candidat',
+            score         INTEGER NOT NULL DEFAULT 0,
+            editorial     INTEGER NOT NULL DEFAULT 0, -- 1 = official/editorial (no email expected)
+            enriched_at   TEXT,
+            crm_contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(source, external_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS radar_contacts (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            curator_id    INTEGER NOT NULL REFERENCES radar_curators(id) ON DELETE CASCADE,
+            type          TEXT,
+            valeur        TEXT NOT NULL,
+            role_devine   TEXT,
+            score         INTEGER NOT NULL DEFAULT 0,
+            source_url    TEXT,
+            source_method TEXT,
+            verifie       INTEGER NOT NULL DEFAULT 0,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(curator_id, type, valeur)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_radar_statut ON radar_curators(statut);
+        CREATE INDEX IF NOT EXISTS idx_radar_norm ON radar_curators(nom_normalise);
+        CREATE INDEX IF NOT EXISTS idx_radar_contacts ON radar_contacts(curator_id);
+
         CREATE TABLE IF NOT EXISTS pulse_tracked_tracks (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             artist_id        INTEGER REFERENCES artists(id) ON DELETE SET NULL,

@@ -506,3 +506,32 @@ export interface WatchRow {
   contains_our_track: boolean;
   spark: number[];
 }
+
+// ---- Radar (curators / labels) ----
+export interface CuratorRow {
+  id: number;
+  source: string;
+  nom: string;
+  owner_name?: string | null;
+  url?: string | null;
+  followers?: number | null;
+  nb_tracks?: number | null;
+  genre?: string | null;
+  statut: string;
+  score: number;
+  editorial: boolean;
+  site_web?: string | null;
+  best_email?: string | null;
+  nb_emails: number;
+  enriched: boolean;
+  in_pipeline: boolean;
+}
+
+export interface RadarStats {
+  total: number;
+  qualifie: number;
+  with_email: number;
+  editorial: number;
+  in_pipeline: number;
+  genres: [string, number][];
+}

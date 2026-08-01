@@ -88,6 +88,35 @@ pub struct PlaylistOwner {
     pub display_name: Option<String>,
 }
 
+// ---- playlist search ----
+#[derive(Deserialize)]
+struct SearchResp {
+    playlists: Option<SearchPage>,
+}
+#[derive(Deserialize)]
+struct SearchPage {
+    #[serde(default)]
+    items: Vec<Option<SearchPlaylist>>,
+}
+#[derive(Deserialize)]
+pub struct SearchPlaylist {
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub owner: Option<PlaylistOwner>,
+    pub followers: Option<Followers>,
+    pub tracks: Option<SearchTracksMeta>,
+    pub external_urls: Option<ExternalUrls>,
+}
+#[derive(Deserialize)]
+pub struct SearchTracksMeta {
+    pub total: Option<i64>,
+}
+#[derive(Deserialize)]
+pub struct ExternalUrls {
+    pub spotify: Option<String>,
+}
+
 impl Spotify {
     pub fn new(client_id: String, client_secret: String) -> Self {
         Self {
@@ -189,6 +218,29 @@ impl Spotify {
 
     pub async fn track(&self, id: &str) -> Result<TrackResp, SpotifyError> {
         self.get_json(&format!("{}/tracks/{}", API, id)).await
+    }
+
+    /// Search playlists by free text (genre). Returns lightweight cards; the
+    /// description is included by the search endpoint. Offset paginates.
+    pub async fn search_playlists(
+        &self,
+        query: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<SearchPlaylist>, SpotifyError> {
+        let q: String = query
+            .chars()
+            .map(|c| if c == ' ' { "%20".to_string() } else { c.to_string() })
+            .collect();
+        let url = format!(
+            "{}/search?q={}&type=playlist&limit={}&offset={}",
+            API,
+            q,
+            limit.clamp(1, 50),
+            offset.max(0)
+        );
+        let r: SearchResp = self.get_json(&url).await?;
+        Ok(r.playlists.map(|p| p.items.into_iter().flatten().collect()).unwrap_or_default())
     }
 
     /// Playlist meta + the first 100 track ids (enough to flag "contains ours").

@@ -249,3 +249,30 @@ export const pulseWatchlistAdd = (input: string) =>
   invoke<void>("pulse_watchlist_add", { input });
 export const pulseWatchlistToggle = (id: number, active: boolean) =>
   invoke<void>("pulse_watchlist_toggle", { id, active });
+
+// ---- Radar ----
+import type { CuratorRow, RadarStats } from "./types";
+export const radarHarvest = (genres: string[], sources: string[], limit?: number) =>
+  invoke<number>("radar_harvest", { genres, sources, limit: limit ?? null });
+export const radarEnrich = (force?: boolean) =>
+  invoke<number>("radar_enrich", { force: force ?? false });
+export const radarList = (p: {
+  statut?: string;
+  source?: string;
+  genre?: string;
+  search?: string;
+  has_email?: boolean;
+  hide_editorial?: boolean;
+  limit?: number;
+}) =>
+  invoke<CuratorRow[]>("radar_list", {
+    statut: p.statut,
+    source: p.source,
+    genre: p.genre,
+    search: p.search,
+    hasEmail: p.has_email,
+    hideEditorial: p.hide_editorial,
+    limit: p.limit,
+  });
+export const radarStats = () => invoke<RadarStats>("radar_stats");
+export const radarPromote = (id: number) => invoke<number>("radar_promote", { id });

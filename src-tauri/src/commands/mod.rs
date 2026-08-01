@@ -2,6 +2,8 @@ pub mod artists;
 pub mod campaigns;
 pub mod contacts;
 pub mod data;
+pub mod deezer;
+pub mod radar;
 pub mod email;
 pub mod enrich;
 pub mod events;

@@ -124,6 +124,12 @@ pub fn run() {
             commands::pulse::pulse_watchlist,
             commands::pulse::pulse_watchlist_add,
             commands::pulse::pulse_watchlist_toggle,
+            // radar (curators/labels)
+            commands::radar::radar_harvest,
+            commands::radar::radar_enrich,
+            commands::radar::radar_list,
+            commands::radar::radar_stats,
+            commands::radar::radar_promote,
             // venue intelligence (J5, enrichment)
             commands::enrich::vi_start_enrich,
             commands::enrich::vi_venue_detail,

@@ -618,6 +618,7 @@ function RunsTab() {
     queryKey: ["vi_runs"],
     queryFn: viListRuns,
     refetchInterval: 4000,
+    select: (rs: ViRun[]) => rs.filter((r) => !r.type_?.startsWith("radar")),
   });
 
   const resolved = areas.filter((a) => a.ra_area_id != null);

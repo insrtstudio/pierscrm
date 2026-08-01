@@ -2,6 +2,37 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-08-01, v0.11.0, module Radar (curateurs playlists Spotify + Deezer, emails self-sourced)
+
+Demande : intégrer une base de curateurs/labels/A&R avec emails, comme intellijend/Indie Bible mais
+en interne. Choix utilisateur : sources Spotify + Deezer, ZÉRO achat (on source les emails nous
+memes par sourcing web profond), MODULE SÉPARÉ.
+
+Point de verite donne a l'utilisateur : la valeur d'Indie Bible c'est le CONSENTEMENT des curateurs.
+Nous on source des emails PUBLICS (descriptions "submit to:", linktree, sites). Design : on ne
+stocke que du public + source_url, taux d'email bon sur les indes / faible sur l'editorial officiel.
+
+- **Schéma** : radar_curators (source, external_id UNIQUE, kind, nom, owner_name, url, followers,
+  nb_tracks, genre, description, site_web, statut, score, editorial, crm_contact_id) + radar_contacts
+  (curator_id, type, valeur, role_devine, score, source_url, source_method) UNIQUE(curator_id,type,valeur).
+- **deezer.rs** : API publique (search/playlist + playlist/{id} pour la description). **spotify.rs** :
+  ajout search_playlists (search?type=playlist, description incluse). Réutilise le client Pulse.
+- **radar.rs** : process_harvest_task (search playlists par genre/source, upsert curateurs, MINAGE des
+  descriptions pour emails + site/linktree), process_enrich_task (résout site via Serper si absent puis
+  crawl, réutilise les helpers enrich rendus pub(crate)), qualify (score followers/500 + 40 si email +
+  10 si non editorial ; editorial detecte par owner spotify/deezer/filtr/topsify/digster...), radar_list
+  (filtres statut/source/genre/search/has_email/hide_editorial), radar_stats (bento), radar_promote
+  (crée un contact category='curator' + lie crm_contact_id).
+- **Moteur** : réutilise vi_runs/vi_tasks + drain worker (types radar_harvest / radar_enrich ajoutés au
+  dispatch + describe_task). Runs radar filtrés hors de l'onglet Venues>Moissonnage (select).
+- **UI /radar** (nav + route lazy) : launcher (puces genres presets + genre libre, sources Spotify/
+  Deezer, boutons Scanner / Trouver les emails, progression live), bento stats, filtres, table
+  curateurs (score, followers, contact email/site, badges editorial/contacté, bouton Promouvoir si
+  email). i18n FR/EN sans tiret cadratin.
+
+RESTE : labels/A&R/publishers (MusicBrainz + Beatport) en v2 ; dédup curateur<->venue non nécessaire
+(tables séparées) ; liste d'exclusion RGPD partagée à brancher plus tard.
+
 ## 2026-08-01, v0.10.0, module Pulse (snapshots Spotify + spend Meta + planner)
 
 Brief utilisateur fourni pour une stack Next.js/Drizzle/Vercel (autre projet) : écarts signalés,

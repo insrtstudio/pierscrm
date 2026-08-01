@@ -15,13 +15,13 @@ use serde_json::json;
 use std::collections::HashSet;
 use tauri::{AppHandle, State};
 
-const CRAWL_PATHS: &[&str] = &[
+pub(crate) const CRAWL_PATHS: &[&str] = &[
     "", "/contact", "/contact-us", "/contactez-nous", "/contacts", "/contatti", "/contacto",
     "/booking", "/bookings", "/press", "/presse", "/mentions-legales", "/impressum", "/legal",
     "/about", "/info",
 ];
 
-fn crawl_client() -> reqwest::Client {
+pub(crate) fn crawl_client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
@@ -33,7 +33,7 @@ fn crawl_client() -> reqwest::Client {
         .expect("crawl client")
 }
 
-fn is_false_positive(email: &str) -> bool {
+pub(crate) fn is_false_positive(email: &str) -> bool {
     const BAD: &[&str] = &[
         "sentry", "wixpress", "example.com", "example.org", "noreply", "no-reply", "@2x",
         "sample", "godaddy", "your-email", "email@", "domain.com", "yourdomain",
@@ -48,7 +48,7 @@ fn is_false_positive(email: &str) -> bool {
 }
 
 /// (score, role) from the local part before the @.
-fn score_email(email: &str, from_mailto: bool) -> (i64, &'static str) {
+pub(crate) fn score_email(email: &str, from_mailto: bool) -> (i64, &'static str) {
     let local = email.split('@').next().unwrap_or("").to_lowercase();
     let has = |list: &[&str]| list.iter().any(|p| local == *p || local.starts_with(p));
     let (mut score, role): (i64, &'static str) = if has(&[
@@ -80,7 +80,7 @@ fn score_email(email: &str, from_mailto: bool) -> (i64, &'static str) {
 }
 
 /// Extract emails and a phone from raw HTML, tagging mailto vs regex.
-fn extract_contacts(html: &str) -> (Vec<(String, bool)>, Option<String>) {
+pub(crate) fn extract_contacts(html: &str) -> (Vec<(String, bool)>, Option<String>) {
     use regex::Regex;
     let mut emails: Vec<(String, bool)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -117,7 +117,7 @@ fn extract_contacts(html: &str) -> (Vec<(String, bool)>, Option<String>) {
     (emails, phone)
 }
 
-fn normalize_site(raw: &str) -> Option<String> {
+pub(crate) fn normalize_site(raw: &str) -> Option<String> {
     let s = raw.trim();
     if s.is_empty() {
         return None;
@@ -131,7 +131,7 @@ fn normalize_site(raw: &str) -> Option<String> {
 }
 
 /// scheme://host origin of a normalized base URL (drops any path).
-fn origin_of(base: &str) -> String {
+pub(crate) fn origin_of(base: &str) -> String {
     match base.find("://") {
         Some(i) => {
             let rest = &base[i + 3..];
@@ -143,7 +143,7 @@ fn origin_of(base: &str) -> String {
 }
 
 /// Candidate bases to try: the URL as-is plus the www<->apex swap.
-fn base_candidates(base: &str) -> Vec<String> {
+pub(crate) fn base_candidates(base: &str) -> Vec<String> {
     let origin = origin_of(base);
     let mut out = vec![origin.clone()];
     if let Some(i) = origin.find("://") {
@@ -162,7 +162,7 @@ fn base_candidates(base: &str) -> Vec<String> {
 }
 
 /// Internal links from a homepage that look like contact / legal / about pages.
-fn internal_links(html: &str, origin: &str) -> Vec<String> {
+pub(crate) fn internal_links(html: &str, origin: &str) -> Vec<String> {
     const KW: &[&str] = &[
         "contact", "kontakt", "contatti", "contacto", "mention", "legal", "impressum",
         "about", "info", "book", "nous-contacter",
@@ -197,7 +197,7 @@ fn internal_links(html: &str, origin: &str) -> Vec<String> {
 }
 
 /// Aggregators and socials that are never the venue's own booking site.
-const SEARCH_SKIP: &[&str] = &[
+pub(crate) const SEARCH_SKIP: &[&str] = &[
     "facebook.", "instagram.", "twitter.", "x.com", "tripadvisor.", "ra.co",
     "residentadvisor", "songkick.", "bandsintown.", "wikipedia.", "youtube.",
     "youtu.be", "tiktok.", "linktr.ee", "google.", "yelp.", "foursquare.",
@@ -208,7 +208,7 @@ const SEARCH_SKIP: &[&str] = &[
 /// Resolve a venue's official website via the Serper (Google) search API, used
 /// only when RA has no website. Prefers the knowledge-graph site, else the first
 /// organic result that is not an aggregator/social. Returns a scheme://host origin.
-async fn resolve_website_via_search(
+pub(crate) async fn resolve_website_via_search(
     client: &reqwest::Client,
     api_key: &str,
     query: &str,

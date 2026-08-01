@@ -21,6 +21,7 @@ const NAV: NavItem[] = [
   { to: "/import", key: "import" },
   { to: "/venues", key: "venues" },
   { to: "/pulse", key: "pulse" },
+  { to: "/radar", key: "radar" },
   { to: "/budget", key: "budget" },
   { to: "/visa", key: "visa" },
 ];
@@ -38,6 +39,7 @@ function useMenuActions() {
       "nav:visa": "/visa",
       "nav:import": "/import",
       "nav:pulse": "/pulse",
+      "nav:radar": "/radar",
       "nav:settings": "/settings",
       "check-updates": "/settings",
       "new:artist": "/artists",

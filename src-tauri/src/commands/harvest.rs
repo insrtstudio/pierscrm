@@ -313,6 +313,12 @@ fn run_final_stats(pool: &DbPool, run_id: i64) -> String {
 /// live in the UI (area + window for harvest, venue name for enrichment).
 fn describe_task(pool: &DbPool, task_type: &str, payload: &str) -> String {
     let v: serde_json::Value = serde_json::from_str(payload).unwrap_or(serde_json::Value::Null);
+    if task_type == "radar_harvest" {
+        return format!("Radar : {} sur {}", v["genre"].as_str().unwrap_or("?"), v["source"].as_str().unwrap_or("?"));
+    }
+    if task_type == "radar_enrich" {
+        return format!("Radar enrichissement : curateur #{}", v["curator_id"].as_i64().unwrap_or(0));
+    }
     if task_type == "enrich_venue" {
         let vid = v["venue_id"].as_i64().unwrap_or(0);
         let nom: Option<String> = pool.get().ok().and_then(|c| {
@@ -367,6 +373,8 @@ async fn drain(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i64, po
             "enrich_venue" => {
                 crate::commands::enrich::process_enrich_task(&client, &pool, &payload).await
             }
+            "radar_harvest" => crate::commands::radar::process_harvest_task(&pool, &payload).await,
+            "radar_enrich" => crate::commands::radar::process_enrich_task(&pool, &payload).await,
             _ => process_harvest_task(&client, &pool, &payload).await,
         };
         match result {
