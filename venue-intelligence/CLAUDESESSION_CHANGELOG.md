@@ -2,6 +2,45 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-08-01, v0.10.0, module Pulse (snapshots Spotify + spend Meta + planner)
+
+Brief utilisateur fourni pour une stack Next.js/Drizzle/Vercel (autre projet) : écarts signalés,
+adaptation VALIDÉE par l'utilisateur (SQLite + scheduler interne + clés dans Réglages, charts SVG
+maison, spotify_artist_id PAR artiste et non un id global).
+
+- **Schéma** : 6 tables pulse_ (tracked_tracks, artist_snapshots, track_snapshots,
+  playlist_watchlist, playlist_snapshots, meta_spend) avec contraintes UNIQUE (id, date) pour
+  upserts idempotents. `artists.spotify_artist_id` (ALTER + modèle + save + éditeur EPK).
+- **spotify.rs** : client credentials flow, cache token en mémoire (static Mutex, refresh 60s
+  avant expiry), retry 429 avec Retry-After (max 3), drop du token sur 401. Endpoints artists /
+  tracks (batch 50) / playlists (fields= name,followers,owner,tracks.items.track.id, 100 premiers
+  pour le flag "contient notre track"). `parse_spotify_id` accepte URL open.spotify.com
+  (intl-xx inclus), URI spotify:, id brut 22 chars ; testé (cargo test ok).
+- **meta.rs** : Graph API v21 insights level=campaign&time_increment=1, fenêtre glissante 3j,
+  pagination bornée, result extrait de actions[] selon meta_result_action_type (défaut
+  link_click), cost_per_result calculé, erreur 190 (token expiré) lisible et NON bloquante pour
+  la moitié Spotify. LECTURE SEULE.
+- **pulse.rs** : run_snapshot (Spotify puis Meta, rapport artists/tracks/playlists/spend_rows +
+  erreurs), pulse_snapshot (bouton manuel), auto_snapshot_on_launch (au lancement si aucun
+  snapshot aujourd'hui UTC, délai 5s, event pulse:snapshot-done), pulse_kpis (popularité artiste
+  + delta7, best track + delta, spend 30j, CPR 7j vs 30j), pulse_series (calendrier récursif
+  SQLite, séries artiste/track/spend + dates de sortie), CRUD tracked tracks + watchlist
+  (nom/owner résolus via API à l'ajout).
+- **UI /pulse** (nav + route lazy) : 3 onglets. Vue d'ensemble = sélecteurs artiste/track/période
+  30-90-180j, bouton Snapshot manuel, bento KPI, GRAPHIQUE OVERLAY SVG MAISON (barres spend axe
+  droit, lignes popularité 0-100 axe gauche, gaps non interpolés, lignes verticales pointillées
+  aux sorties, tooltips via <title>), gestion des tracks suivis. Playlists = table watchlist
+  (followers, delta 7/30j, sparkline SVG, badge "Notre track", ajout par URL, archiver).
+  Planificateur = front-load (~30% J1-J2, décroissance exp, plancher 5€/j, arrondi au centime
+  reporté sur J1), bar chart CSS + tableau cumul + COPIER (TSV date\tmontant), aucune écriture
+  Meta. i18n FR/EN sans tiret cadratin.
+- **Réglages > Pulse** : spotify_client_id/secret, meta_access_token, meta_ad_account_id,
+  meta_result_action_type. Stockés en local (settings), jamais commités.
+
+RESTE (config utilisateur, voir TODO) : créer l'app Spotify Developer, générer le token Meta
+long-lived, renseigner les clés + spotify_artist_id des artistes. monthly_listeners = saisie
+manuelle non exposée en UI pour l'instant (colonne prête).
+
 ## 2026-07-31, v0.9.4, fix filtres has_email/has_phone/has_website (camelCase Tauri)
 
 Bug : filtrer "Avec email" sortait tous les lieux (y compris sans email). Cause : `viListVenues`

@@ -45,10 +45,13 @@ pub fn run() {
             fs::create_dir_all(&dir).ok();
             let db_path = dir.join("pierscrm.db");
             let pool = db::init_pool(&db_path).expect("failed to init database");
+            let pool_for_pulse = pool.clone();
             app.manage(AppState {
                 pool,
                 cancels: Arc::new(Mutex::new(HashSet::new())),
             });
+            // Daily Pulse snapshot at launch (only if none was taken today).
+            commands::pulse::auto_snapshot_on_launch(pool_for_pulse, app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -111,6 +114,16 @@ pub fn run() {
             commands::harvest::vi_venue_stats,
             commands::harvest::vi_stop_run,
             commands::harvest::vi_run_tasks,
+            // pulse (spotify snapshots + meta spend)
+            commands::pulse::pulse_snapshot,
+            commands::pulse::pulse_kpis,
+            commands::pulse::pulse_series,
+            commands::pulse::pulse_tracked_list,
+            commands::pulse::pulse_tracked_add,
+            commands::pulse::pulse_tracked_toggle,
+            commands::pulse::pulse_watchlist,
+            commands::pulse::pulse_watchlist_add,
+            commands::pulse::pulse_watchlist_toggle,
             // venue intelligence (J5, enrichment)
             commands::enrich::vi_start_enrich,
             commands::enrich::vi_venue_detail,

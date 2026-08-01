@@ -279,6 +279,8 @@ pub struct Artist {
     #[serde(default)]
     pub audience_cities: Option<String>,
     #[serde(default)]
+    pub spotify_artist_id: Option<String>,
+    #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
@@ -314,6 +316,7 @@ impl Artist {
             fee_range: row.get("fee_range")?,
             stats: row.get("stats")?,
             audience_cities: row.get("audience_cities")?,
+            spotify_artist_id: row.get("spotify_artist_id")?,
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
         })

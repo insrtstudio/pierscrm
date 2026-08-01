@@ -353,6 +353,75 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
             updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS pulse_tracked_tracks (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            artist_id        INTEGER REFERENCES artists(id) ON DELETE SET NULL,
+            track_spotify_id TEXT NOT NULL UNIQUE,
+            name             TEXT,
+            release_date     TEXT,
+            is_active        INTEGER NOT NULL DEFAULT 1,
+            created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS pulse_artist_snapshots (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            artist_spotify_id TEXT NOT NULL,
+            snapshot_date     TEXT NOT NULL,
+            popularity        INTEGER,
+            followers         INTEGER,
+            monthly_listeners INTEGER,
+            created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(artist_spotify_id, snapshot_date)
+        );
+
+        CREATE TABLE IF NOT EXISTS pulse_track_snapshots (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            track_spotify_id TEXT NOT NULL,
+            track_name       TEXT,
+            snapshot_date    TEXT NOT NULL,
+            popularity       INTEGER,
+            created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(track_spotify_id, snapshot_date)
+        );
+
+        CREATE TABLE IF NOT EXISTS pulse_playlist_watchlist (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            playlist_spotify_id TEXT NOT NULL UNIQUE,
+            name                TEXT,
+            owner_name          TEXT,
+            notes               TEXT,
+            is_active           INTEGER NOT NULL DEFAULT 1,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS pulse_playlist_snapshots (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            playlist_id        INTEGER NOT NULL REFERENCES pulse_playlist_watchlist(id) ON DELETE CASCADE,
+            snapshot_date      TEXT NOT NULL,
+            followers          INTEGER,
+            track_count        INTEGER,
+            contains_our_track INTEGER NOT NULL DEFAULT 0,
+            created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(playlist_id, snapshot_date)
+        );
+
+        CREATE TABLE IF NOT EXISTS pulse_meta_spend (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id     TEXT NOT NULL,
+            campaign_name   TEXT,
+            spend_date      TEXT NOT NULL,
+            spend           REAL NOT NULL DEFAULT 0,
+            impressions     INTEGER,
+            clicks          INTEGER,
+            results         INTEGER,
+            cost_per_result REAL,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(campaign_id, spend_date)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pulse_track_snap ON pulse_track_snapshots(track_spotify_id, snapshot_date);
+        CREATE INDEX IF NOT EXISTS idx_pulse_spend_date ON pulse_meta_spend(spend_date);
+
         CREATE TABLE IF NOT EXISTS vi_ra_areas (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             slug        TEXT UNIQUE,
@@ -408,6 +477,7 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
         "ALTER TABLE artists ADD COLUMN fee_range TEXT",
         "ALTER TABLE artists ADD COLUMN stats TEXT",
         "ALTER TABLE artists ADD COLUMN audience_cities TEXT",
+        "ALTER TABLE artists ADD COLUMN spotify_artist_id TEXT",
         "ALTER TABLE contacts ADD COLUMN followup_dismissed INTEGER NOT NULL DEFAULT 0",
     ] {
         let _ = conn.execute(stmt, []);

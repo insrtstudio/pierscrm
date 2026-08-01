@@ -226,3 +226,26 @@ export const viStartEnrich = (force?: boolean) =>
   invoke<number>("vi_start_enrich", { force: force ?? false });
 export const viVenueDetail = (id: number) =>
   invoke<ViVenueFiche>("vi_venue_detail", { id });
+
+// ---- Pulse ----
+import type { PulseKpis, PulseReport, PulseSeries, TrackedTrack, WatchRow } from "./types";
+
+export const pulseSnapshot = () => invoke<PulseReport>("pulse_snapshot");
+export const pulseKpis = (artistSpotifyId?: string) =>
+  invoke<PulseKpis>("pulse_kpis", { artistSpotifyId: artistSpotifyId ?? null });
+export const pulseSeries = (p: { artist?: string; track?: string; days: number }) =>
+  invoke<PulseSeries>("pulse_series", {
+    artistSpotifyId: p.artist ?? null,
+    trackSpotifyId: p.track ?? null,
+    days: p.days,
+  });
+export const pulseTrackedList = () => invoke<TrackedTrack[]>("pulse_tracked_list");
+export const pulseTrackedAdd = (input: string, artistId?: number) =>
+  invoke<void>("pulse_tracked_add", { input, artistId: artistId ?? null });
+export const pulseTrackedToggle = (id: number, active: boolean) =>
+  invoke<void>("pulse_tracked_toggle", { id, active });
+export const pulseWatchlist = () => invoke<WatchRow[]>("pulse_watchlist");
+export const pulseWatchlistAdd = (input: string) =>
+  invoke<void>("pulse_watchlist_add", { input });
+export const pulseWatchlistToggle = (id: number, active: boolean) =>
+  invoke<void>("pulse_watchlist_toggle", { id, active });

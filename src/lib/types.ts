@@ -51,6 +51,7 @@ export interface Artist {
   fee_range?: string | null;
   stats?: string | null;
   audience_cities?: string | null;
+  spotify_artist_id?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -446,4 +447,62 @@ export interface DashboardStats {
   revenue_actual: number;
   tasks_done: number;
   tasks_total: number;
+}
+
+// ---- Pulse (Spotify snapshots + Meta spend) ----
+export interface PulseReport {
+  artists: number;
+  tracks: number;
+  playlists: number;
+  spend_rows: number;
+  errors: string[];
+  ran: boolean;
+}
+
+export interface PulseKpis {
+  artist_popularity?: number | null;
+  artist_delta7?: number | null;
+  artist_followers?: number | null;
+  best_track_name?: string | null;
+  best_track_popularity?: number | null;
+  best_track_delta7?: number | null;
+  spend_30d: number;
+  cpr_7d?: number | null;
+  cpr_30d?: number | null;
+  last_snapshot?: string | null;
+}
+
+export interface PulsePoint {
+  date: string;
+  artist_pop?: number | null;
+  track_pop?: number | null;
+  spend: number;
+}
+
+export interface PulseSeries {
+  points: PulsePoint[];
+  releases: [string, string][];
+}
+
+export interface TrackedTrack {
+  id: number;
+  track_spotify_id: string;
+  name?: string | null;
+  release_date?: string | null;
+  is_active: boolean;
+  latest_popularity?: number | null;
+}
+
+export interface WatchRow {
+  id: number;
+  playlist_spotify_id: string;
+  name?: string | null;
+  owner_name?: string | null;
+  notes?: string | null;
+  is_active: boolean;
+  followers?: number | null;
+  delta7?: number | null;
+  delta30?: number | null;
+  contains_our_track: boolean;
+  spark: number[];
 }

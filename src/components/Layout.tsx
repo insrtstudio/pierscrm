@@ -20,6 +20,7 @@ const NAV: NavItem[] = [
   { to: "/emails", key: "emails" },
   { to: "/import", key: "import" },
   { to: "/venues", key: "venues" },
+  { to: "/pulse", key: "pulse" },
   { to: "/budget", key: "budget" },
   { to: "/visa", key: "visa" },
 ];
@@ -36,6 +37,7 @@ function useMenuActions() {
       "nav:budget": "/budget",
       "nav:visa": "/visa",
       "nav:import": "/import",
+      "nav:pulse": "/pulse",
       "nav:settings": "/settings",
       "check-updates": "/settings",
       "new:artist": "/artists",

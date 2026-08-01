@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw, Info, PenLine, Search } from "lucide-react";
+import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw, Info, PenLine, Search, Activity } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import i18n from "../i18n";
 import { checkForUpdate, installAndRelaunch } from "../lib/updater";
@@ -77,6 +77,39 @@ export function Settings() {
   const saveSerper = async () => {
     await setSetting("serper_api_key", serperVal.trim());
     qc.invalidateQueries({ queryKey: ["setting", "serper_api_key"] });
+    toast(t("settings.saved"), "ok");
+  };
+
+  // ---- Pulse credentials (Spotify + Meta) ----
+  const PULSE_KEYS = [
+    "spotify_client_id",
+    "spotify_client_secret",
+    "meta_access_token",
+    "meta_ad_account_id",
+    "meta_result_action_type",
+  ] as const;
+  const { data: pulseRaw } = useQuery({
+    queryKey: ["settings", "pulse"],
+    queryFn: async () => {
+      const out: Record<string, string> = {};
+      for (const k of PULSE_KEYS) out[k] = (await getSetting(k)) ?? "";
+      return out;
+    },
+  });
+  const [pulseCfg, setPulseCfg] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (pulseRaw) setPulseCfg(pulseRaw);
+  }, [pulseRaw]);
+  const pinp = (k: string, type = "text") => ({
+    className: "input",
+    type,
+    autoComplete: "off",
+    value: pulseCfg[k] ?? "",
+    onChange: (e: any) => setPulseCfg((c) => ({ ...c, [k]: e.target.value })),
+  });
+  const savePulse = async () => {
+    for (const k of PULSE_KEYS) await setSetting(k, (pulseCfg[k] ?? "").trim());
+    qc.invalidateQueries({ queryKey: ["settings", "pulse"] });
     toast(t("settings.saved"), "ok");
   };
 
@@ -470,6 +503,37 @@ export function Settings() {
               </select>
             </Field>
             <p className="pb-2 text-2xs text-fg-faint">{t("settings.perf_hint")}</p>
+          </div>
+        </div>
+
+        {/* Pulse (Spotify + Meta) */}
+        <div className="card p-6">
+          <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
+            <Activity size={15} /> {t("settings.pulse_section")}
+          </div>
+          <p className="mb-4 text-xs text-fg-subtle">{t("settings.pulse_help")}</p>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+            <Field label="Spotify Client ID">
+              <input {...pinp("spotify_client_id")} />
+            </Field>
+            <Field label="Spotify Client Secret">
+              <input {...pinp("spotify_client_secret", "password")} />
+            </Field>
+            <Field label={t("settings.pulse_meta_token")}>
+              <input {...pinp("meta_access_token", "password")} />
+            </Field>
+            <Field label={t("settings.pulse_meta_account")}>
+              <input {...pinp("meta_ad_account_id")} placeholder="act_1234567890 ou 1234567890" />
+            </Field>
+            <Field label={t("settings.pulse_action_type")}>
+              <input {...pinp("meta_result_action_type")} placeholder="link_click" />
+            </Field>
+          </div>
+          <p className="mt-3 text-2xs text-fg-faint">{t("settings.pulse_hint")}</p>
+          <div className="mt-4 flex justify-end">
+            <button className="btn-primary" onClick={savePulse}>
+              {t("common.save")}
+            </button>
           </div>
         </div>
 

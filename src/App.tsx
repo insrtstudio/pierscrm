@@ -18,6 +18,7 @@ const Timeline = lazy(() => import("./pages/Timeline").then((m) => ({ default: m
 const Kpis = lazy(() => import("./pages/Kpis").then((m) => ({ default: m.Kpis })));
 const Visa = lazy(() => import("./pages/Visa").then((m) => ({ default: m.Visa })));
 const Venues = lazy(() => import("./pages/Venues").then((m) => ({ default: m.Venues })));
+const Pulse = lazy(() => import("./pages/Pulse").then((m) => ({ default: m.Pulse })));
 const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
 
 function Fallback() {
@@ -113,6 +114,14 @@ export function App() {
             element={
               <Suspense fallback={<Fallback />}>
                 <Visa />
+              </Suspense>
+            }
+          />
+          <Route
+            path="pulse"
+            element={
+              <Suspense fallback={<Fallback />}>
+                <Pulse />
               </Suspense>
             }
           />

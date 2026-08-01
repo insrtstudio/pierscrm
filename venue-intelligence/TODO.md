@@ -59,3 +59,14 @@ pour les décisions d'architecture.
 - Pas de fuzzy matching sur les noms d'artistes.
 - Pas de validation automatique qui remplace le triage humain.
 - Pas de refactor du CRM existant au passage.
+
+## Module Pulse (v0.10.0), configuration restante
+
+- [ ] Créer l'app Spotify Developer (developer.spotify.com/dashboard, mode développement suffit)
+      et coller Client ID + Client Secret dans Réglages > Pulse.
+- [ ] Renseigner le Spotify Artist ID de chaque artiste (fiche artiste > Modifier > EPK & booking,
+      lien open.spotify.com/artist/... accepté).
+- [ ] Générer un token Meta long-lived (Graph API Explorer + échange long-lived) et coller token +
+      Ad Account ID dans Réglages > Pulse. Optionnel : adapter meta_result_action_type.
+- [ ] Ajouter les tracks à suivre et les playlists de la watchlist dans /pulse.
+- [ ] Plus tard : saisie manuelle des monthly listeners (colonne en base, pas encore d'UI).

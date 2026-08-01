@@ -600,6 +600,9 @@ export function ArtistModal({
             <Field label={t("artists.audience_cities")} className="col-span-2">
               <input {...inp("audience_cities")} placeholder="Paris, Amsterdam, Berlin, Lyon" />
             </Field>
+            <Field label={t("artists.spotify_artist_id")} className="col-span-2">
+              <input {...inp("spotify_artist_id")} placeholder="ID artiste Spotify (22 caractères) ou lien open.spotify.com/artist/..." />
+            </Field>
           </div>
           <p className="mt-1.5 text-2xs text-fg-subtle">{t("artists.epk_hint")}</p>
         </div>
