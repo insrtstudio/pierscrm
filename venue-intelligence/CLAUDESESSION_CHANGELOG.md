@@ -2,6 +2,25 @@
 
 Journal de continuité entre sessions Claude Code. Le plus récent en haut.
 
+## 2026-08-06, v0.12.0, promotion des venues/curateurs vers les contacts (pour les campagnes)
+
+Bug/besoin : les venues n'apparaissaient pas dans l'audience des campagnes (BulkSend liste la table
+contacts). Seuls les curateurs avaient un bouton Promouvoir. Ajout de la promotion des VENUES + bulk.
+
+- **harvest.rs** : vi_promote_venue(id) (INSERT contacts category='venue', name/venue/area/email/website
+  + tel+pays dans notes, lie crm_contact_id, statut='valide', idempotent) + vi_promote_venues_bulk
+  (toutes les venues qualifie/valide non liees avec email).
+- **radar.rs** : radar_promote refactorise (idempotent, notes = kind+source) + radar_promote_bulk
+  (tous les curateurs non editoriaux avec email).
+- **Contacts** : category 'curator' ajoutee (CATEGORIES, type Category, i18n category.curator) donc
+  curateurs et venues filtrables dans Contacts ET BulkSend.
+- **UI** : Venues onglet Lieux -> bouton par ligne "Promouvoir" (si email et pas encore lie) + badge
+  "Dans les contacts", bouton barre "Tout promouvoir". Radar -> bouton "Tout promouvoir". Toutes les
+  invalidations rafraichissent aussi la query contacts.
+
+Resultat : depuis Venues/Radar, un clic (ou bulk) fait apparaitre les clubs/curateurs dans
+Emails > Envoi groupe (filtre categorie Salles/Curateurs + avec email).
+
 ## 2026-08-01, v0.11.1, Radar : sources Labels (MusicBrainz) + YouTube + verdict DSP
 
 Demande : ajouter Beatport, Apple Music, Amazon Music, Tidal, YouTube Music. Verdict de faisabilite

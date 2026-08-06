@@ -21,6 +21,7 @@ import {
   radarHarvest,
   radarList,
   radarPromote,
+  radarPromoteBulk,
   radarStats,
 } from "../lib/api";
 import type { ViRunProgress } from "../lib/types";
@@ -124,6 +125,16 @@ export function Radar() {
     }
   };
 
+  const promoteBulk = useMutation({
+    mutationFn: () => radarPromoteBulk(),
+    onSuccess: (n) => {
+      qc.invalidateQueries({ queryKey: ["radar_list"] });
+      qc.invalidateQueries({ queryKey: ["radar_stats"] });
+      qc.invalidateQueries({ queryKey: ["contacts"] });
+      toast(t("radar.promoted_bulk", { count: n }), "ok");
+    },
+    onError: (e: any) => toast(e?.toString?.() ?? "error", "error"),
+  });
   const promote = useMutation({
     mutationFn: (id: number) => radarPromote(id),
     onSuccess: () => {
@@ -193,6 +204,10 @@ export function Radar() {
             <button className="btn-outline" onClick={enrich} disabled={running} title={t("radar.enrich_hint")}>
               <Sparkles size={15} className={running ? "animate-pulse" : ""} />
               {t("radar.enrich")}
+            </button>
+            <button className="btn-outline" onClick={() => promoteBulk.mutate()} disabled={promoteBulk.isPending} title={t("radar.promote_bulk_hint")}>
+              <UserPlus size={15} />
+              {t("radar.promote_bulk")}
             </button>
           </div>
           {running && progress && (

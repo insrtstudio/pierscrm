@@ -222,6 +222,9 @@ export const viListVenues = (p: {
     offset: p.offset,
   });
 export const viVenueStats = () => invoke<ViVenueStats>("vi_venue_stats");
+export const viPromoteVenue = (id: number) => invoke<number>("vi_promote_venue", { id });
+export const viPromoteVenuesBulk = (withEmailOnly = true) =>
+  invoke<number>("vi_promote_venues_bulk", { withEmailOnly });
 export const viStartEnrich = (force?: boolean) =>
   invoke<number>("vi_start_enrich", { force: force ?? false });
 export const viVenueDetail = (id: number) =>
@@ -276,3 +279,4 @@ export const radarList = (p: {
   });
 export const radarStats = () => invoke<RadarStats>("radar_stats");
 export const radarPromote = (id: number) => invoke<number>("radar_promote", { id });
+export const radarPromoteBulk = () => invoke<number>("radar_promote_bulk");

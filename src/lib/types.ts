@@ -1,4 +1,4 @@
-export type Category = "venue" | "lineup" | "major" | "other";
+export type Category = "venue" | "curator" | "lineup" | "major" | "other";
 
 export type Status =
   | "to_contact"

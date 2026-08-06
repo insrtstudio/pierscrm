@@ -112,6 +112,8 @@ pub fn run() {
             commands::harvest::vi_list_runs,
             commands::harvest::vi_list_venues,
             commands::harvest::vi_venue_stats,
+            commands::harvest::vi_promote_venue,
+            commands::harvest::vi_promote_venues_bulk,
             commands::harvest::vi_stop_run,
             commands::harvest::vi_run_tasks,
             // pulse (spotify snapshots + meta spend)
@@ -130,6 +132,7 @@ pub fn run() {
             commands::radar::radar_list,
             commands::radar::radar_stats,
             commands::radar::radar_promote,
+            commands::radar::radar_promote_bulk,
             // venue intelligence (J5, enrichment)
             commands::enrich::vi_start_enrich,
             commands::enrich::vi_venue_detail,

@@ -25,6 +25,7 @@ import {
   AlertTriangle,
   CheckCheck,
   Disc3,
+  UserPlus,
 } from "lucide-react";
 import clsx from "clsx";
 import {
@@ -44,6 +45,8 @@ import {
   viStartHarvest,
   viStartEnrich,
   viVenueDetail,
+  viPromoteVenue,
+  viPromoteVenuesBulk,
   listArtists,
 } from "../lib/api";
 import type {
@@ -178,6 +181,27 @@ function VenuesTab() {
     }
   };
 
+  const promote = useMutation({
+    mutationFn: (id: number) => viPromoteVenue(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["vi_venues"] });
+      qc.invalidateQueries({ queryKey: ["vi_venue_stats"] });
+      qc.invalidateQueries({ queryKey: ["contacts"] });
+      toast(t("venues.promoted"), "ok");
+    },
+    onError: (e: any) => toast(e?.toString?.() ?? "error", "error"),
+  });
+  const promoteBulk = useMutation({
+    mutationFn: () => viPromoteVenuesBulk(true),
+    onSuccess: (n) => {
+      qc.invalidateQueries({ queryKey: ["vi_venues"] });
+      qc.invalidateQueries({ queryKey: ["vi_venue_stats"] });
+      qc.invalidateQueries({ queryKey: ["contacts"] });
+      toast(t("venues.promoted_bulk", { count: n }), "ok");
+    },
+    onError: (e: any) => toast(e?.toString?.() ?? "error", "error"),
+  });
+
   const statChips: { key: string; label: string; value: number; tone?: string; active?: boolean; onClick?: () => void }[] =
     stats
       ? [
@@ -273,7 +297,16 @@ function VenuesTab() {
             </option>
           ))}
         </select>
-        <button className="btn-primary ml-auto" onClick={enrich} disabled={enriching} title={t("venues.enrich_hint")}>
+        <button
+          className="btn-outline ml-auto"
+          onClick={() => promoteBulk.mutate()}
+          disabled={promoteBulk.isPending}
+          title={t("venues.promote_bulk_hint")}
+        >
+          <UserPlus size={15} />
+          {t("venues.promote_bulk")}
+        </button>
+        <button className="btn-primary" onClick={enrich} disabled={enriching} title={t("venues.enrich_hint")}>
           <Sparkles size={15} className={enriching ? "animate-pulse" : ""} />
           {t("venues.enrich")}
         </button>
@@ -405,19 +438,39 @@ function VenuesTab() {
                     </span>
                   </td>
                   <td className="text-right">
-                    {v.ra_url && (
-                      <button
-                        className="btn-ghost px-2 py-1.5"
-                        title={t("venues.open_ra")}
-                        aria-label={t("venues.open_ra")}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openUrl(v.ra_url!).catch(() => {});
-                        }}
-                      >
-                        <ExternalLink size={15} />
-                      </button>
-                    )}
+                    <div className="flex justify-end gap-1">
+                      {!v.crm_contact_id && v.best_email && (
+                        <button
+                          className="btn-outline py-1.5"
+                          title={t("venues.promote_hint")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            promote.mutate(v.id);
+                          }}
+                        >
+                          <UserPlus size={13} />
+                          {t("radar.promote")}
+                        </button>
+                      )}
+                      {v.crm_contact_id && (
+                        <span className="badge bg-emerald-500/15 text-emerald-500">
+                          <Check size={11} /> {t("venues.in_pipeline")}
+                        </span>
+                      )}
+                      {v.ra_url && (
+                        <button
+                          className="btn-ghost px-2 py-1.5"
+                          title={t("venues.open_ra")}
+                          aria-label={t("venues.open_ra")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openUrl(v.ra_url!).catch(() => {});
+                          }}
+                        >
+                          <ExternalLink size={15} />
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

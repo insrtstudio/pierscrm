@@ -579,11 +579,27 @@ pub fn radar_stats(state: State<AppState>) -> Result<RadarStats, String> {
 }
 
 /// Promote a curator into the CRM contacts pipeline (category 'curator').
+/// Idempotent: returns the existing contact if already linked.
 #[tauri::command]
 pub fn radar_promote(state: State<AppState>, id: i64) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
-    let (nom, url): (String, Option<String>) = conn
-        .query_row("SELECT nom, url FROM radar_curators WHERE id=?1", params![id], |r| Ok((r.get(0)?, r.get(1)?)))
+    promote_curator_inner(&conn, id)
+}
+
+fn promote_curator_inner(conn: &rusqlite::Connection, id: i64) -> Result<i64, String> {
+    if let Ok(Some(cid)) = conn.query_row(
+        "SELECT crm_contact_id FROM radar_curators WHERE id=?1",
+        params![id],
+        |r| r.get::<_, Option<i64>>(0),
+    ) {
+        return Ok(cid);
+    }
+    let (nom, url, source, kind): (String, Option<String>, String, String) = conn
+        .query_row(
+            "SELECT nom, url, source, kind FROM radar_curators WHERE id=?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
         .map_err(|e| e.to_string())?;
     let email: Option<String> = conn
         .query_row(
@@ -593,13 +609,42 @@ pub fn radar_promote(state: State<AppState>, id: i64) -> Result<i64, String> {
         )
         .ok();
     conn.execute(
-        "INSERT INTO contacts (category, name, email, website, status, reason)
-         VALUES ('curator', ?1, ?2, ?3, 'to_contact', 'Radar')",
-        params![nom, email, url],
+        "INSERT INTO contacts (category, name, email, website, notes, contact_channel, status, reason)
+         VALUES ('curator', ?1, ?2, ?3, ?4, 'email', 'to_contact', 'Radar')",
+        params![nom, email, url, format!("Radar {} ({})", kind, source)],
     )
     .map_err(|e| e.to_string())?;
     let contact_id = conn.last_insert_rowid();
     conn.execute("UPDATE radar_curators SET crm_contact_id=?2, statut='valide' WHERE id=?1", params![id, contact_id])
         .map_err(|e| e.to_string())?;
     Ok(contact_id)
+}
+
+/// Promote every not-yet-linked curator with an email into contacts.
+#[tauri::command]
+pub fn radar_promote_bulk(state: State<AppState>) -> Result<i64, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let ids: Vec<i64> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM radar_curators WHERE crm_contact_id IS NULL AND editorial=0
+                 AND EXISTS(SELECT 1 FROM radar_contacts c WHERE c.curator_id=radar_curators.id AND c.type='email')",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())?;
+        let mut v = Vec::new();
+        for r in rows {
+            if let Ok(x) = r {
+                v.push(x);
+            }
+        }
+        v
+    };
+    let mut n = 0;
+    for id in ids {
+        if promote_curator_inner(&conn, id).is_ok() {
+            n += 1;
+        }
+    }
+    Ok(n)
 }

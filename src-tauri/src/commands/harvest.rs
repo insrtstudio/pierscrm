@@ -852,6 +852,84 @@ pub fn vi_list_venues(
     Ok(out)
 }
 
+// ---------------- Promote to CRM contacts ----------------
+
+/// Promote one venue into the contacts pipeline (category 'venue') so it shows up
+/// in email campaigns. Idempotent: returns the existing contact if already linked.
+#[tauri::command]
+pub fn vi_promote_venue(state: State<AppState>, id: i64) -> Result<i64, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    promote_venue_inner(&conn, id)
+}
+
+fn promote_venue_inner(conn: &rusqlite::Connection, id: i64) -> Result<i64, String> {
+    if let Ok(Some(cid)) = conn.query_row(
+        "SELECT crm_contact_id FROM vi_venues WHERE id=?1",
+        params![id],
+        |r| r.get::<_, Option<i64>>(0),
+    ) {
+        return Ok(cid);
+    }
+    let (nom, ville, pays, site, tel): (String, Option<String>, Option<String>, Option<String>, Option<String>) =
+        conn.query_row(
+            "SELECT nom, ville, pays, site_web, telephone FROM vi_venues WHERE id=?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    let email: Option<String> = conn
+        .query_row(
+            "SELECT valeur FROM vi_contacts WHERE venue_id=?1 AND type='email' ORDER BY score DESC LIMIT 1",
+            params![id],
+            |r| r.get(0),
+        )
+        .ok();
+    conn.execute(
+        "INSERT INTO contacts (category, name, venue, area, email, website, notes, contact_channel, status, reason)
+         VALUES ('venue', ?1, ?1, ?2, ?3, ?4, ?5, 'email', 'to_contact', 'Venue Intelligence')",
+        params![nom, ville, email, site, tel.map(|t| format!("Tel: {} · {}", t, pays.unwrap_or_default()))],
+    )
+    .map_err(|e| e.to_string())?;
+    let contact_id = conn.last_insert_rowid();
+    conn.execute(
+        "UPDATE vi_venues SET crm_contact_id=?2, statut='valide', updated_at=datetime('now') WHERE id=?1",
+        params![id, contact_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(contact_id)
+}
+
+/// Promote every not-yet-linked qualified/validated venue (with an email by
+/// default) into contacts. Returns how many were added.
+#[tauri::command]
+pub fn vi_promote_venues_bulk(state: State<AppState>, with_email_only: Option<bool>) -> Result<i64, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let mut sql = String::from(
+        "SELECT id FROM vi_venues WHERE statut IN ('qualifie','valide') AND crm_contact_id IS NULL",
+    );
+    if with_email_only != Some(false) {
+        sql.push_str(" AND EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=vi_venues.id AND c.type='email')");
+    }
+    let ids: Vec<i64> = {
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())?;
+        let mut v = Vec::new();
+        for r in rows {
+            if let Ok(x) = r {
+                v.push(x);
+            }
+        }
+        v
+    };
+    let mut n = 0;
+    for id in ids {
+        if promote_venue_inner(&conn, id).is_ok() {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 // ---------------- Venue dashboard stats ----------------
 
 #[derive(Serialize)]

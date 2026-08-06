@@ -135,6 +135,12 @@ export const fr = {
     played_hint: "Un de vos artistes a déjà joué dans ce lieu (d'après vos events / bookings confirmés).",
     contacted_badge: "Contacté",
     contacted_hint: "Ce lieu correspond à un contact déjà engagé dans votre pipeline.",
+    promoted: "Ajouté aux contacts (catégorie Salles).",
+    promoted_bulk: "{{count}} salles ajoutées aux contacts.",
+    promote_bulk: "Tout promouvoir",
+    promote_bulk_hint: "Ajoute aux contacts toutes les salles qualifiées avec email (prêtes pour une campagne).",
+    promote_hint: "Ajouter cette salle aux contacts",
+    in_pipeline: "Dans les contacts",
   },
   pulse: {
     title: "Pulse",
@@ -218,6 +224,9 @@ export const fr = {
     empty: "Aucun curateur pour le moment.",
     empty_hint: "Choisissez des genres et lancez un scan Spotify / Deezer.",
     count: "{{count}} curateurs",
+    promoted_bulk: "{{count}} curateurs ajoutés aux contacts.",
+    promote_bulk: "Tout promouvoir",
+    promote_bulk_hint: "Ajoute aux contacts tous les curateurs avec email.",
   },
   common: {
     add: "Ajouter",
@@ -245,6 +254,7 @@ export const fr = {
   category: {
     all: "Tous",
     venue: "Salles",
+    curator: "Curateurs",
     lineup: "Line-ups",
     major: "Majors",
     other: "Autres",
