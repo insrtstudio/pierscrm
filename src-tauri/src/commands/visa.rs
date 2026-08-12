@@ -5,8 +5,8 @@ use tauri::State;
 
 // ---------- Country knowledge base ----------
 
-#[tauri::command]
-pub fn list_visa_countries(state: State<AppState>) -> Result<Vec<VisaCountry>, String> {
+#[tauri::command(async)]
+pub fn list_visa_countries(state: State<'_, AppState>) -> Result<Vec<VisaCountry>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare("SELECT * FROM visa_countries ORDER BY name COLLATE NOCASE")
@@ -21,8 +21,8 @@ pub fn list_visa_countries(state: State<AppState>) -> Result<Vec<VisaCountry>, S
     Ok(out)
 }
 
-#[tauri::command]
-pub fn save_visa_country(state: State<AppState>, country: VisaCountry) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn save_visa_country(state: State<'_, AppState>, country: VisaCountry) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO visa_countries (code, name, work_rules, visa_types, processing_time, required_docs, notes, official_link, updated_at)
@@ -40,8 +40,8 @@ pub fn save_visa_country(state: State<AppState>, country: VisaCountry) -> Result
     Ok(())
 }
 
-#[tauri::command]
-pub fn delete_visa_country(state: State<AppState>, code: String) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn delete_visa_country(state: State<'_, AppState>, code: String) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM visa_countries WHERE code=?1", params![code])
         .map_err(|e| e.to_string())?;
@@ -50,8 +50,8 @@ pub fn delete_visa_country(state: State<AppState>, code: String) -> Result<(), S
 
 // ---------- Dossiers ----------
 
-#[tauri::command]
-pub fn list_dossiers(state: State<AppState>) -> Result<Vec<VisaDossier>, String> {
+#[tauri::command(async)]
+pub fn list_dossiers(state: State<'_, AppState>) -> Result<Vec<VisaDossier>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare("SELECT * FROM visa_dossiers ORDER BY updated_at DESC, id DESC")
@@ -66,8 +66,8 @@ pub fn list_dossiers(state: State<AppState>) -> Result<Vec<VisaDossier>, String>
     Ok(out)
 }
 
-#[tauri::command]
-pub fn save_dossier(state: State<AppState>, dossier: VisaDossier) -> Result<i64, String> {
+#[tauri::command(async)]
+pub fn save_dossier(state: State<'_, AppState>, dossier: VisaDossier) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     match dossier.id {
         Some(id) => {
@@ -103,8 +103,8 @@ pub fn save_dossier(state: State<AppState>, dossier: VisaDossier) -> Result<i64,
     }
 }
 
-#[tauri::command]
-pub fn delete_dossier(state: State<AppState>, id: i64) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn delete_dossier(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM visa_dossiers WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;

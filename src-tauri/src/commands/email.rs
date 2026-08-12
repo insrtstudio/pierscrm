@@ -340,13 +340,13 @@ fn build_message(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub fn get_smtp_config(state: State<AppState>) -> Result<SmtpConfig, String> {
+#[tauri::command(async)]
+pub fn get_smtp_config(state: State<'_, AppState>) -> Result<SmtpConfig, String> {
     load_smtp(&state)
 }
 
-#[tauri::command]
-pub fn save_smtp_config(state: State<AppState>, config: SmtpConfig) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn save_smtp_config(state: State<'_, AppState>, config: SmtpConfig) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
     conn.execute(
@@ -358,8 +358,8 @@ pub fn save_smtp_config(state: State<AppState>, config: SmtpConfig) -> Result<()
     Ok(())
 }
 
-#[tauri::command]
-pub fn test_smtp(state: State<AppState>) -> Result<bool, String> {
+#[tauri::command(async)]
+pub fn test_smtp(state: State<'_, AppState>) -> Result<bool, String> {
     let cfg = load_smtp(&state)?;
     let transport = build_transport(&cfg)?;
     transport.test_connection().map_err(|e| e.to_string())
@@ -372,9 +372,9 @@ pub struct SendResult {
     pub tracked: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn send_email(
-    state: State<AppState>,
+    state: State<'_, AppState>,
     contact_id: Option<i64>,
     campaign_id: Option<i64>,
     to: String,
@@ -445,9 +445,9 @@ pub fn send_email(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_emails(
-    state: State<AppState>,
+    state: State<'_, AppState>,
     contact_id: Option<i64>,
 ) -> Result<Vec<crate::models::EmailLog>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
@@ -526,10 +526,10 @@ fn non_empty(s: Option<String>) -> Option<String> {
 /// Send one email per contact in `contact_ids`, rendering {{variables}} from the
 /// contact + its campaign (event/artist/target date). One SMTP connection is
 /// reused; progress is streamed via the `bulk-progress` event.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn send_bulk(
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
     campaign_id: Option<i64>,
     contact_ids: Vec<i64>,
     subject: String,
@@ -703,8 +703,8 @@ pub fn send_bulk(
 
 /// Apply a batch of open events (fetched by the frontend from the tracking
 /// endpoint) to the local email log. Returns how many rows were updated.
-#[tauri::command]
-pub fn apply_opens(state: State<AppState>, opens: Vec<OpenRecord>) -> Result<usize, String> {
+#[tauri::command(async)]
+pub fn apply_opens(state: State<'_, AppState>, opens: Vec<OpenRecord>) -> Result<usize, String> {
     let mut conn = state.pool.get().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     let mut updated = 0usize;

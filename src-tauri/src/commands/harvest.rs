@@ -476,9 +476,9 @@ pub struct TaskRow {
 
 /// Task-level log for a run (failed tasks by default), so the UI can explain
 /// exactly what went wrong on a run.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn vi_run_tasks(
-    state: State<AppState>,
+    state: State<'_, AppState>,
     run_id: i64,
     only_failed: Option<bool>,
 ) -> Result<Vec<TaskRow>, String> {
@@ -512,8 +512,8 @@ pub fn vi_run_tasks(
 
 /// Ask a running run to stop. Workers see the flag on their next loop and exit;
 /// the run is marked 'arrete' and stays resumable.
-#[tauri::command]
-pub fn vi_stop_run(state: State<AppState>, run_id: i64) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn vi_stop_run(state: State<'_, AppState>, run_id: i64) -> Result<(), String> {
     state.cancels.lock().unwrap_or_else(|e| e.into_inner()).insert(run_id);
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let _ = conn.execute(
@@ -675,8 +675,8 @@ pub struct RunRow {
     pub tasks_echec: i64,
 }
 
-#[tauri::command]
-pub fn vi_list_runs(state: State<AppState>) -> Result<Vec<RunRow>, String> {
+#[tauri::command(async)]
+pub fn vi_list_runs(state: State<'_, AppState>) -> Result<Vec<RunRow>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
@@ -749,9 +749,9 @@ pub struct VenueRow {
     pub played: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn vi_list_venues(
-    state: State<AppState>,
+    state: State<'_, AppState>,
     statut: Option<String>,
     pays: Option<String>,
     search: Option<String>,
@@ -764,7 +764,49 @@ pub fn vi_list_venues(
     offset: Option<i64>,
 ) -> Result<Vec<VenueRow>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
-    let mut sql = format!(
+
+    // Filters and paging first, decoration second. Selecting the page in an inner
+    // query means the six correlated subqueries below run for the rows actually
+    // returned, not for every row the paging walks past: at OFFSET 20 000 that is
+    // the difference between 0.46 s and 0.06 s. The ORDER BY matches
+    // idx_vi_venues_sort so the inner query neither sorts nor scans.
+    let mut filters = String::new();
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(s) = statut.filter(|s| !s.is_empty() && s != "all") {
+        filters.push_str(" AND v.statut=?");
+        args.push(Box::new(s));
+    }
+    if let Some(p) = pays.filter(|s| !s.is_empty() && s != "all") {
+        filters.push_str(" AND v.pays=?");
+        args.push(Box::new(p));
+    }
+    if let Some(q) = search.filter(|s| !s.trim().is_empty()) {
+        filters.push_str(" AND (v.nom LIKE ? OR v.ville LIKE ? OR v.adresse LIKE ?)");
+        let like = format!("%{}%", q.trim());
+        args.push(Box::new(like.clone()));
+        args.push(Box::new(like.clone()));
+        args.push(Box::new(like));
+    }
+    if has_email == Some(true) {
+        filters.push_str(" AND EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email')");
+    }
+    if has_phone == Some(true) {
+        filters.push_str(
+            " AND ((v.telephone IS NOT NULL AND trim(v.telephone) != '')
+                   OR EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='telephone'))",
+        );
+    }
+    if has_website == Some(true) {
+        filters.push_str(" AND v.site_web IS NOT NULL AND trim(v.site_web) != ''");
+    }
+    if contacted == Some(true) {
+        filters.push_str(&format!(" AND {}", CONTACTED_SQL));
+    }
+    if played == Some(true) {
+        filters.push_str(&format!(" AND {}", PLAYED_SQL));
+    }
+
+    let sql = format!(
         "SELECT v.id, v.nom, v.ville, v.pays, v.region_cible, v.statut, v.priorite, v.score_qualif,
                 v.nb_events_periode,
                 (SELECT COUNT(*) FROM vi_evidence e WHERE e.venue_id=v.id),
@@ -776,46 +818,15 @@ pub fn vi_list_venues(
                 v.crm_contact_id,
                 {contacted} AS is_contacted,
                 {played} AS has_played
-         FROM vi_venues v WHERE 1=1",
+         FROM (SELECT * FROM vi_venues v WHERE 1=1{filters}
+               ORDER BY v.score_qualif DESC, v.nb_events_periode DESC, v.nom COLLATE NOCASE
+               LIMIT {limit} OFFSET {offset}) v",
         contacted = CONTACTED_SQL,
         played = PLAYED_SQL,
+        filters = filters,
+        limit = limit.unwrap_or(200).clamp(1, 1000),
+        offset = offset.unwrap_or(0).max(0),
     );
-    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    if let Some(s) = statut.filter(|s| !s.is_empty() && s != "all") {
-        sql.push_str(" AND v.statut=?");
-        args.push(Box::new(s));
-    }
-    if let Some(p) = pays.filter(|s| !s.is_empty() && s != "all") {
-        sql.push_str(" AND v.pays=?");
-        args.push(Box::new(p));
-    }
-    if let Some(q) = search.filter(|s| !s.trim().is_empty()) {
-        sql.push_str(" AND (v.nom LIKE ? OR v.ville LIKE ? OR v.adresse LIKE ?)");
-        let like = format!("%{}%", q.trim());
-        args.push(Box::new(like.clone()));
-        args.push(Box::new(like.clone()));
-        args.push(Box::new(like));
-    }
-    if has_email == Some(true) {
-        sql.push_str(" AND EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email')");
-    }
-    if has_phone == Some(true) {
-        sql.push_str(
-            " AND ((v.telephone IS NOT NULL AND trim(v.telephone) != '')
-                   OR EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='telephone'))",
-        );
-    }
-    if has_website == Some(true) {
-        sql.push_str(" AND v.site_web IS NOT NULL AND trim(v.site_web) != ''");
-    }
-    if contacted == Some(true) {
-        sql.push_str(&format!(" AND {}", CONTACTED_SQL));
-    }
-    if played == Some(true) {
-        sql.push_str(&format!(" AND {}", PLAYED_SQL));
-    }
-    sql.push_str(" ORDER BY v.score_qualif DESC, v.nb_events_periode DESC, v.nom COLLATE NOCASE");
-    sql.push_str(&format!(" LIMIT {} OFFSET {}", limit.unwrap_or(200).clamp(1, 1000), offset.unwrap_or(0).max(0)));
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
@@ -856,8 +867,8 @@ pub fn vi_list_venues(
 
 /// Promote one venue into the contacts pipeline (category 'venue') so it shows up
 /// in email campaigns. Idempotent: returns the existing contact if already linked.
-#[tauri::command]
-pub fn vi_promote_venue(state: State<AppState>, id: i64) -> Result<i64, String> {
+#[tauri::command(async)]
+pub fn vi_promote_venue(state: State<'_, AppState>, id: i64) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     promote_venue_inner(&conn, id)
 }
@@ -901,8 +912,8 @@ fn promote_venue_inner(conn: &rusqlite::Connection, id: i64) -> Result<i64, Stri
 
 /// Promote every not-yet-linked qualified/validated venue (with an email by
 /// default) into contacts. Returns how many were added.
-#[tauri::command]
-pub fn vi_promote_venues_bulk(state: State<AppState>, with_email_only: Option<bool>) -> Result<i64, String> {
+#[tauri::command(async)]
+pub fn vi_promote_venues_bulk(state: State<'_, AppState>, with_email_only: Option<bool>) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut sql = String::from(
         "SELECT id FROM vi_venues WHERE statut IN ('qualifie','valide') AND crm_contact_id IS NULL",
@@ -953,8 +964,8 @@ pub struct VenueStats {
     pub top_countries: Vec<CountryCount>,
 }
 
-#[tauri::command]
-pub fn vi_venue_stats(state: State<AppState>) -> Result<VenueStats, String> {
+#[tauri::command(async)]
+pub fn vi_venue_stats(state: State<'_, AppState>) -> Result<VenueStats, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let one = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
     let by_statut = |s: &str| -> i64 {

@@ -7,8 +7,8 @@ use tauri::State;
 
 // ---------- Templates ----------
 
-#[tauri::command]
-pub fn list_templates(state: State<AppState>) -> Result<Vec<Template>, String> {
+#[tauri::command(async)]
+pub fn list_templates(state: State<'_, AppState>) -> Result<Vec<Template>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare("SELECT id, name, subject, body, created_at FROM templates ORDER BY id")
@@ -31,8 +31,8 @@ pub fn list_templates(state: State<AppState>) -> Result<Vec<Template>, String> {
     Ok(out)
 }
 
-#[tauri::command]
-pub fn save_template(state: State<AppState>, template: Template) -> Result<i64, String> {
+#[tauri::command(async)]
+pub fn save_template(state: State<'_, AppState>, template: Template) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     match template.id {
         Some(id) => {
@@ -54,8 +54,8 @@ pub fn save_template(state: State<AppState>, template: Template) -> Result<i64, 
     }
 }
 
-#[tauri::command]
-pub fn delete_template(state: State<AppState>, id: i64) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn delete_template(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM templates WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
@@ -64,8 +64,8 @@ pub fn delete_template(state: State<AppState>, id: i64) -> Result<(), String> {
 
 // ---------- Budget ----------
 
-#[tauri::command]
-pub fn list_budget(state: State<AppState>) -> Result<Vec<BudgetItem>, String> {
+#[tauri::command(async)]
+pub fn list_budget(state: State<'_, AppState>) -> Result<Vec<BudgetItem>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare("SELECT id, category, item, min_cost, max_cost, actual, kind, notes, sort FROM budget_items ORDER BY kind, sort, id")
@@ -92,8 +92,8 @@ pub fn list_budget(state: State<AppState>) -> Result<Vec<BudgetItem>, String> {
     Ok(out)
 }
 
-#[tauri::command]
-pub fn save_budget_item(state: State<AppState>, item: BudgetItem) -> Result<i64, String> {
+#[tauri::command(async)]
+pub fn save_budget_item(state: State<'_, AppState>, item: BudgetItem) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     match item.id {
         Some(id) => {
@@ -115,8 +115,8 @@ pub fn save_budget_item(state: State<AppState>, item: BudgetItem) -> Result<i64,
     }
 }
 
-#[tauri::command]
-pub fn delete_budget_item(state: State<AppState>, id: i64) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn delete_budget_item(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM budget_items WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
@@ -125,8 +125,8 @@ pub fn delete_budget_item(state: State<AppState>, id: i64) -> Result<(), String>
 
 // ---------- Tasks ----------
 
-#[tauri::command]
-pub fn list_tasks(state: State<AppState>) -> Result<Vec<Task>, String> {
+#[tauri::command(async)]
+pub fn list_tasks(state: State<'_, AppState>) -> Result<Vec<Task>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare("SELECT id, period, title, done, owner, due_date, sort FROM tasks ORDER BY sort, id")
@@ -151,8 +151,8 @@ pub fn list_tasks(state: State<AppState>) -> Result<Vec<Task>, String> {
     Ok(out)
 }
 
-#[tauri::command]
-pub fn save_task(state: State<AppState>, task: Task) -> Result<i64, String> {
+#[tauri::command(async)]
+pub fn save_task(state: State<'_, AppState>, task: Task) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     match task.id {
         Some(id) => {
@@ -174,8 +174,8 @@ pub fn save_task(state: State<AppState>, task: Task) -> Result<i64, String> {
     }
 }
 
-#[tauri::command]
-pub fn delete_task(state: State<AppState>, id: i64) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn delete_task(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM tasks WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
@@ -184,8 +184,8 @@ pub fn delete_task(state: State<AppState>, id: i64) -> Result<(), String> {
 
 // ---------- KPIs ----------
 
-#[tauri::command]
-pub fn list_kpis(state: State<AppState>, artist_id: Option<i64>) -> Result<Vec<Kpi>, String> {
+#[tauri::command(async)]
+pub fn list_kpis(state: State<'_, AppState>, artist_id: Option<i64>) -> Result<Vec<Kpi>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let map = |r: &rusqlite::Row| -> rusqlite::Result<Kpi> {
         Ok(Kpi {
@@ -222,8 +222,8 @@ pub fn list_kpis(state: State<AppState>, artist_id: Option<i64>) -> Result<Vec<K
     Ok(out)
 }
 
-#[tauri::command]
-pub fn save_kpi(state: State<AppState>, kpi: Kpi) -> Result<i64, String> {
+#[tauri::command(async)]
+pub fn save_kpi(state: State<'_, AppState>, kpi: Kpi) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     match kpi.id {
         Some(id) => {
@@ -245,8 +245,8 @@ pub fn save_kpi(state: State<AppState>, kpi: Kpi) -> Result<i64, String> {
     }
 }
 
-#[tauri::command]
-pub fn delete_kpi(state: State<AppState>, id: i64) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn delete_kpi(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM kpis WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
@@ -255,8 +255,8 @@ pub fn delete_kpi(state: State<AppState>, id: i64) -> Result<(), String> {
 
 // ---------- Settings (generic key/value) ----------
 
-#[tauri::command]
-pub fn get_setting(state: State<AppState>, key: String) -> Result<Option<String>, String> {
+#[tauri::command(async)]
+pub fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let v: Option<String> = conn
         .query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| r.get(0))
@@ -264,8 +264,8 @@ pub fn get_setting(state: State<AppState>, key: String) -> Result<Option<String>
     Ok(v)
 }
 
-#[tauri::command]
-pub fn set_setting(state: State<AppState>, key: String, value: String) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO settings (key, value) VALUES (?1, ?2)
@@ -301,8 +301,8 @@ pub struct DashboardStats {
     pub tasks_total: i64,
 }
 
-#[tauri::command]
-pub fn dashboard_stats(state: State<AppState>) -> Result<DashboardStats, String> {
+#[tauri::command(async)]
+pub fn dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStats, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
 
     let mut by_status = HashMap::new();

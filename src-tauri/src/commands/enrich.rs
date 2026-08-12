@@ -617,8 +617,8 @@ mod tests {
     }
 }
 
-#[tauri::command]
-pub fn vi_venue_detail(state: State<AppState>, id: i64) -> Result<ViVenueFiche, String> {
+#[tauri::command(async)]
+pub fn vi_venue_detail(state: State<'_, AppState>, id: i64) -> Result<ViVenueFiche, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
 
     let mut fiche = conn

@@ -4,8 +4,8 @@ use rusqlite::params;
 use std::io::Read;
 use tauri::State;
 
-#[tauri::command]
-pub fn list_artists(state: State<AppState>) -> Result<Vec<Artist>, String> {
+#[tauri::command(async)]
+pub fn list_artists(state: State<'_, AppState>) -> Result<Vec<Artist>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare("SELECT * FROM artists ORDER BY name COLLATE NOCASE")
@@ -20,8 +20,8 @@ pub fn list_artists(state: State<AppState>) -> Result<Vec<Artist>, String> {
     Ok(out)
 }
 
-#[tauri::command]
-pub fn get_artist(state: State<AppState>, id: i64) -> Result<Option<Artist>, String> {
+#[tauri::command(async)]
+pub fn get_artist(state: State<'_, AppState>, id: i64) -> Result<Option<Artist>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare("SELECT * FROM artists WHERE id=?1")
@@ -35,8 +35,8 @@ pub fn get_artist(state: State<AppState>, id: i64) -> Result<Option<Artist>, Str
     }
 }
 
-#[tauri::command]
-pub fn save_artist(state: State<AppState>, artist: Artist) -> Result<i64, String> {
+#[tauri::command(async)]
+pub fn save_artist(state: State<'_, AppState>, artist: Artist) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let p = params![
         artist.name,
@@ -106,8 +106,8 @@ pub fn save_artist(state: State<AppState>, artist: Artist) -> Result<i64, String
     }
 }
 
-#[tauri::command]
-pub fn delete_artist(state: State<AppState>, id: i64) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn delete_artist(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM artists WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
@@ -116,7 +116,7 @@ pub fn delete_artist(state: State<AppState>, id: i64) -> Result<(), String> {
 
 /// Read an image file from disk and return it as a base64 `data:` URL,
 /// so avatars embed cleanly in the UI and in the PDF/print export.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn image_to_data_url(path: String) -> Result<String, String> {
     let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();

@@ -3,9 +3,9 @@ use crate::AppState;
 use rusqlite::params;
 use tauri::State;
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_events(
-    state: State<AppState>,
+    state: State<'_, AppState>,
     from: Option<String>,
     to: Option<String>,
     artist_id: Option<i64>,
@@ -38,8 +38,8 @@ pub fn list_events(
     Ok(out)
 }
 
-#[tauri::command]
-pub fn save_event(state: State<AppState>, event: Event) -> Result<i64, String> {
+#[tauri::command(async)]
+pub fn save_event(state: State<'_, AppState>, event: Event) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     match event.id {
         Some(id) => {
@@ -66,8 +66,8 @@ pub fn save_event(state: State<AppState>, event: Event) -> Result<i64, String> {
     }
 }
 
-#[tauri::command]
-pub fn delete_event(state: State<AppState>, id: i64) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn delete_event(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM events WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;

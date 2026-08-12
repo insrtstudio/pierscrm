@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
+import { useDebounced } from "../lib/hooks";
 import {
   Plus,
   Search,
@@ -38,6 +40,8 @@ export function Contacts() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [editing, setEditing] = useState<Contact | null>(null);
   const [composing, setComposing] = useState<Contact | null>(null);
+  // Typing must not fire a query per keystroke.
+  const dSearch = useDebounced(search, 250);
 
   const {
     data: contacts = [],
@@ -45,9 +49,26 @@ export function Contacts() {
     isError: contactsError,
     refetch: refetchContacts,
   } = useQuery({
-    queryKey: ["contacts", category, status, search],
-    queryFn: () => listContacts({ category, status, search }),
+    queryKey: ["contacts", category, status, dSearch],
+    queryFn: () => listContacts({ category, status, search: dSearch }),
   });
+
+  // Render only the rows in view. The full pipeline is thousands of contacts and
+  // each row carries an inline status <select>, so mounting them all made every
+  // checkbox click re-render tens of thousands of nodes. Row height varies (the
+  // promoter subline is optional), so rows are measured as they mount.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: contacts.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 46,
+    overscan: 12,
+  });
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const padTop = virtualRows.length ? virtualRows[0].start : 0;
+  const padBottom = virtualRows.length
+    ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
+    : 0;
 
   useEffect(() => {
     const h = (e: Event) => {
@@ -184,10 +205,12 @@ export function Contacts() {
 
         {/* Table */}
         <div className="card overflow-hidden">
-          <div className="overflow-x-auto">
+          {/* Own scroll box so the row virtualiser has a viewport to measure. */}
+          <div ref={scrollRef} className="max-h-[calc(100vh-330px)] overflow-auto">
             <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-xs text-fg-subtle">
+              {/* WebKit ignores `position: sticky` on <tr>, so it goes on the cells. */}
+              <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:border-b [&_th]:border-border [&_th]:bg-surface">
+                <tr className="text-left text-xs text-fg-subtle">
                   <th className="w-10 px-3 py-2.5">
                     <input
                       type="checkbox"
@@ -231,9 +254,16 @@ export function Contacts() {
                     </td>
                   </tr>
                 )}
-                {contacts.map((c) => (
+                {padTop > 0 && <tr style={{ height: padTop }} aria-hidden />}
+                {virtualRows.map(({ index }) => {
+                  const c = contacts[index];
+                  // The window can briefly outrun a result set that just shrank.
+                  if (!c) return null;
+                  return (
                   <tr
                     key={c.id}
+                    data-index={index}
+                    ref={rowVirtualizer.measureElement}
                     className="group border-b border-border/60 transition-colors hover:bg-muted/50"
                   >
                     <td className="px-3 py-2.5">
@@ -326,7 +356,9 @@ export function Contacts() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
+                {padBottom > 0 && <tr style={{ height: padBottom }} aria-hidden />}
               </tbody>
             </table>
           </div>

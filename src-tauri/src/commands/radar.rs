@@ -467,9 +467,9 @@ pub struct CuratorRow {
     pub in_pipeline: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn radar_list(
-    state: State<AppState>,
+    state: State<'_, AppState>,
     statut: Option<String>,
     source: Option<String>,
     genre: Option<String>,
@@ -556,8 +556,8 @@ pub struct RadarStats {
     pub genres: Vec<(String, i64)>,
 }
 
-#[tauri::command]
-pub fn radar_stats(state: State<AppState>) -> Result<RadarStats, String> {
+#[tauri::command(async)]
+pub fn radar_stats(state: State<'_, AppState>) -> Result<RadarStats, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let one = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
     let mut genres = Vec::new();
@@ -580,8 +580,8 @@ pub fn radar_stats(state: State<AppState>) -> Result<RadarStats, String> {
 
 /// Promote a curator into the CRM contacts pipeline (category 'curator').
 /// Idempotent: returns the existing contact if already linked.
-#[tauri::command]
-pub fn radar_promote(state: State<AppState>, id: i64) -> Result<i64, String> {
+#[tauri::command(async)]
+pub fn radar_promote(state: State<'_, AppState>, id: i64) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     promote_curator_inner(&conn, id)
 }
@@ -621,8 +621,8 @@ fn promote_curator_inner(conn: &rusqlite::Connection, id: i64) -> Result<i64, St
 }
 
 /// Promote every not-yet-linked curator with an email into contacts.
-#[tauri::command]
-pub fn radar_promote_bulk(state: State<AppState>) -> Result<i64, String> {
+#[tauri::command(async)]
+pub fn radar_promote_bulk(state: State<'_, AppState>) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let ids: Vec<i64> = {
         let mut stmt = conn

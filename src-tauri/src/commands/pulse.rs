@@ -262,8 +262,8 @@ pub struct PulseKpis {
     pub last_snapshot: Option<String>,
 }
 
-#[tauri::command]
-pub fn pulse_kpis(state: State<AppState>, artist_spotify_id: Option<String>) -> Result<PulseKpis, String> {
+#[tauri::command(async)]
+pub fn pulse_kpis(state: State<'_, AppState>, artist_spotify_id: Option<String>) -> Result<PulseKpis, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let aid = artist_spotify_id
         .filter(|s| !s.trim().is_empty())
@@ -369,9 +369,9 @@ pub struct PulseSeries {
     pub releases: Vec<(String, String)>, // (date, name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pulse_series(
-    state: State<AppState>,
+    state: State<'_, AppState>,
     artist_spotify_id: Option<String>,
     track_spotify_id: Option<String>,
     days: Option<i64>,
@@ -440,8 +440,8 @@ pub struct TrackedTrack {
     pub latest_popularity: Option<i64>,
 }
 
-#[tauri::command]
-pub fn pulse_tracked_list(state: State<AppState>) -> Result<Vec<TrackedTrack>, String> {
+#[tauri::command(async)]
+pub fn pulse_tracked_list(state: State<'_, AppState>) -> Result<Vec<TrackedTrack>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
@@ -503,8 +503,8 @@ pub async fn pulse_tracked_add(
     Ok(())
 }
 
-#[tauri::command]
-pub fn pulse_tracked_toggle(state: State<AppState>, id: i64, active: bool) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn pulse_tracked_toggle(state: State<'_, AppState>, id: i64, active: bool) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute(
         "UPDATE pulse_tracked_tracks SET is_active=?2 WHERE id=?1",
@@ -531,8 +531,8 @@ pub struct WatchRow {
     pub spark: Vec<i64>,
 }
 
-#[tauri::command]
-pub fn pulse_watchlist(state: State<AppState>) -> Result<Vec<WatchRow>, String> {
+#[tauri::command(async)]
+pub fn pulse_watchlist(state: State<'_, AppState>) -> Result<Vec<WatchRow>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
@@ -621,8 +621,8 @@ pub async fn pulse_watchlist_add(state: State<'_, AppState>, input: String) -> R
     Ok(())
 }
 
-#[tauri::command]
-pub fn pulse_watchlist_toggle(state: State<AppState>, id: i64, active: bool) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn pulse_watchlist_toggle(state: State<'_, AppState>, id: i64, active: bool) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute(
         "UPDATE pulse_playlist_watchlist SET is_active=?2 WHERE id=?1",

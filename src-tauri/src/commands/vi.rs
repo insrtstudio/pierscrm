@@ -13,8 +13,8 @@ use tauri::State;
 
 // ---------------- Reference artists ----------------
 
-#[tauri::command]
-pub fn vi_list_reference_artists(state: State<AppState>) -> Result<Vec<ViReferenceArtist>, String> {
+#[tauri::command(async)]
+pub fn vi_list_reference_artists(state: State<'_, AppState>) -> Result<Vec<ViReferenceArtist>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
@@ -32,9 +32,9 @@ pub fn vi_list_reference_artists(state: State<AppState>) -> Result<Vec<ViReferen
     Ok(out)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn vi_save_reference_artist(
-    state: State<AppState>,
+    state: State<'_, AppState>,
     artist: ViReferenceArtist,
 ) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
@@ -72,8 +72,8 @@ pub fn vi_save_reference_artist(
     }
 }
 
-#[tauri::command]
-pub fn vi_delete_reference_artist(state: State<AppState>, id: i64) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn vi_delete_reference_artist(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM vi_reference_artists WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
@@ -82,8 +82,8 @@ pub fn vi_delete_reference_artist(state: State<AppState>, id: i64) -> Result<(),
 
 // ---------------- RA areas ----------------
 
-#[tauri::command]
-pub fn vi_list_areas(state: State<AppState>) -> Result<Vec<ViArea>, String> {
+#[tauri::command(async)]
+pub fn vi_list_areas(state: State<'_, AppState>) -> Result<Vec<ViArea>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
@@ -99,8 +99,8 @@ pub fn vi_list_areas(state: State<AppState>) -> Result<Vec<ViArea>, String> {
     Ok(out)
 }
 
-#[tauri::command]
-pub fn vi_save_area(state: State<AppState>, area: ViArea) -> Result<i64, String> {
+#[tauri::command(async)]
+pub fn vi_save_area(state: State<'_, AppState>, area: ViArea) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     // Manual entry of a resolved ra_area_id stamps resolved_at.
     let resolved = if area.ra_area_id.is_some() {
@@ -136,8 +136,8 @@ pub fn vi_save_area(state: State<AppState>, area: ViArea) -> Result<i64, String>
 
 // ---------------- Overview (J1 verification) ----------------
 
-#[tauri::command]
-pub fn vi_overview(state: State<AppState>) -> Result<ViOverview, String> {
+#[tauri::command(async)]
+pub fn vi_overview(state: State<'_, AppState>) -> Result<ViOverview, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let one = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
     Ok(ViOverview {

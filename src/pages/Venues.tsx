@@ -1,5 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -59,8 +66,18 @@ import type {
 } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
 import { Field, useToast, useConfirm } from "../components/ui";
+import { useDebounced } from "../lib/hooks";
 
 type Tab = "venues" | "runs" | "areas" | "artists";
+
+/// One page of venues per round-trip. The list is virtualised, so a page only
+/// has to cover more than a viewport's worth of rows; the rest streams in as the
+/// user scrolls instead of being fetched and mounted up front.
+const PAGE_SIZE = 200;
+/// Fixed row height, in px, matching `.tbl tbody td` padding. The virtualiser
+/// needs this to map scroll offset to row index, so rows are pinned to it and
+/// their content is kept on a single line.
+const ROW_H = 45;
 
 const VENUE_STATUS_STYLE: Record<string, string> = {
   candidat: "bg-muted text-fg-subtle",
@@ -111,23 +128,49 @@ function VenuesTab() {
   const [enriching, setEnriching] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
   const [targetArtist, setTargetArtist] = useState<number | "">("");
-  const { data: venues = [] } = useQuery({
-    queryKey: ["vi_venues", statut, pays, search, hasEmail, hasPhone, hasWebsite, contactedF, playedF],
-    queryFn: () =>
+  // Typing must not fire a query per keystroke.
+  const dSearch = useDebounced(search, 250);
+  const {
+    data: pages,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: [
+      "vi_venues",
+      statut,
+      pays,
+      dSearch,
+      hasEmail,
+      hasPhone,
+      hasWebsite,
+      contactedF,
+      playedF,
+    ],
+    queryFn: ({ pageParam }) =>
       viListVenues({
         statut,
         pays,
-        search,
+        search: dSearch,
         has_email: hasEmail || undefined,
         has_phone: hasPhone || undefined,
         has_website: hasWebsite || undefined,
         contacted: contactedF || undefined,
         played: playedF || undefined,
-        limit: 500,
+        limit: PAGE_SIZE,
+        offset: pageParam,
       }),
+    initialPageParam: 0,
+    // A short page means the server ran out of rows: stop asking.
+    getNextPageParam: (last, all) =>
+      last.length < PAGE_SIZE ? undefined : all.length * PAGE_SIZE,
+    // Keep the previous result on screen while a new filter loads, so changing a
+    // chip never blanks the table.
+    placeholderData: keepPreviousData,
     // While an enrichment run is filling in contacts, keep the list fresh.
-    refetchInterval: enriching ? 4000 : false,
+    refetchInterval: enriching ? 5000 : false,
   });
+  const venues = useMemo(() => pages?.pages.flat() ?? [], [pages]);
   const { data: stats } = useQuery({
     queryKey: ["vi_venue_stats"],
     queryFn: viVenueStats,
@@ -154,6 +197,44 @@ function VenuesTab() {
     return [...venues].sort((a, b) => (isTarget(b.ville) ? 1 : 0) - (isTarget(a.ville) ? 1 : 0));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [venues, targetCities]);
+
+  // Render only the rows in view. Mounting 500 rows meant ~15 000 DOM nodes and
+  // 3 000 inline SVG icons on every filter change; windowing makes that cost
+  // constant no matter how many venues are loaded.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: displayVenues.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_H,
+    // Generous overscan: it also absorbs the sticky header's height, which the
+    // virtualiser does not know about when mapping scroll offset to row index.
+    overscan: 12,
+  });
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const padTop = virtualRows.length ? virtualRows[0].start : 0;
+  const padBottom = virtualRows.length
+    ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
+    : 0;
+
+  // Pull the next page once the user scrolls near the end of what is loaded.
+  const lastVisible = virtualRows.length ? virtualRows[virtualRows.length - 1].index : 0;
+  useEffect(() => {
+    if (
+      displayVenues.length > 0 &&
+      hasNextPage &&
+      !isFetchingNextPage &&
+      lastVisible >= displayVenues.length - 40
+    ) {
+      fetchNextPage();
+    }
+  }, [lastVisible, displayVenues.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  // Reset the scroll position when the filters change, otherwise the viewport can
+  // sit past the end of a shorter result set.
+  const resetScroll = useCallback(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, []);
+  useEffect(resetScroll, [statut, pays, dSearch, hasEmail, hasPhone, hasWebsite, contactedF, playedF, resetScroll]);
 
   // Stop the auto-refresh once every enrich run has finished.
   useEffect(() => {
@@ -364,11 +445,22 @@ function VenuesTab() {
           <EmptyState icon={Radio} title={t("venues.no_venues")} />
         </div>
       ) : (
-        <div className="card max-h-[calc(100vh-360px)] overflow-auto">
-          <table className="tbl">
+        <div ref={scrollRef} className="card max-h-[calc(100vh-360px)] overflow-auto">
+          {/* Fixed layout: the virtualiser swaps rows in and out, so columns must
+              not resize based on whichever slice happens to be mounted. */}
+          <table className="tbl" style={{ tableLayout: "fixed", minWidth: 900 }}>
+            <colgroup>
+              <col style={{ width: 64 }} />
+              <col />
+              <col style={{ width: 170 }} />
+              <col style={{ width: 130 }} />
+              <col style={{ width: 84 }} />
+              <col style={{ width: 112 }} />
+              <col style={{ width: 200 }} />
+            </colgroup>
             <thead>
               <tr>
-                <th className="w-16 text-right">{t("venues.score")}</th>
+                <th className="text-right">{t("venues.score")}</th>
                 <th>{t("venues.name")}</th>
                 <th>{t("venues.city")}</th>
                 <th>{t("venues.contact")}</th>
@@ -378,21 +470,27 @@ function VenuesTab() {
               </tr>
             </thead>
             <tbody>
-              {displayVenues.map((v) => (
+              {padTop > 0 && <tr style={{ height: padTop }} aria-hidden />}
+              {virtualRows.map(({ index }) => {
+                const v = displayVenues[index];
+                // The window can briefly outrun a result set that just shrank.
+                if (!v) return null;
+                return (
                 <tr
                   key={v.id}
+                  style={{ height: ROW_H }}
                   className="cursor-pointer hover:bg-muted"
                   onClick={() => setOpenId(v.id)}
                 >
                   <td className="text-right">
                     <span className="text-lg font-black tabular text-accent">{v.score_qualif}</span>
                   </td>
-                  <td className="font-semibold">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span>{v.nom}</span>
+                  <td className="overflow-hidden font-semibold">
+                    <div className="flex items-center gap-1.5 whitespace-nowrap">
+                      <span className="truncate">{v.nom}</span>
                       {v.played && (
                         <span
-                          className="badge bg-accent-2/15 text-accent-2"
+                          className="badge shrink-0 bg-accent-2/15 text-accent-2"
                           title={t("venues.played_hint")}
                         >
                           <Disc3 size={11} /> {t("venues.played")}
@@ -400,22 +498,24 @@ function VenuesTab() {
                       )}
                       {v.contacted && (
                         <span
-                          className="badge bg-emerald-500/15 text-emerald-500"
+                          className="badge shrink-0 bg-emerald-500/15 text-emerald-500"
                           title={t("venues.contacted_hint")}
                         >
                           <CheckCheck size={11} /> {t("venues.contacted_badge")}
                         </span>
                       )}
                       {isTarget(v.ville) && (
-                        <span className="badge bg-accent text-accent-fg">{t("venues.target_match")}</span>
+                        <span className="badge shrink-0 bg-accent text-accent-fg">
+                          {t("venues.target_match")}
+                        </span>
                       )}
                     </div>
                   </td>
-                  <td className="text-fg-subtle">
+                  <td className="truncate text-fg-subtle">
                     {[v.ville, v.pays].filter(Boolean).join(", ")}
                   </td>
                   <td>
-                    <div className="flex items-center gap-2 text-fg-subtle">
+                    <div className="flex items-center gap-2 whitespace-nowrap text-fg-subtle">
                       {v.best_email ? (
                         <span className="inline-flex items-center gap-1 text-emerald-500" title={v.best_email}>
                           <Mail size={13} />
@@ -473,12 +573,17 @@ function VenuesTab() {
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
+              {padBottom > 0 && <tr style={{ height: padBottom }} aria-hidden />}
             </tbody>
           </table>
         </div>
       )}
-      <div className="text-2xs text-fg-subtle">{t("venues.count_venues", { count: venues.length })}</div>
+      <div className="flex items-center gap-2 text-2xs text-fg-subtle">
+        <span>{t("venues.count_venues", { count: venues.length })}</span>
+        {isFetchingNextPage && <RefreshCw size={11} className="animate-spin text-accent" />}
+      </div>
 
       {openId != null && <VenueFicheModal id={openId} onClose={() => setOpenId(null)} />}
     </div>

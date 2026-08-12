@@ -110,7 +110,7 @@ fn normalize(rows: Vec<Vec<String>>) -> SheetPreview {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn preview_file(path: String) -> Result<FilePreview, String> {
     let lower = path.to_lowercase();
     if lower.ends_with(".csv") || lower.ends_with(".tsv") {
@@ -165,8 +165,8 @@ const ALLOWED_FIELDS: &[&str] = &[
     "notes", "website", "tags",
 ];
 
-#[tauri::command]
-pub fn import_file(state: State<AppState>, req: ImportRequest) -> Result<ImportResult, String> {
+#[tauri::command(async)]
+pub fn import_file(state: State<'_, AppState>, req: ImportRequest) -> Result<ImportResult, String> {
     // Validate the mapping fields against the whitelist to build a safe SQL statement.
     let mut fields: Vec<(&'static str, usize)> = Vec::new();
     for (field, col) in &req.mapping {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { useDebounced } from "../lib/hooks";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -64,14 +65,16 @@ export function Radar() {
     queryFn: radarStats,
     refetchInterval: running ? 4000 : false,
   });
+  // Typing must not fire a query per keystroke.
+  const dSearch = useDebounced(search, 250);
   const { data: rows = [] } = useQuery({
-    queryKey: ["radar_list", statut, source, genreF, search, hasEmail, hideEditorial],
+    queryKey: ["radar_list", statut, source, genreF, dSearch, hasEmail, hideEditorial],
     queryFn: () =>
       radarList({
         statut,
         source,
         genre: genreF,
-        search,
+        search: dSearch,
         has_email: hasEmail || undefined,
         hide_editorial: hideEditorial || undefined,
         limit: 500,

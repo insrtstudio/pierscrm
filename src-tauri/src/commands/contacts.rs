@@ -3,9 +3,9 @@ use crate::AppState;
 use rusqlite::params;
 use tauri::State;
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_contacts(
-    state: State<AppState>,
+    state: State<'_, AppState>,
     category: Option<String>,
     status: Option<String>,
     search: Option<String>,
@@ -52,8 +52,8 @@ pub fn list_contacts(
     Ok(out)
 }
 
-#[tauri::command]
-pub fn get_contact(state: State<AppState>, id: i64) -> Result<Option<Contact>, String> {
+#[tauri::command(async)]
+pub fn get_contact(state: State<'_, AppState>, id: i64) -> Result<Option<Contact>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare("SELECT * FROM contacts WHERE id = ?")
@@ -67,8 +67,8 @@ pub fn get_contact(state: State<AppState>, id: i64) -> Result<Option<Contact>, S
     }
 }
 
-#[tauri::command]
-pub fn create_contact(state: State<AppState>, contact: Contact) -> Result<i64, String> {
+#[tauri::command(async)]
+pub fn create_contact(state: State<'_, AppState>, contact: Contact) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO contacts
@@ -86,8 +86,8 @@ pub fn create_contact(state: State<AppState>, contact: Contact) -> Result<i64, S
     Ok(conn.last_insert_rowid())
 }
 
-#[tauri::command]
-pub fn update_contact(state: State<AppState>, contact: Contact) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn update_contact(state: State<'_, AppState>, contact: Contact) -> Result<(), String> {
     let id = contact.id.ok_or("missing id")?;
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute(
@@ -109,8 +109,8 @@ pub fn update_contact(state: State<AppState>, contact: Contact) -> Result<(), St
     Ok(())
 }
 
-#[tauri::command]
-pub fn update_contact_status(state: State<AppState>, id: i64, status: String) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn update_contact_status(state: State<'_, AppState>, id: i64, status: String) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute(
         "UPDATE contacts SET status=?2, updated_at=datetime('now') WHERE id=?1",
@@ -120,16 +120,16 @@ pub fn update_contact_status(state: State<AppState>, id: i64, status: String) ->
     Ok(())
 }
 
-#[tauri::command]
-pub fn delete_contact(state: State<AppState>, id: i64) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn delete_contact(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM contacts WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-#[tauri::command]
-pub fn delete_contacts(state: State<AppState>, ids: Vec<i64>) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn delete_contacts(state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), String> {
     let mut conn = state.pool.get().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     for id in ids {
@@ -159,8 +159,8 @@ pub struct Followup {
 /// Contacts due for a follow-up: emailed at least 7 days ago, still under the
 /// 2-relance ceiling the industry recommends, and not dismissed. Ordered oldest
 /// first so the most overdue surface at the top.
-#[tauri::command]
-pub fn list_followups(state: State<AppState>) -> Result<Vec<Followup>, String> {
+#[tauri::command(async)]
+pub fn list_followups(state: State<'_, AppState>) -> Result<Vec<Followup>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
@@ -202,8 +202,8 @@ pub fn list_followups(state: State<AppState>) -> Result<Vec<Followup>, String> {
 }
 
 /// Stop suggesting follow-ups for a contact (the "no response is a response" case).
-#[tauri::command]
-pub fn dismiss_followup(state: State<AppState>, contact_id: i64) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn dismiss_followup(state: State<'_, AppState>, contact_id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     conn.execute(
         "UPDATE contacts SET followup_dismissed = 1, updated_at = datetime('now') WHERE id = ?1",

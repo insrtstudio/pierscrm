@@ -37,10 +37,19 @@ pub fn normalise(input: &str) -> String {
 
 pub fn init_pool(db_path: &Path) -> Result<DbPool, String> {
     let manager = SqliteConnectionManager::file(db_path).with_init(|c| {
+        // Per-connection tuning. `cache_size` is negative = KiB, so -16384 is a
+        // 16 MB page cache per connection (the whole DB fits in it several times
+        // over). `mmap_size` maps the file once per process, so the read path
+        // stops paying a copy per page. `temp_store = MEMORY` keeps the ORDER BY
+        // sorters used by the venue list out of a temp file on disk.
         c.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA foreign_keys = ON;
-             PRAGMA busy_timeout = 5000;",
+             PRAGMA busy_timeout = 5000;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA cache_size = -16384;
+             PRAGMA temp_store = MEMORY;
+             PRAGMA mmap_size = 268435456;",
         )
     });
     // Headroom for several concurrent workers + the UI's polling queries. WAL lets
@@ -55,8 +64,24 @@ pub fn init_pool(db_path: &Path) -> Result<DbPool, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         migrate(&conn)?;
         seed_defaults(&conn)?;
+        maintenance(&conn);
     }
     Ok(pool)
+}
+
+/// Startup housekeeping. Harvest runs append a lot to the WAL and never fold it
+/// back, so it grows unbounded (12 MB against a 28 MB database here) and every
+/// reader has to walk it. Truncating at launch, when nothing else holds the
+/// database, keeps reads on the main file. `PRAGMA optimize` refreshes the
+/// planner statistics only for tables that changed enough to need it, which is
+/// what makes the query planner pick the new composite indexes instead of a
+/// full scan. Both are best-effort: a failure here must never block startup.
+fn maintenance(conn: &rusqlite::Connection) {
+    let _ = conn.execute_batch(
+        "PRAGMA wal_checkpoint(TRUNCATE);
+         PRAGMA analysis_limit = 1000;
+         PRAGMA optimize;",
+    );
 }
 
 fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
@@ -534,6 +559,58 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
         "CREATE INDEX IF NOT EXISTS idx_emails_campaign ON emails(campaign_id)",
         [],
     );
+
+    // ---- Performance indexes (see the comment on each group) ----
+    //
+    // The venue list and its stat bar cross-reference vi_venues against the CRM
+    // by comparing lower(trim(...)) of the names on both sides. Without an index
+    // on that exact expression SQLite has no choice but to rescan the whole
+    // contacts table once per venue: at 26 870 venues x 3 128 contacts the
+    // "contacted" counter alone measured 75 s of pure CPU, which is what froze
+    // the window when the page opened. SQLite can index an expression built from
+    // deterministic built-ins, so indexing lower(trim(col)) turns each of those
+    // rescans into a single lookup (75 s -> 0.05 s).
+    for stmt in [
+        "CREATE INDEX IF NOT EXISTS idx_contacts_venue_lc ON contacts(lower(trim(venue)))",
+        "CREATE INDEX IF NOT EXISTS idx_contacts_name_lc  ON contacts(lower(trim(name)))",
+        "CREATE INDEX IF NOT EXISTS idx_events_venue_lc   ON events(lower(trim(venue)))",
+        // Matches vi_list_venues' ORDER BY exactly. Beyond skipping the sort,
+        // this lets SQLite stop reading once LIMIT rows are out, so the six
+        // correlated subqueries in the SELECT list are evaluated for one page of
+        // results instead of every matching venue (4.8 s -> 0.014 s).
+        "CREATE INDEX IF NOT EXISTS idx_vi_venues_sort ON vi_venues(statut, score_qualif DESC, nb_events_periode DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_vi_venues_pays ON vi_venues(pays)",
+        "CREATE INDEX IF NOT EXISTS idx_vi_venues_crm  ON vi_venues(crm_contact_id)",
+        // Cover the per-row lookups the venue list and fiche do: best email by
+        // score, top promoter by event count, distinct artists for scoring.
+        "CREATE INDEX IF NOT EXISTS idx_vi_contacts_vt   ON vi_contacts(venue_id, type, score DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_vi_promoters_vn  ON vi_promoters(venue_id, nb_events DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_vi_evidence_va   ON vi_evidence(venue_id, artiste)",
+        // Same shape of correlated EXISTS on the Radar page.
+        "CREATE INDEX IF NOT EXISTS idx_radar_contacts_ct ON radar_contacts(curator_id, type)",
+        // Contacts list filters on these two before ordering.
+        "CREATE INDEX IF NOT EXISTS idx_contacts_cat_status ON contacts(category, status)",
+    ] {
+        let _ = conn.execute(stmt, []);
+    }
+
+    // Fresh indexes are invisible to the planner until it has statistics for
+    // them, and this database had never been ANALYZEd. Run it once, recorded in
+    // settings so later launches fall through to the cheap PRAGMA optimize.
+    let analyzed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM settings WHERE key='db_analyze_v1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(1);
+    if analyzed == 0 {
+        let _ = conn.execute_batch("ANALYZE");
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('db_analyze_v1', datetime('now'))",
+            [],
+        );
+    }
 
     // Patch existing Venue Intelligence areas: fix the Côte d'Azur slug and fill in
     // area ids resolved after those rows were first seeded (only touches NULLs).
