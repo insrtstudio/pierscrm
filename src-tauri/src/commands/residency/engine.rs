@@ -47,7 +47,7 @@ pub fn parse_utc(s: &str) -> Option<DateTime<Utc>> {
         .map(|n| Utc.from_utc_datetime(&n))
 }
 
-fn get(conn: &Connection, key: &str) -> Option<String> {
+pub(crate) fn get(conn: &Connection, key: &str) -> Option<String> {
     conn.query_row("SELECT value FROM settings WHERE key = ?1", params![key], |r| r.get::<_, Option<String>>(0))
         .ok()
         .flatten()
@@ -577,6 +577,11 @@ fn tick(pool: &DbPool, app: &tauri::AppHandle, now: DateTime<Utc>) {
                 Ok(n) if n > 0 => log(&conn, None, "info", "press_activity", &format!("{} événement(s) EPK reçus", n)),
                 Ok(_) => {}
                 Err(e) => log(&conn, None, "warn", "press_poll_failed", &e),
+            }
+            // Gigs whose push to insrt failed (or is pending) are retried here.
+            let pushed = crate::commands::insrt_gigs::sync_all(&conn, client.as_ref());
+            if pushed > 0 {
+                log(&conn, None, "info", "insrt_gigs", &format!("{} date(s) mise(s) à jour sur insrt", pushed));
             }
         }
         // Pixel opens, on the same 30-minute rhythm.

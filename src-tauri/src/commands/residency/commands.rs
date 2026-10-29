@@ -668,6 +668,32 @@ pub async fn residency_press_kits(state: State<'_, AppState>) -> Result<Vec<Pres
     .map_err(|e| e.to_string())?
 }
 
+/// insrt EPK activity of one contact (contact card in the Pipeline, residency
+/// recipients): opens, tracks listened and for how long, feedback. Read from
+/// the local press_activity table, filled by the engine every 30 minutes.
+#[tauri::command(async)]
+pub fn insrt_contact_activity(state: State<'_, AppState>, contact_id: i64) -> Result<report::ContactActivity, String> {
+    let conn = conn(&state)?;
+    report::contact_activity(&conn, contact_id)
+}
+
+/// Fetch the EPK activity from insrt now (the "Actualiser" of the contact
+/// card), whether or not a campaign is active. Returns the stored events.
+#[tauri::command]
+pub async fn insrt_sync_activity(state: State<'_, AppState>) -> Result<usize, String> {
+    let pool = state.pool.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let client = insrt::client(&conn).ok_or_else(|| "Jeton insrt non configuré (Réglages, Intégrations).".to_string())?;
+        let now = Utc::now();
+        let n = report::poll_press(&conn, client.as_ref(), now)?;
+        engine::put(&conn, "insrt_last_poll", &fmt(now));
+        Ok(n)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ---------------- Agenda › Actions ----------------
 
 #[derive(Serialize)]

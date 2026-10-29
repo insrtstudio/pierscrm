@@ -31,6 +31,7 @@ import { PageHeader } from "../components/Layout";
 import { euro, parseDay } from "../lib/format";
 import { useAppIntent, useDebounced } from "../lib/hooks";
 import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
+import { InsrtGigFields, useInsrtGig } from "../components/InsrtGig";
 
 // Warm, on-brand ramp (reds → warm neutrals) so artists stay distinguishable
 // without breaking the Modernist red/grey system.
@@ -493,6 +494,9 @@ function EventModal({
   const toast = useToast();
   const navigate = useNavigate();
   const [form, setForm] = useState<Event>({ ...event });
+  const qc = useQueryClient();
+  // "Publier sur insrt" (off by default), prefilled with the inferred country.
+  const gig = useInsrtGig(event.id, visa?.country_code);
   // Contacts that can plausibly be a booking (confirmed / in discussion /
   // contacted), plus the one currently linked, plus search hits over the whole
   // pipeline: the full list runs into the thousands, and on a fresh pipeline
@@ -539,8 +543,11 @@ function EventModal({
       toast(t("common.required"), "error");
       return;
     }
-    await saveEvent(form);
-    toast(t("common.save"), "ok");
+    const id = await saveEvent(form);
+    const pushed = await gig.commit(id);
+    qc.invalidateQueries({ queryKey: ["insrt_gig", id] });
+    if (pushed?.last_error) toast(pushed.last_error, "error");
+    else toast(pushed?.live ? t("insrt.gig_saved_live") : t("common.save"), "ok");
     onSaved();
   });
   return (
@@ -663,6 +670,7 @@ function EventModal({
             onChange={(e) => set("notes", e.target.value)}
           />
         </Field>
+        <InsrtGigFields gig={gig} status={form.status} />
         {event.id != null && visa && (visa.dossier_id != null || visa.needs_visa) && (
           <div
             className={clsx(

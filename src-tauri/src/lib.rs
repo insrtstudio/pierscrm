@@ -170,6 +170,10 @@ pub fn run() {
             commands::residency::commands::residency_actions,
             commands::residency::commands::residency_mark_handled,
             commands::residency::commands::residency_press_kits,
+            commands::residency::commands::insrt_contact_activity,
+            commands::residency::commands::insrt_sync_activity,
+            commands::insrt_gigs::insrt_gig_get,
+            commands::insrt_gigs::insrt_gig_set,
             commands::residency::commands::ai_cost_month,
             // events
             commands::events::list_events,

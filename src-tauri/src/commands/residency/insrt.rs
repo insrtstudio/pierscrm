@@ -5,6 +5,8 @@
 //! - `POST {base}/api/crm/v1/press-links` `{pressKitId, externalRef:"crm:<contact_id>", recipient:{name,email,organisation}, locale}`
 //!   -> `{linkId, token, url}` (idempotent per externalRef)
 //! - `GET  {base}/api/crm/v1/press-links/activity?since=<ISO>&pressKitId=<id>` -> `{"events":[...], "next": ISO}`
+//! - `POST {base}/api/crm/v1/gigs` `{externalRef:"crm-event:<event_id>", artistSlug, date, startTime, venue, city,
+//!   country, ticketUrl, status, published}` -> the stored gig (upsert per externalRef, see crate::commands::insrt_gigs)
 //!
 //! `Authorization: Bearer <insrt_api_token>` (a secret, see crate::secrets).
 //! The HTTP side sits behind the `Insrt` trait so tests run on fixtures.
@@ -65,6 +67,39 @@ pub struct ActivityPage {
     pub next: Option<String>,
 }
 
+/// One gig as insrt stores it (`POST /api/crm/v1/gigs`). The whole gig is
+/// sent on every change; only `published` + `status: confirmed` + upcoming
+/// shows on the artist page.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GigPush {
+    pub external_ref: String,
+    pub artist_slug: String,
+    /// YYYY-MM-DD
+    pub date: String,
+    /// HH:MM
+    pub start_time: Option<String>,
+    pub venue: String,
+    pub city: Option<String>,
+    pub country: Option<String>,
+    pub ticket_url: Option<String>,
+    /// confirmed | cancelled
+    pub status: String,
+    pub published: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GigAck {
+    pub id: String,
+    pub external_ref: String,
+    pub published: bool,
+    #[serde(default)]
+    pub created: bool,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Recipient {
     pub name: String,
@@ -76,6 +111,12 @@ pub trait Insrt: Send + Sync {
     fn press_kits(&self, artist_slug: &str) -> Result<Vec<PressKit>, String>;
     fn press_link(&self, press_kit_id: &str, contact_id: i64, recipient: &Recipient, locale: &str) -> Result<PressLink, String>;
     fn activity(&self, since: &str, press_kit_id: &str) -> Result<ActivityPage, String>;
+    /// Upsert one gig on insrt (artist page dates). Defaulted so the fixture
+    /// clients of the residency tests need not implement it.
+    fn push_gig(&self, gig: &GigPush) -> Result<GigAck, String> {
+        let _ = gig;
+        Err("insrt: publication des dates indisponible.".into())
+    }
 }
 
 // ---------------- JSON parsing (pure, tested on fixtures) ----------------
@@ -96,6 +137,15 @@ pub fn parse_press_link(raw: &str) -> Result<PressLink, String> {
 
 pub fn parse_activity(raw: &str) -> Result<ActivityPage, String> {
     serde_json::from_str(raw).map_err(|e| format!("insrt: réponse illisible ({})", e))
+}
+
+pub fn parse_gig_ack(raw: &str) -> Result<GigAck, String> {
+    serde_json::from_str(raw).map_err(|e| format!("insrt: réponse illisible ({})", e))
+}
+
+/// `crm-event:<event_id>`, the insrt key of a CRM gig.
+pub fn gig_ref(event_id: i64) -> String {
+    format!("crm-event:{}", event_id)
 }
 
 /// `crm:<contact_id>` -> contact id.
@@ -141,6 +191,7 @@ impl HttpInsrt {
             200..=299 => Ok(body),
             401 | 403 => Err("Jeton insrt invalide (Réglages, Intégrations).".into()),
             404 if body.contains("press_kit_not_found") => Err("insrt: press kit introuvable.".into()),
+            404 if body.contains("artist_not_found") => Err("insrt: artiste introuvable sur le site (vérifier son nom).".into()),
             // A bare 404 means the CRM API itself is missing: site not deployed yet.
             404 => Err("insrt: l'API CRM n'est pas encore en ligne sur le site (déploiement en attente).".into()),
             400 => Err(format!("insrt: requête refusée ({})", body.chars().take(80).collect::<String>())),
@@ -186,6 +237,17 @@ impl Insrt for HttpInsrt {
             .map_err(|e| format!("insrt: {}", e))?;
         parse_activity(&Self::check(resp)?)
     }
+
+    fn push_gig(&self, gig: &GigPush) -> Result<GigAck, String> {
+        let resp = self
+            .http
+            .post(format!("{}/api/crm/v1/gigs", self.base))
+            .bearer_auth(&self.token)
+            .json(gig)
+            .send()
+            .map_err(|e| format!("insrt: {}", e))?;
+        parse_gig_ack(&Self::check(resp)?)
+    }
 }
 
 /// The configured client, or None when no token is set (emails then carry the
@@ -229,5 +291,40 @@ mod tests {
         assert_eq!(contact_of_ref("crm:42"), Some(42));
         assert_eq!(contact_of_ref("hubspot:1"), None);
         assert_eq!(slug("Piers"), "piers");
+    }
+
+    #[test]
+    fn gig_contract_fixtures() {
+        let gig = GigPush {
+            external_ref: gig_ref(42),
+            artist_slug: "piers".into(),
+            date: "2027-03-14".into(),
+            start_time: Some("23:30".into()),
+            venue: "Le Club".into(),
+            city: Some("Paris".into()),
+            country: Some("FR".into()),
+            ticket_url: None,
+            status: "confirmed".into(),
+            published: true,
+        };
+        let v = serde_json::to_value(&gig).unwrap();
+        assert_eq!(v["externalRef"], "crm-event:42");
+        assert_eq!(v["artistSlug"], "piers");
+        assert_eq!(v["startTime"], "23:30");
+        assert_eq!(v["ticketUrl"], serde_json::Value::Null);
+        assert_eq!(v["published"], true);
+        let ack = parse_gig_ack(
+            r#"{"id":"0b9c","externalRef":"crm-event:42","artistSlug":"piers","date":"2027-03-14","startTime":"23:30","venue":"Le Club",
+                "city":"Paris","country":"FR","ticketUrl":null,"status":"confirmed","published":true,"updatedAt":"2026-10-29T18:50:06.548Z","created":true}"#,
+        )
+        .unwrap();
+        assert_eq!(ack.id, "0b9c");
+        assert_eq!(ack.external_ref, "crm-event:42");
+        assert!(ack.published && ack.created);
+        // An update has no surprise fields to trip over.
+        let again = parse_gig_ack(r#"{"id":"0b9c","externalRef":"crm-event:42","published":false}"#).unwrap();
+        assert!(!again.created && !again.published);
+        assert!(parse_gig_ack(r#"{"error":"artist_not_found"}"#).is_err());
+        assert!(parse_gig_ack("<html>").is_err());
     }
 }
