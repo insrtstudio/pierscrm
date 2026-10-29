@@ -113,6 +113,8 @@ pub fn run() {
             commands::visa::list_event_visas,
             commands::contacts::list_followups,
             commands::contacts::dismiss_followup,
+            commands::contacts::restore_followup,
+            commands::contacts::list_dismissed_followups,
             // import
             commands::import::preview_file,
             commands::import::import_file,

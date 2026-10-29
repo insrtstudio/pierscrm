@@ -381,13 +381,7 @@ fn unreply(conn: &Connection, p: &Pending) {
          WHERE campaign_id = ?1 AND contact_id = ?2 AND state = 'replied'",
         params![p.campaign_id, p.contact_id],
     );
-    let _ = conn.execute(
-        "UPDATE contacts SET status = CASE WHEN (SELECT COUNT(*) FROM emails m WHERE m.contact_id = contacts.id AND m.status = 'sent') >= 2
-                                           THEN 'followed_up' ELSE 'contacted' END,
-                             updated_at = datetime('now')
-         WHERE id = ?1 AND status = 'in_discussion'",
-        params![p.contact_id],
-    );
+    status::on_reply_withdrawn(conn, p.contact_id);
 }
 
 /// Move the next pending step after an absence (return date + 1 day, else +7 days).
@@ -429,10 +423,7 @@ pub fn apply(conn: &Connection, p: &Pending, i: &Insight, today: NaiveDate) {
         "later" => {
             status::on_reply(conn, Some(p.contact_id), &addr);
             let when = i.follow_up_on.clone().unwrap_or_else(|| (today + Duration::days(30)).to_string());
-            let _ = conn.execute(
-                "UPDATE contacts SET follow_up = ?2, followup_dismissed = 0, updated_at = datetime('now') WHERE id = ?1",
-                params![p.contact_id, when],
-            );
+            status::follow_up_on(conn, p.contact_id, &when);
             let _ = conn.execute(
                 "UPDATE reply_insights SET follow_up_on = ?2 WHERE email_reply_id = ?1",
                 params![i.reply_id, when],
@@ -440,16 +431,12 @@ pub fn apply(conn: &Connection, p: &Pending, i: &Insight, today: NaiveDate) {
             skip_remaining(conn, p.campaign_id, p.contact_id, "plus tard");
         }
         "not_interested" => {
-            status::on_refused(conn, &addr);
-            let _ = conn.execute(
-                "UPDATE contacts SET status = 'declined', follow_up = NULL WHERE id = ?1 AND status <> 'confirmed'",
-                params![p.contact_id],
-            );
+            status::on_refused(conn, Some(p.contact_id), &addr);
             skip_remaining(conn, p.campaign_id, p.contact_id, "refus");
         }
         "unsubscribe" => {
             outbox::suppress(conn, &addr, "unsubscribe", Some("résidence"));
-            status::on_refused(conn, &addr);
+            status::on_refused(conn, Some(p.contact_id), &addr);
             skip_remaining(conn, p.campaign_id, p.contact_id, "désinscription");
         }
         "wrong_person" => {

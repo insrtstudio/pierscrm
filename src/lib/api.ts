@@ -19,6 +19,7 @@ import type {
   Organisation,
   FilePreview,
   Followup,
+  DismissedFollowup,
   ImportResult,
   Kpi,
   SendResult,
@@ -128,6 +129,10 @@ export const listEmails = (contactId?: number) =>
 export const listFollowups = () => invoke<Followup[]>("list_followups");
 export const dismissFollowup = (contactId: number) =>
   invoke<void>("dismiss_followup", { contactId });
+export const restoreFollowup = (contactId: number) =>
+  invoke<void>("restore_followup", { contactId });
+export const listDismissedFollowups = () =>
+  invoke<DismissedFollowup[]>("list_dismissed_followups");
 export const sendBulk = (p: {
   campaign_id?: number | null;
   contact_ids: number[];

@@ -21,6 +21,7 @@ import {
   Reply,
   ShieldBan,
   Users,
+  RotateCcw,
 } from "lucide-react";
 import clsx from "clsx";
 import {
@@ -28,6 +29,8 @@ import {
   deleteCampaign,
   deleteTemplate,
   dismissFollowup,
+  listDismissedFollowups,
+  restoreFollowup,
   getContact,
   getSetting,
   listArtists,
@@ -330,8 +333,25 @@ function FollowupsTab() {
     mutationFn: (id: number) => dismissFollowup(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["followups"] });
+      qc.invalidateQueries({ queryKey: ["followups-dismissed"] });
       qc.invalidateQueries({ queryKey: ["contacts"] });
     },
+  });
+  // "Stop following up" is reversible: dismissed contacts are listed below.
+  const { data: dismissed = [] } = useQuery({
+    queryKey: ["followups-dismissed"],
+    queryFn: listDismissedFollowups,
+  });
+  const [showDismissed, setShowDismissed] = useState(false);
+  const restore = useMutation({
+    mutationFn: (id: number) => restoreFollowup(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["followups"] });
+      qc.invalidateQueries({ queryKey: ["followups-dismissed"] });
+      qc.invalidateQueries({ queryKey: ["contacts"] });
+      toast(t("emails.followup_restored"), "ok");
+    },
+    onError: (e) => toast(errorMessage(e), "error"),
   });
 
   return (
@@ -392,6 +412,37 @@ function FollowupsTab() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      {dismissed.length > 0 && (
+        <div className="card p-3">
+          <button
+            className="btn-ghost px-2 py-1 text-2xs"
+            aria-expanded={showDismissed}
+            onClick={() => setShowDismissed((v) => !v)}
+          >
+            {t("emails.followups_dismissed", { count: dismissed.length })}
+          </button>
+          {showDismissed && (
+            <ul className="mt-2 divide-y divide-border">
+              {dismissed.map((d) => (
+                <li key={d.contact_id} className="flex items-center justify-between gap-2 py-1.5">
+                  <span className="min-w-0 truncate text-xs">
+                    <span className="font-semibold">{d.name}</span>
+                    <span className="text-fg-subtle"> · {d.venue || d.area || "·"}</span>
+                  </span>
+                  <button
+                    className="btn-outline shrink-0 py-1 text-2xs"
+                    disabled={restore.isPending}
+                    onClick={() => restore.mutate(d.contact_id)}
+                  >
+                    <RotateCcw size={12} />
+                    {t("emails.followup_restore")}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
       <ComposeModal

@@ -194,7 +194,7 @@ pub fn add_suppression(
             n += 1;
         }
         if reason == "refused" || reason == "unsubscribe" {
-            status::on_refused(&conn, &norm_addr(a));
+            status::on_refused(&conn, None, &norm_addr(a));
         }
     }
     Ok(n)
@@ -1043,6 +1043,24 @@ fn apply_reply(conn: &Connection, sent: &SentRef, from: &str, received: &str) {
     }
 }
 
+/// A plain "no thanks" closes the booking (status.rs). Residency replies are
+/// left to the residency agent, which reads them with more context.
+fn refusal_from_text(conn: &Connection, message_id: &str, text: &str) {
+    let row: Option<(Option<i64>, String)> = conn
+        .query_row(
+            "SELECT r.contact_id, r.from_addr FROM email_replies r
+             LEFT JOIN emails m ON m.id = r.email_id
+             LEFT JOIN campaigns c ON c.id = m.campaign_id
+             WHERE r.message_id = ?1 AND r.kind = 'reply' AND COALESCE(c.kind, '') <> 'residency'",
+            params![message_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+    if let Some((cid, from)) = row {
+        status::on_reply_text(conn, cid, &from, text);
+    }
+}
+
 pub fn sync_replies_blocking(pool: &DbPool) -> Result<SyncResult, String> {
     if SYNC_RUNNING.swap(true, Ordering::SeqCst) {
         return Ok(SyncResult { skipped: true, ..Default::default() });
@@ -1187,7 +1205,7 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
                     }
                     if record_inbound(conn, None, &from, &h.subject, &mid, "unsubscribe", "address", &received) {
                         suppress(conn, &from, "unsubscribe", Some(&h.subject));
-                        status::on_refused(conn, &from);
+                        status::on_refused(conn, None, &from);
                         out.unsubscribes += 1;
                     }
                 }
@@ -1248,6 +1266,7 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
             "UPDATE email_replies SET body_excerpt = ?2 WHERE message_id = ?1",
             params![mid, text],
         );
+        refusal_from_text(conn, &mid, &text);
     }
 
     let _ = session.logout();

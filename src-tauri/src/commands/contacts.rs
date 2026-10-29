@@ -187,36 +187,19 @@ pub fn update_contact(state: State<'_, AppState>, contact: Contact) -> Result<()
 #[tauri::command(async)]
 pub fn update_contact_status(state: State<'_, AppState>, id: i64, status: String) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
-    conn.execute(
-        "UPDATE contacts SET status=?2, updated_at=datetime('now') WHERE id=?1",
-        params![id, status],
-    )
-    .map_err(|e| e.to_string())?;
+    crate::commands::status::set_manual(&conn, id, &status)?;
     Ok(())
 }
 
-const STATUSES: &[&str] = &[
-    "to_contact", "contacted", "followed_up", "in_discussion", "confirmed", "declined",
-    "no_answer", "to_evaluate", "low_priority",
-];
-
-/// Pipeline selection bar: one status for many contacts, in one transaction.
-/// Returns how many rows changed.
+/// Pipeline selection bar: one status for many contacts, in one transaction
+/// (a manual change, see status::set_manual). Returns how many rows changed.
 #[tauri::command(async)]
 pub fn update_contacts_status(state: State<'_, AppState>, ids: Vec<i64>, status: String) -> Result<usize, String> {
-    if !STATUSES.contains(&status.as_str()) {
-        return Err(format!("unknown status: {status}"));
-    }
     let mut conn = state.pool.get().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     let mut n = 0;
-    {
-        let mut stmt = tx
-            .prepare("UPDATE contacts SET status=?2, updated_at=datetime('now') WHERE id=?1 AND status <> ?2")
-            .map_err(|e| e.to_string())?;
-        for id in ids {
-            n += stmt.execute(params![id, status]).map_err(|e| e.to_string())?;
-        }
+    for id in ids {
+        n += crate::commands::status::set_manual(&tx, id, &status)?;
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(n)
@@ -367,8 +350,12 @@ pub struct Followup {
 #[tauri::command(async)]
 pub fn list_followups(state: State<'_, AppState>) -> Result<Vec<Followup>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
+    followups(&conn)
+}
+
+pub(crate) fn followups(conn: &rusqlite::Connection) -> Result<Vec<Followup>, String> {
     // Close the sequences that ran dry before listing (3 emails, no reply).
-    crate::commands::status::apply_no_answer(&conn);
+    crate::commands::status::apply_no_answer(conn);
     let sql = format!(
         "WITH m AS (
              SELECT e.contact_id AS cid, e.id AS eid FROM emails e
@@ -405,10 +392,29 @@ pub fn list_followups(state: State<'_, AppState>) -> Result<Vec<Followup>, Strin
            AND NOT EXISTS (SELECT 1 FROM campaign_messages cm
                            WHERE cm.contact_id = c.id AND cm.status IN ('draft','scheduled'))
            AND due <= date('now')
-         ORDER BY a.last_email ASC
+         UNION ALL
+         -- A follow-up date typed by hand (or imported) on a contact never
+         -- emailed from the app: written to outside the app, the reminder still
+         -- counts. Only recent ones, an old sheet's past dates are history.
+         SELECT c.id, c.name, c.email, c.venue, c.area, c.status,
+                COALESCE(date(c.first_contact), date(c.follow_up)), 0, 0,
+                CAST(julianday('now') - julianday(COALESCE(date(c.first_contact), date(c.follow_up))) AS INTEGER),
+                date(c.follow_up)
+         FROM contacts c
+         WHERE c.follow_up GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
+           AND date(c.follow_up) <= date('now')
+           AND date(c.follow_up) >= date('now', '-{manual_window} days')
+           AND NOT EXISTS (SELECT 1 FROM agg a WHERE a.cid = c.id)
+           AND COALESCE(c.followup_dismissed, 0) = 0
+           AND c.status NOT IN ('confirmed', 'declined', 'no_answer')
+           AND NOT EXISTS (SELECT 1 FROM suppressions s WHERE s.address = lower(trim(c.email)))
+           AND NOT EXISTS (SELECT 1 FROM campaign_messages cm
+                           WHERE cm.contact_id = c.id AND cm.status IN ('draft','scheduled'))
+         ORDER BY 7 ASC
          LIMIT 200",
         days = crate::commands::status::FOLLOWUP_DAYS,
         ceiling = crate::commands::status::NO_ANSWER_AFTER_EMAILS,
+        manual_window = crate::commands::status::MANUAL_FOLLOWUP_WINDOW_DAYS,
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -439,10 +445,50 @@ pub fn list_followups(state: State<'_, AppState>) -> Result<Vec<Followup>, Strin
 #[tauri::command(async)]
 pub fn dismiss_followup(state: State<'_, AppState>, contact_id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
-    conn.execute(
-        "UPDATE contacts SET followup_dismissed = 1, updated_at = datetime('now') WHERE id = ?1",
-        params![contact_id],
-    )
-    .map_err(|e| e.to_string())?;
+    crate::commands::status::dismiss_followup(&conn, contact_id).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Undo "stop following up": the contact comes back in the queue when due.
+#[tauri::command(async)]
+pub fn restore_followup(state: State<'_, AppState>, contact_id: i64) -> Result<(), String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    crate::commands::status::restore_followup(&conn, contact_id).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct DismissedFollowup {
+    pub contact_id: i64,
+    pub name: String,
+    pub venue: Option<String>,
+    pub area: Option<String>,
+    pub status: String,
+}
+
+/// Contacts whose follow-ups were dismissed and are still open (a closed
+/// booking has nothing to restore), most recent dismissal first.
+#[tauri::command(async)]
+pub fn list_dismissed_followups(state: State<'_, AppState>) -> Result<Vec<DismissedFollowup>, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, name, venue, area, status FROM contacts
+             WHERE COALESCE(followup_dismissed, 0) <> 0
+               AND status NOT IN ('confirmed', 'declined', 'no_answer')
+             ORDER BY updated_at DESC, id DESC LIMIT 200",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(DismissedFollowup {
+                contact_id: r.get(0)?,
+                name: r.get(1)?,
+                venue: r.get(2)?,
+                area: r.get(3)?,
+                status: r.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<_>>().map_err(|e| e.to_string())
 }

@@ -30,7 +30,7 @@ import {
   saveTask,
 } from "../lib/api";
 import type { Contact } from "../lib/types";
-import { parseDay, toDay, today as todayDay } from "../lib/format";
+import { formatDate, parseDay, toDay, today as todayDay } from "../lib/format";
 import { EmptyState } from "../components/Layout";
 import { ComposeModal, quotaQuery } from "../components/ComposeModal";
 import { useToast } from "../components/ui";
@@ -146,7 +146,11 @@ export function Actions() {
         day,
         kind: "followup",
         title: t("actions.followup", { name: f.name }),
-        detail: t("actions.followup_detail", { count: f.email_count, days: f.days_since }),
+        // No email from the app yet: a follow-up date typed on the contact.
+        detail:
+          f.email_count > 0
+            ? t("actions.followup_detail", { count: f.email_count, days: f.days_since })
+            : t("actions.followup_manual", { date: formatDate(f.due) }),
         cta: { label: t("actions.followup_cta"), run: () => openCompose(f.contact_id) },
       });
     }

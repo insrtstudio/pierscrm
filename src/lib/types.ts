@@ -170,6 +170,15 @@ export interface Followup {
   due?: string;
 }
 
+/// A contact whose follow-ups were dismissed ("stop following up"), restorable.
+export interface DismissedFollowup {
+  contact_id: number;
+  name: string;
+  venue?: string | null;
+  area?: string | null;
+  status: string;
+}
+
 export interface EmailLog {
   id?: number;
   contact_id?: number | null;

@@ -3,13 +3,19 @@
 //! Every automatic status change (an email went out, a reply came in, a gig was
 //! confirmed or cancelled, a cold sequence ran dry) goes through here, so the
 //! rules live in one place instead of ad-hoc UPDATEs in each command. Manual
-//! edits from the Pipeline still write the status directly.
+//! edits from the Pipeline (one contact or a selection) go through `set_manual`.
 //!
 //! Statuses (see STATUSES in src/lib/types.ts): to_contact, to_evaluate,
 //! low_priority, contacted, followed_up, in_discussion, confirmed, declined,
 //! no_answer.
 
 use rusqlite::{params, Connection};
+
+/// Every pipeline status the app knows.
+pub const STATUSES: &[&str] = &[
+    "to_contact", "contacted", "followed_up", "in_discussion", "confirmed", "declined",
+    "no_answer", "to_evaluate", "low_priority",
+];
 
 /// Days between two emails of a cold sequence (also the default follow-up delay).
 pub const FOLLOWUP_DAYS: i64 = 7;
@@ -18,6 +24,10 @@ pub const FOLLOWUP_DAYS: i64 = 7;
 pub const NO_ANSWER_AFTER_EMAILS: i64 = 3;
 /// Days to wait after the last of those emails before giving up.
 pub const NO_ANSWER_GRACE_DAYS: i64 = 14;
+/// A follow-up date set by hand on a contact never emailed from the app shows
+/// in the queue for this many days after it falls due (older imported dates
+/// are history, not reminders).
+pub const MANUAL_FOLLOWUP_WINDOW_DAYS: i64 = 30;
 
 /// SQL predicate: contact `c` matches email `m` by id or by exact address.
 /// Several contacts can share one address (a promoter booking two venues), and
@@ -75,16 +85,152 @@ pub fn on_reply(conn: &Connection, contact_id: Option<i64>, addr: &str) {
 }
 
 /// The contact refused or unsubscribed: the booking is closed and nothing more
-/// is scheduled. A confirmed gig stays confirmed.
-pub fn on_refused(conn: &Connection, addr: &str) {
+/// is scheduled. Matches the contact id (a reply can come from another address
+/// than the one on file) and every contact on that address. A confirmed gig
+/// stays confirmed.
+pub fn on_refused(conn: &Connection, contact_id: Option<i64>, addr: &str) {
     let _ = conn.execute(
         "UPDATE contacts
          SET status = CASE WHEN status = 'confirmed' THEN status ELSE 'declined' END,
              follow_up = NULL,
              updated_at = datetime('now')
-         WHERE email IS NOT NULL AND trim(email) <> '' AND lower(trim(email)) = lower(trim(?1))",
-        params![addr],
+         WHERE id = ?1
+            OR (email IS NOT NULL AND trim(email) <> '' AND lower(trim(email)) = lower(trim(?2)))",
+        params![contact_id, addr],
     );
+}
+
+/// A "reply" turned out not to be one (an out-of-office without auto headers):
+/// undo `on_reply`, back to where the sequence stood (followed_up after two
+/// emails, else contacted). Only a contact `on_reply` moved is touched.
+pub fn on_reply_withdrawn(conn: &Connection, contact_id: i64) {
+    let sql = format!(
+        "UPDATE contacts AS c
+         SET status = CASE WHEN (SELECT COUNT(*) FROM emails m WHERE m.status = 'sent' AND {same}) >= 2
+                           THEN 'followed_up' ELSE 'contacted' END,
+             updated_at = datetime('now')
+         WHERE c.id = ?1 AND c.status = 'in_discussion'",
+        same = SAME_RECIPIENT
+    );
+    let _ = conn.execute(&sql, params![contact_id]);
+}
+
+/// "Not now, come back in March": the next follow-up is due on `day`
+/// (YYYY-MM-DD), and a dismissal is lifted so it shows up again then.
+pub fn follow_up_on(conn: &Connection, contact_id: i64, day: &str) {
+    let _ = conn.execute(
+        "UPDATE contacts SET follow_up = ?2, followup_dismissed = 0, updated_at = datetime('now') WHERE id = ?1",
+        params![contact_id, day],
+    );
+}
+
+/// Stop suggesting follow-ups ("no response is a response"). Reversible with
+/// `restore_followup`, and lifted by the next send anyway.
+pub fn dismiss_followup(conn: &Connection, contact_id: i64) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE contacts SET followup_dismissed = 1, updated_at = datetime('now') WHERE id = ?1",
+        params![contact_id],
+    )
+}
+
+/// Undo a dismissal: the contact is back in the follow-up queue when due.
+pub fn restore_followup(conn: &Connection, contact_id: i64) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE contacts SET followup_dismissed = 0, updated_at = datetime('now')
+         WHERE id = ?1 AND followup_dismissed <> 0",
+        params![contact_id],
+    )
+}
+
+/// A status picked by hand in the Pipeline (one contact or a selection). The
+/// user knows best, so any status is allowed, including moving back from a
+/// closed one. Unknown keys are refused instead of stored (they would match no
+/// filter or badge). Returns how many rows changed.
+pub fn set_manual(conn: &Connection, contact_id: i64, status: &str) -> Result<usize, String> {
+    if !STATUSES.contains(&status) {
+        return Err(format!("unknown status: {status}"));
+    }
+    conn.execute(
+        "UPDATE contacts SET status = ?2, updated_at = datetime('now') WHERE id = ?1 AND status IS NOT ?2",
+        params![contact_id, status],
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Phrases that only appear in a clear "no" (EN / FR / NL, the venues written
+/// to). Kept narrow on purpose: "fully booked", "not this season" or "maybe
+/// later" are a "later", not a refusal, and stay in discussion.
+const REFUSAL_PHRASES: &[&str] = &[
+    "not interested",
+    "no longer interested",
+    "not a good fit",
+    "not the right fit",
+    "we will pass",
+    "we'll pass",
+    "we have to pass",
+    "we're going to pass",
+    "we are going to pass",
+    "have to decline",
+    "must decline",
+    "decline your offer",
+    "decline the offer",
+    "please remove us",
+    "pas interesse",
+    "pas interessee",
+    "pas interesses",
+    "pas interessees",
+    "ne sommes pas interesses",
+    "ne correspond pas a notre programmation",
+    "ne correspond pas a notre ligne",
+    "passer notre tour",
+    "passons notre tour",
+    "decliner votre proposition",
+    "decliner ta proposition",
+    "geen interesse",
+    "niet geinteresseerd",
+    "past niet bij ons",
+];
+
+/// Lowercase, accents folded, apostrophes unified, so "Pas intéressés" and
+/// "we’ll pass" match the phrase list.
+fn fold(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'à' | 'â' | 'ä' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'î' | 'ï' => 'i',
+            'ô' | 'ö' => 'o',
+            'ù' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            '\u{2019}' | '\u{2018}' => '\'',
+            c => c,
+        })
+        .collect()
+}
+
+/// True when a reply (quoted text already stripped) reads as a plain refusal.
+/// Long replies are left to a human: they usually say more than "no".
+pub fn looks_like_refusal(text: &str) -> bool {
+    let t = fold(text);
+    if t.trim().is_empty() || t.chars().count() > 800 {
+        return false;
+    }
+    // "Not interested right now, but..." / "pas intéressés pour l'instant" is a later.
+    const SOFTENERS: &[&str] = &["right now", "at the moment", "for now", "this season", "next year", "later",
+        "pour l'instant", "pour le moment", "cette saison", "l'annee prochaine", "plus tard",
+        "op dit moment", "volgend jaar"];
+    REFUSAL_PHRASES.iter().any(|p| t.contains(p)) && !SOFTENERS.iter().any(|s| t.contains(s))
+}
+
+/// A reply's text arrived (outbox sync): a clear refusal closes the booking.
+/// Returns true when it did.
+pub fn on_reply_text(conn: &Connection, contact_id: Option<i64>, addr: &str, text: &str) -> bool {
+    if !looks_like_refusal(text) {
+        return false;
+    }
+    on_refused(conn, contact_id, addr);
+    true
 }
 
 /// A gig linked to the contact was confirmed: the booking is closed. Without
@@ -230,5 +376,135 @@ mod tests {
         assert_eq!(status(&c, 1), "no_answer");
         assert_eq!(status(&c, 2), "followed_up"); // last email too recent
         assert_eq!(status(&c, 3), "followed_up"); // replied
+    }
+
+    #[test]
+    fn refusal_closes_by_id_and_address() {
+        let c = db();
+        c.execute_batch(
+            "INSERT INTO contacts (id, name, email, status, follow_up) VALUES
+               (1, 'A', 'x@v.nl', 'in_discussion', '2026-11-01'),
+               (2, 'B', 'other@v.nl', 'followed_up', '2026-11-01'),
+               (3, 'C', 'x@v.nl', 'confirmed', NULL);",
+        )
+        .unwrap();
+        // Reply from a colleague's address, matched to contact 2 by message id.
+        on_refused(&c, Some(2), "x@v.nl");
+        assert_eq!(status(&c, 1), "declined");
+        assert_eq!(status(&c, 2), "declined");
+        assert_eq!(status(&c, 3), "confirmed");
+        let fu: Option<String> = c.query_row("SELECT follow_up FROM contacts WHERE id=2", [], |r| r.get(0)).unwrap();
+        assert_eq!(fu, None);
+    }
+
+    #[test]
+    fn refusal_detection() {
+        for t in [
+            "Thanks, but we're not interested.",
+            "Hi, we will pass on this one. Best",
+            "Bonjour, nous ne sommes pas intéressés. Bonne continuation",
+            "Merci, on va passer notre tour.",
+            "Helaas, geen interesse. Groet",
+            "We\u{2019}ll pass, cheers",
+        ] {
+            assert!(looks_like_refusal(t), "{t}");
+        }
+        let long = "not interested ".repeat(80);
+        for t in [
+            "",
+            "Sounds great, what are your fees?",
+            "Not interested right now, maybe next year.",
+            "Pas intéressés pour l'instant, recontacte-nous en mars.",
+            "We're fully booked until March.",
+            long.as_str(),
+        ] {
+            assert!(!looks_like_refusal(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn reply_text_only_moves_on_refusal() {
+        let c = db();
+        c.execute("INSERT INTO contacts (id, name, email, status) VALUES (1, 'A', 'x@v.nl', 'in_discussion')", [])
+            .unwrap();
+        assert!(!on_reply_text(&c, Some(1), "x@v.nl", "Let's talk, call me Monday"));
+        assert_eq!(status(&c, 1), "in_discussion");
+        assert!(on_reply_text(&c, Some(1), "x@v.nl", "Sorry, not a good fit for us."));
+        assert_eq!(status(&c, 1), "declined");
+    }
+
+    #[test]
+    fn withdrawn_reply_goes_back() {
+        let c = db();
+        c.execute_batch(
+            "INSERT INTO contacts (id, name, email, status) VALUES
+               (1, 'A', 'a@v.nl', 'in_discussion'), (2, 'B', 'b@v.nl', 'in_discussion'),
+               (3, 'C', 'c@v.nl', 'confirmed');
+             INSERT INTO emails (contact_id, to_addr, status) VALUES
+               (1, 'a@v.nl', 'sent'), (NULL, 'a@v.nl', 'sent'), (2, 'b@v.nl', 'sent');",
+        )
+        .unwrap();
+        on_reply_withdrawn(&c, 1);
+        on_reply_withdrawn(&c, 2);
+        on_reply_withdrawn(&c, 3);
+        assert_eq!(status(&c, 1), "followed_up");
+        assert_eq!(status(&c, 2), "contacted");
+        assert_eq!(status(&c, 3), "confirmed");
+    }
+
+    #[test]
+    fn manual_status_and_dismissal() {
+        let c = db();
+        c.execute("INSERT INTO contacts (id, name, email, status) VALUES (1, 'A', 'a@v.nl', 'declined')", [])
+            .unwrap();
+        assert_eq!(set_manual(&c, 1, "in_discussion").unwrap(), 1);
+        assert_eq!(status(&c, 1), "in_discussion");
+        assert_eq!(set_manual(&c, 1, "in_discussion").unwrap(), 0); // unchanged
+        assert!(set_manual(&c, 1, "maybe").is_err());
+        let dismissed = |c: &Connection| -> i64 {
+            c.query_row("SELECT followup_dismissed FROM contacts WHERE id=1", [], |r| r.get(0)).unwrap()
+        };
+        dismiss_followup(&c, 1).unwrap();
+        assert_eq!(dismissed(&c), 1);
+        assert_eq!(restore_followup(&c, 1).unwrap(), 1);
+        assert_eq!(dismissed(&c), 0);
+        follow_up_on(&c, 1, "2027-03-01");
+        let fu: String = c.query_row("SELECT follow_up FROM contacts WHERE id=1", [], |r| r.get(0)).unwrap();
+        assert_eq!(fu, "2027-03-01");
+    }
+
+    /// The follow-up queue on the real schema: the `follow_up` column decides
+    /// when a contact is due, a dismissal hides it until restored, and a date
+    /// typed on a contact never emailed from the app still counts.
+    #[test]
+    fn followup_queue_respects_dates_and_dismissal() {
+        let c = Connection::open_in_memory().unwrap();
+        crate::db::migrate_for_tests(&c).unwrap();
+        c.execute_batch(
+            "INSERT INTO contacts (id, name, email, status, follow_up) VALUES
+               (1, 'Late', 'a@v.nl', 'contacted', date('now', '+5 days')),
+               (2, 'Due', 'b@v.nl', 'contacted', NULL),
+               (3, 'Manual', 'c@v.nl', 'contacted', date('now', '-2 days')),
+               (4, 'Old sheet', 'd@v.nl', 'contacted', '2024-01-10'),
+               (5, 'Free text', 'e@v.nl', 'contacted', 'Wed Oct 21');
+             INSERT INTO emails (contact_id, to_addr, subject, body, status, sent_at) VALUES
+               (1, 'a@v.nl', 's', 'b', 'sent', datetime('now', '-10 days')),
+               (2, 'b@v.nl', 's', 'b', 'sent', datetime('now', '-10 days'));",
+        )
+        .unwrap();
+        let ids = |c: &Connection| -> Vec<i64> {
+            let mut v: Vec<i64> =
+                crate::commands::contacts::followups(c).unwrap().iter().map(|f| f.contact_id).collect();
+            v.sort();
+            v
+        };
+        // 1 waits for its follow_up date; 2 is due 7 days after the email.
+        assert_eq!(ids(&c), vec![2, 3]);
+        dismiss_followup(&c, 2).unwrap();
+        assert_eq!(ids(&c), vec![3]);
+        restore_followup(&c, 2).unwrap();
+        assert_eq!(ids(&c), vec![2, 3]);
+        c.execute("UPDATE contacts SET follow_up = date('now') WHERE id = 1", []).unwrap();
+        assert_eq!(ids(&c), vec![1, 2, 3]);
     }
 }
