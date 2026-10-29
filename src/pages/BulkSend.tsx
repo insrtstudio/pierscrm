@@ -310,6 +310,18 @@ export function BulkSend() {
   };
 
   const selectedCount = contacts.filter((c) => selected.has(c.id!) && selectable(c)).length;
+  // One email per organisation: the other selected contacts of an organisation
+  // are skipped by the backend (and marked as reached through it).
+  const sameOrg = useMemo(() => {
+    const seen = new Set<number>();
+    let n = 0;
+    for (const c of contacts) {
+      if (!selected.has(c.id!) || !selectable(c) || c.organisation_id == null) continue;
+      if (seen.has(c.organisation_id)) n++;
+      else seen.add(c.organisation_id);
+    }
+    return n;
+  }, [contacts, selected]);
 
   // Put the current selection in the campaign's audience (planned recipients).
   const [adding, setAdding] = useState(false);
@@ -489,6 +501,7 @@ export function BulkSend() {
             {withoutEmail > 0 && ` · ${t("bulk.no_email", { count: withoutEmail })}`}
             {alreadyReached > 0 && ` · ${t("bulk.already_in_campaign", { count: alreadyReached })}`}
             {suppressedCount > 0 && ` · ${t("bulk.suppressed_in_list", { count: suppressedCount })}`}
+            {sameOrg > 0 && ` · ${t("bulk.same_organisation", { count: sameOrg })}`}
           </div>
           {campaign && source === "filters" && (
             <div className="border-t border-border px-4 py-2">
@@ -651,6 +664,11 @@ export function BulkSend() {
             <p className="mt-4 flex items-start gap-1.5 text-xs font-medium text-danger">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
               {t("bulk.r_deferred", { count: result.deferred, cap: result.cap })}
+            </p>
+          )}
+          {(result.grouped ?? 0) > 0 && (
+            <p className="mt-3 text-2xs text-fg-subtle">
+              {t("bulk.r_grouped", { count: result.grouped })}
             </p>
           )}
           {result.suppressed.length > 0 && (

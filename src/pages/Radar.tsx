@@ -38,6 +38,7 @@ import {
 import type { ViRunProgress } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
 import { useConfirm, useToast } from "../components/ui";
+import { AddToCampaign } from "../components/BulkActions";
 import { backendError, progressText } from "../lib/backendMessages";
 
 const GENRE_PRESETS = [
@@ -359,6 +360,23 @@ export function Radar() {
                 ? `${t("radar.restore")} (${selected.size})`
                 : t("radar.reject_selected", { count: selected.size })}
             </button>
+          )}
+          {selected.size > 0 && !rejectedView && (
+            // Curators with an address are promoted (idempotent) and their
+            // contacts join the campaign's audience.
+            <AddToCampaign
+              resolve={async () => {
+                const ids: number[] = [];
+                for (const r of rows)
+                  if (selected.has(r.id) && (r.in_pipeline || r.best_email))
+                    ids.push(await radarPromote(r.id));
+                return ids;
+              }}
+              onDone={() => {
+                setSelected(new Set());
+                refreshAfterPromote();
+              }}
+            />
           )}
           {addressable > 0 && !rejectedView && (
             <button

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, State};
 
-use super::{campaigns, outbox, status};
+use super::{campaigns, organisations, outbox, status};
 
 static TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -680,6 +680,9 @@ pub struct BulkResult {
     /// Recipients left unsent because the daily cap was reached.
     pub deferred: usize,
     pub cap: i64,
+    /// Skipped because their organisation was already mailed (in this batch,
+    /// or earlier in the same campaign). Counted in `skipped` too.
+    pub grouped: usize,
 }
 
 /// {{date}} / {{target_date}} for humans: an ISO day ("2026-10-21") becomes
@@ -825,6 +828,10 @@ fn send_bulk_blocking(
     // Several contacts can share one address (a promoter booking two venues):
     // mail it once per batch.
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Same for an organisation (one programmer behind several venues, see
+    // commands/organisations.rs): its first reachable contact gets the email.
+    let mut seen_orgs: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let mut grouped = 0usize;
 
     for (idx, cid) in contact_ids.iter().enumerate() {
         if budget <= 0 {
@@ -838,7 +845,7 @@ fn send_bulk_blocking(
         }
         let row = conn
             .query_row(
-                "SELECT c.name, c.promoter, c.venue, c.area, c.date, c.email, a.name
+                "SELECT c.name, c.promoter, c.venue, c.area, c.date, c.email, a.name, c.organisation_id
                  FROM contacts c LEFT JOIN artists a ON a.id = c.artist_id WHERE c.id = ?1",
                 params![cid],
                 |r| {
@@ -850,6 +857,7 @@ fn send_bulk_blocking(
                         r.get::<_, Option<String>>(4)?,
                         r.get::<_, Option<String>>(5)?,
                         r.get::<_, Option<String>>(6)?,
+                        r.get::<_, Option<i64>>(7)?,
                     ))
                 },
             )
@@ -862,7 +870,7 @@ fn send_bulk_blocking(
             );
         };
 
-        let Some((name, promoter, venue, area, date, email, contact_artist)) = row else {
+        let Some((name, promoter, venue, area, date, email, contact_artist, org_id)) = row else {
             skipped += 1;
             emit(idx + 1, sent, failed, skipped, None);
             continue;
@@ -909,6 +917,10 @@ fn send_bulk_blocking(
         let email = to_mbox.email.to_string();
 
         if !seen.insert(email.trim().to_lowercase()) {
+            // That mailbox was just reached through another contact.
+            if let Some(camp) = campaign_id {
+                campaigns::mark_audience(&conn, camp, *cid, "sent");
+            }
             skipped += 1;
             emit(idx + 1, sent, failed, skipped, Some(email.clone()));
             continue;
@@ -918,6 +930,22 @@ fn send_bulk_blocking(
             suppressed.push(email.clone());
             emit(idx + 1, sent, failed, skipped, Some(email.clone()));
             continue;
+        }
+        if let Some(org) = org_id {
+            let reached = seen_orgs.contains(&org)
+                || campaign_id.is_some_and(|camp| organisations::org_reached_in_campaign(&conn, camp, org));
+            if reached {
+                // The organisation has the email: this venue counts as contacted
+                // through it, so the next batch does not cold-mail it again.
+                if let Some(camp) = campaign_id {
+                    campaigns::mark_audience(&conn, camp, *cid, "grouped");
+                }
+                status::on_email_sent(&conn, Some(*cid), "");
+                grouped += 1;
+                skipped += 1;
+                emit(idx + 1, sent, failed, skipped, Some(email.clone()));
+                continue;
+            }
         }
 
         let token = gen_token();
@@ -948,6 +976,9 @@ fn send_bulk_blocking(
             if let Some(camp) = campaign_id {
                 campaigns::mark_audience(&conn, camp, *cid, "sent");
             }
+            if let Some(org) = org_id {
+                seen_orgs.insert(org);
+            }
         } else {
             failed += 1;
             if hard_bounce {
@@ -966,7 +997,7 @@ fn send_bulk_blocking(
         }
     }
 
-    Ok(BulkResult { sent, failed, skipped, errors, suppressed, bounced, deferred, cap: quota.cap })
+    Ok(BulkResult { sent, failed, skipped, errors, suppressed, bounced, deferred, cap: quota.cap, grouped })
 }
 
 /// Apply a batch of open events (fetched by the frontend from the tracking

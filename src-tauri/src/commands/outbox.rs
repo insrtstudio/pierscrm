@@ -105,8 +105,14 @@ pub fn suppress(conn: &Connection, addr: &str, reason: &str, note: Option<&str>)
         )
         .unwrap_or(0)
         > 0;
-    if inserted && reason == "bounce" {
-        crate::commands::campaigns::mark_audience_by_address(conn, &a, "bounced");
+    if inserted {
+        match reason {
+            "bounce" => crate::commands::campaigns::mark_audience_by_address(conn, &a, "bounced"),
+            "unsubscribe" | "refused" => {
+                crate::commands::campaigns::mark_audience_by_address(conn, &a, "unsubscribed")
+            }
+            _ => {}
+        }
     }
     inserted
 }

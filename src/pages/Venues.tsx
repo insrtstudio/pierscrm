@@ -77,6 +77,7 @@ import type {
 import { PageHeader, EmptyState } from "../components/Layout";
 import { Field, Modal, useToast, useConfirm } from "../components/ui";
 import { useDebounced } from "../lib/hooks";
+import { AddToCampaign } from "../components/BulkActions";
 
 type Tab = "venues" | "runs" | "areas" | "artists";
 
@@ -256,6 +257,40 @@ function VenuesTab() {
   });
   const targetArtistSet = targetArtist !== "";
   const displayVenues = venues;
+
+  // Rows ticked for "add to a campaign". Only rows that are, or can become, a
+  // pipeline contact with an address are selectable.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  useEffect(
+    () => setSelected(new Set()),
+    [statut, pays, dSearch, hasEmail, hasPhone, hasWebsite, contactedF, playedF, targetCities, targetOnly]
+  );
+  const selectable = (v: (typeof venues)[number]) => !!v.crm_contact_id || !!v.best_email;
+  const selectableVenues = venues.filter(selectable);
+  const allSelected = selectableVenues.length > 0 && selectableVenues.every((v) => selected.has(v.id));
+  const toggleVenue = (id: number) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  // Venues not in the pipeline yet are promoted first (idempotent), then their
+  // contacts go into the campaign's audience.
+  const selectedContactIds = async () => {
+    const ids: number[] = [];
+    for (const v of venues) {
+      if (!selected.has(v.id) || !selectable(v)) continue;
+      ids.push(v.crm_contact_id ?? (await viPromoteVenue(v.id)));
+    }
+    return ids;
+  };
+  const afterAddToCampaign = () => {
+    setSelected(new Set());
+    qc.invalidateQueries({ queryKey: ["vi_venues"] });
+    qc.invalidateQueries({ queryKey: ["vi_venue_stats"] });
+    qc.invalidateQueries({ queryKey: ["contacts"] });
+    qc.invalidateQueries({ queryKey: ["dashboard"] });
+  };
 
   // Render only the rows in view. Mounting 500 rows meant ~15 000 DOM nodes and
   // 3 000 inline SVG icons on every filter change; windowing makes that cost
@@ -606,6 +641,17 @@ function VenuesTab() {
         </div>
       )}
 
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface px-4 py-2 text-sm">
+          <span className="text-fg-subtle">{t("contacts.selected", { count: selected.size })}</span>
+          <AddToCampaign resolve={selectedContactIds} onDone={afterAddToCampaign} />
+          <span className="text-2xs text-fg-subtle">{t("venues.campaign_promote_hint")}</span>
+          <button className="btn-ghost ml-auto py-1.5 text-xs" onClick={() => setSelected(new Set())}>
+            {t("common.cancel")}
+          </button>
+        </div>
+      )}
+
       {venues.length === 0 ? (
         <div className="card">
           {filtered && (stats?.total ?? 0) > 0 ? (
@@ -628,6 +674,7 @@ function VenuesTab() {
               not resize based on whichever slice happens to be mounted. */}
           <table className="tbl" style={{ tableLayout: "fixed", minWidth: 900 }}>
             <colgroup>
+              <col style={{ width: 36 }} />
               <col style={{ width: 64 }} />
               <col />
               <col style={{ width: 170 }} />
@@ -638,6 +685,18 @@ function VenuesTab() {
             </colgroup>
             <thead>
               <tr>
+                <th>
+                  <input
+                    type="checkbox"
+                    className="accent-accent"
+                    checked={allSelected}
+                    disabled={selectableVenues.length === 0}
+                    aria-label={t("venues.select_all")}
+                    onChange={() =>
+                      setSelected(allSelected ? new Set() : new Set(selectableVenues.map((v) => v.id)))
+                    }
+                  />
+                </th>
                 <th className="text-right">{t("venues.score")}</th>
                 <th>{t("venues.name")}</th>
                 <th>{t("venues.city")}</th>
@@ -660,6 +719,16 @@ function VenuesTab() {
                   className="cursor-pointer hover:bg-muted"
                   onClick={() => setOpenId(v.id)}
                 >
+                  <td onClick={(e) => e.stopPropagation()}>
+                    {selectable(v) && (
+                      <input
+                        type="checkbox"
+                        className="accent-accent"
+                        checked={selected.has(v.id)}
+                        onChange={() => toggleVenue(v.id)}
+                      />
+                    )}
+                  </td>
                   <td className="text-right">
                     <span className="font-condensed text-lg tabular text-accent-2">{v.score_qualif}</span>
                   </td>

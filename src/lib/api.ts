@@ -17,6 +17,8 @@ import type {
   Event,
   EventVisa,
   Organisation,
+  OrganisationDetail,
+  OrgProposal,
   FilePreview,
   Followup,
   ImportResult,
@@ -85,6 +87,30 @@ export const listOrganisations = () => invoke<Organisation[]>("list_organisation
 export const saveOrganisation = (organisation: Organisation) =>
   invoke<number>("save_organisation", { organisation });
 export const deleteOrganisation = (id: number) => invoke<void>("delete_organisation", { id });
+export const getOrganisationDetail = (id: number) =>
+  invoke<OrganisationDetail>("get_organisation_detail", { id });
+export const setContactsOrganisation = (ids: number[], organisationId: number | null) =>
+  invoke<number>("set_contacts_organisation", { ids, organisationId });
+// Grouping proposals: computed on demand, applied only when accepted.
+export const listOrganisationProposals = () =>
+  invoke<OrgProposal[]>("list_organisation_proposals");
+export const acceptOrganisationProposal = (p: {
+  name: string;
+  email_domain?: string | null;
+  contact_ids: number[];
+  organisation_id?: number | null;
+}) =>
+  invoke<number>("accept_organisation_proposal", {
+    name: p.name,
+    emailDomain: p.email_domain ?? null,
+    contactIds: p.contact_ids,
+    organisationId: p.organisation_id ?? null,
+  });
+export const dismissOrganisationProposal = (key: string) =>
+  invoke<void>("dismiss_organisation_proposal", { key });
+export const countContactsWithoutArtist = () => invoke<number>("count_contacts_without_artist");
+export const assignUnassignedContactsArtist = (artistId: number) =>
+  invoke<number>("assign_unassigned_contacts_artist", { artistId });
 export const getContact = (id: number) => invoke<Contact | null>("get_contact", { id });
 export const createContact = (contact: Contact) => invoke<number>("create_contact", { contact });
 export const updateContact = (contact: Contact) => invoke<void>("update_contact", { contact });

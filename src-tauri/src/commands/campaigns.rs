@@ -99,14 +99,21 @@ pub fn list_campaign_recipients(state: State<'_, AppState>, campaign_id: i64) ->
 // row moves planned -> sent -> replied (or bounced) as the outbox works through
 // it; emails.campaign_id is still written on every send, for the history.
 
+/// Audience states: planned -> sent (or grouped: its organisation was mailed
+/// through another contact) -> replied; bounced and unsubscribed come from the
+/// suppression list.
+///
 /// Upsert one audience row to `state`. A reply is never downgraded back to
-/// "sent" by a later follow-up.
+/// "sent" / "grouped" by a later send, and a direct send beats "grouped".
 pub fn mark_audience(conn: &Connection, campaign_id: i64, contact_id: i64, state: &str) {
     let _ = conn.execute(
         "INSERT INTO campaign_contacts (campaign_id, contact_id, state) VALUES (?1, ?2, ?3)
          ON CONFLICT(campaign_id, contact_id) DO UPDATE SET
-             state = CASE WHEN campaign_contacts.state = 'replied' AND excluded.state = 'sent'
-                          THEN campaign_contacts.state ELSE excluded.state END,
+             state = CASE WHEN campaign_contacts.state = 'replied' AND excluded.state IN ('sent', 'grouped')
+                          THEN campaign_contacts.state
+                          WHEN campaign_contacts.state = 'sent' AND excluded.state = 'grouped'
+                          THEN campaign_contacts.state
+                          ELSE excluded.state END,
              updated_at = datetime('now')",
         params![campaign_id, contact_id, state],
     );
@@ -197,7 +204,8 @@ pub fn list_campaign_audience(
                     EXISTS (SELECT 1 FROM suppressions s WHERE s.address = lower(trim(k.email))) AS cc_suppressed
              FROM campaign_contacts cc JOIN contacts k ON k.id = cc.contact_id
              WHERE cc.campaign_id = ?1
-             ORDER BY CASE cc.state WHEN 'planned' THEN 0 WHEN 'sent' THEN 1 WHEN 'replied' THEN 2 ELSE 3 END,
+             ORDER BY CASE cc.state WHEN 'planned' THEN 0 WHEN 'sent' THEN 1 WHEN 'grouped' THEN 2
+                                    WHEN 'replied' THEN 3 ELSE 4 END,
                       k.name COLLATE NOCASE",
         )
         .map_err(|e| e.to_string())?;
@@ -212,4 +220,60 @@ pub fn list_campaign_audience(
         })
         .map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE contacts (id INTEGER PRIMARY KEY, email TEXT);
+             CREATE TABLE suppressions (id INTEGER PRIMARY KEY AUTOINCREMENT, address TEXT NOT NULL UNIQUE,
+                reason TEXT NOT NULL DEFAULT 'manual', note TEXT, created_at TEXT DEFAULT (datetime('now')));
+             CREATE TABLE campaign_contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL,
+                contact_id INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'planned',
+                added_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE (campaign_id, contact_id));
+             INSERT INTO contacts VALUES (1, 'a@club.nl'), (2, 'b@club.nl'), (3, 'c@club.nl');",
+        )
+        .unwrap();
+        conn
+    }
+    fn state(c: &Connection, contact: i64) -> String {
+        c.query_row("SELECT state FROM campaign_contacts WHERE campaign_id=1 AND contact_id=?1", [contact], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn audience_state_precedence() {
+        let c = db();
+        mark_audience(&c, 1, 1, "planned");
+        mark_audience(&c, 1, 1, "grouped");
+        assert_eq!(state(&c, 1), "grouped");
+        mark_audience(&c, 1, 1, "sent");
+        assert_eq!(state(&c, 1), "sent");
+        // A direct send is not downgraded to "via the organisation".
+        mark_audience(&c, 1, 1, "grouped");
+        assert_eq!(state(&c, 1), "sent");
+        mark_audience(&c, 1, 1, "replied");
+        mark_audience(&c, 1, 1, "sent");
+        mark_audience(&c, 1, 1, "grouped");
+        assert_eq!(state(&c, 1), "replied");
+    }
+
+    #[test]
+    fn suppression_updates_audience() {
+        let c = db();
+        for id in 1..=3 {
+            mark_audience(&c, 1, id, "sent");
+        }
+        crate::commands::outbox::suppress(&c, "A@club.nl", "bounce", None);
+        crate::commands::outbox::suppress(&c, "b@club.nl", "unsubscribe", None);
+        crate::commands::outbox::suppress(&c, "c@club.nl", "manual", None);
+        assert_eq!(state(&c, 1), "bounced");
+        assert_eq!(state(&c, 2), "unsubscribed");
+        assert_eq!(state(&c, 3), "sent");
+    }
 }
