@@ -662,147 +662,7 @@ async fn process_harvest_task(
     loop {
         let listings = ra::fetch_listings(client, area_id, &gte, &lte, page, PAGE_SIZE).await?;
         let n = listings.data.len() as i64;
-        {
-            let conn = pool.get().unwrap();
-            for listing in &listings.data {
-                let Some(ev) = &listing.event else { continue };
-                let Some(venue) = &ev.venue else { continue };
-                let ra_venue_id: i64 = match venue.id.parse() {
-                    Ok(x) => x,
-                    Err(_) => continue,
-                };
-                // Excluded from the fiche: never re-added, never re-counted.
-                if crate::commands::vi::is_excluded(&conn, &crate::commands::vi::venue_exclusion_key(ra_venue_id)) {
-                    continue;
-                }
-                // "TBA", "Secret Location (Paris)"...: a label shared by every
-                // unannounced party in the city, not a room to pitch.
-                if crate::commands::vi::is_placeholder_venue(
-                    &venue.name,
-                    venue.area.as_ref().and_then(|a| a.name.as_deref()),
-                ) {
-                    continue;
-                }
-                // "TBA - Club Cello" is stored as "Club Cello".
-                let display_name =
-                    crate::commands::vi::strip_tba_prefix(&venue.name).unwrap_or_else(|| venue.name.clone());
-                let norm = normalise(&display_name);
-                let slug = format!("{}-{}", norm, ra_venue_id);
-                let ville = venue.area.as_ref().and_then(|a| a.name.clone());
-                // Accent-folded copy of the city: SQLite has no unaccent, and the
-                // artist-targeting sort compares against it (see vi_list_venues).
-                let ville_norm = ville.as_deref().map(normalise);
-                let pays = venue
-                    .area
-                    .as_ref()
-                    .and_then(|a| a.country.as_ref())
-                    .and_then(|c| c.url_code.clone());
-                let ra_url = venue
-                    .content_url
-                    .as_ref()
-                    .map(|u| format!("https://ra.co{}", u));
-
-                // No `nb_events_periode + 1` here any more: re-harvesting an
-                // overlapping window counted the same events again (most areas
-                // were harvested 2 to 4 times, see the v1 dedup migration). The
-                // count is derived from vi_venue_events below instead.
-                let _ = conn.execute(
-                    "INSERT INTO vi_venues (slug, nom, nom_normalise, ville, ville_norm, pays, region_cible, ra_venue_id, ra_url, nb_events_periode)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,0)
-                     ON CONFLICT(ra_venue_id) DO UPDATE SET
-                        ville = COALESCE(vi_venues.ville, excluded.ville),
-                        ville_norm = COALESCE(vi_venues.ville_norm, excluded.ville_norm),
-                        pays = COALESCE(vi_venues.pays, excluded.pays),
-                        region_cible = COALESCE(vi_venues.region_cible, excluded.region_cible),
-                        ra_url = COALESCE(vi_venues.ra_url, excluded.ra_url),
-                        updated_at = datetime('now')",
-                    params![slug, display_name, norm, ville, ville_norm, pays, region, ra_venue_id, ra_url],
-                );
-                let venue_id: i64 = match conn.query_row(
-                    "SELECT id FROM vi_venues WHERE ra_venue_id=?1",
-                    params![ra_venue_id],
-                    |r| r.get(0),
-                ) {
-                    Ok(x) => x,
-                    Err(_) => continue,
-                };
-
-                let date_event = ev.date.as_deref().unwrap_or("").chars().take(10).collect::<String>();
-
-                // Each RA event is counted once, however many runs see it.
-                let new_event = match ev.id.parse::<i64>() {
-                    Ok(eid) => conn
-                        .execute(
-                            "INSERT OR IGNORE INTO vi_venue_events (ra_event_id, venue_id, date_event) VALUES (?1,?2,?3)",
-                            params![eid, venue_id, date_event],
-                        )
-                        .map(|n| n > 0)
-                        .unwrap_or(false),
-                    Err(_) => false,
-                };
-                if new_event {
-                    let _ = conn.execute(
-                        "UPDATE vi_venues SET nb_events_periode = MAX(nb_events_legacy,
-                            (SELECT COUNT(*) FROM vi_venue_events e WHERE e.venue_id = ?1))
-                         WHERE id = ?1",
-                        params![venue_id],
-                    );
-                }
-                let source_url = ev
-                    .content_url
-                    .as_ref()
-                    .map(|u| format!("https://ra.co{}", u))
-                    .or_else(|| ra_url.clone())
-                    .unwrap_or_default();
-
-                // Evidence: exact match of normalised artist name against the active reference list.
-                for artist in &ev.artists {
-                    let an = normalise(&artist.name);
-                    if an.is_empty() {
-                        continue;
-                    }
-                    let tier: Option<i64> = conn
-                        .query_row(
-                            "SELECT tier FROM vi_reference_artists WHERE nom_normalise=?1 AND actif=1",
-                            params![an],
-                            |r| r.get(0),
-                        )
-                        .ok();
-                    if let Some(tier) = tier {
-                        if !date_event.is_empty() && !source_url.is_empty() {
-                            let _ = conn.execute(
-                                "INSERT OR IGNORE INTO vi_evidence (venue_id, artiste, artiste_tier, date_event, titre_event, source_url, source_type)
-                                 VALUES (?1,?2,?3,?4,?5,?6,'ra')",
-                                params![venue_id, artist.name, tier, date_event, ev.title, source_url],
-                            );
-                        }
-                    }
-                }
-
-                // Promoters aggregated per venue, counted once per event like the
-                // venue itself. Their RA page is kept so the email retry can reach
-                // the promoter's own site.
-                for promo in &ev.promoters {
-                    if promo.name.trim().is_empty() {
-                        continue;
-                    }
-                    let purl = promo.id.as_deref().and_then(ra::promoter_url);
-                    if new_event {
-                        let _ = conn.execute(
-                            "INSERT INTO vi_promoters (venue_id, nom, nb_events, ra_url) VALUES (?1,?2,1,?3)
-                             ON CONFLICT(venue_id, nom) DO UPDATE SET nb_events = nb_events + 1,
-                                ra_url = COALESCE(vi_promoters.ra_url, excluded.ra_url)",
-                            params![venue_id, promo.name, purl],
-                        );
-                    } else if purl.is_some() {
-                        let _ = conn.execute(
-                            "UPDATE vi_promoters SET ra_url = COALESCE(ra_url, ?3) WHERE venue_id=?1 AND nom=?2",
-                            params![venue_id, promo.name, purl],
-                        );
-                    }
-                }
-            }
-        }
+        record_listings(&pool.get().unwrap(), &listings.data, &region);
 
         if n < PAGE_SIZE {
             break; // last (incomplete) page
@@ -811,6 +671,150 @@ async fn process_harvest_task(
         tokio::time::sleep(std::time::Duration::from_millis(POLITENESS_MS)).await;
     }
     Ok(())
+}
+
+/// Store one page of RA listings: venues upserted, each RA event counted once
+/// (vi_venue_events), evidence and promoters attached. Idempotent: replaying
+/// the same page, or an overlapping window, changes no count.
+fn record_listings(conn: &rusqlite::Connection, listings: &[ra::Listing], region: &str) {
+    for listing in listings {
+        let Some(ev) = &listing.event else { continue };
+        let Some(venue) = &ev.venue else { continue };
+        let ra_venue_id: i64 = match venue.id.parse() {
+            Ok(x) => x,
+            Err(_) => continue,
+        };
+        // Excluded from the fiche: never re-added, never re-counted.
+        if crate::commands::vi::is_excluded(conn, &crate::commands::vi::venue_exclusion_key(ra_venue_id)) {
+            continue;
+        }
+        // "TBA", "Secret Location (Paris)"...: a label shared by every
+        // unannounced party in the city, not a room to pitch.
+        if crate::commands::vi::is_placeholder_venue(
+            &venue.name,
+            venue.area.as_ref().and_then(|a| a.name.as_deref()),
+        ) {
+            continue;
+        }
+        // "TBA - Club Cello" is stored as "Club Cello".
+        let display_name =
+            crate::commands::vi::strip_tba_prefix(&venue.name).unwrap_or_else(|| venue.name.clone());
+        let norm = normalise(&display_name);
+        let slug = format!("{}-{}", norm, ra_venue_id);
+        let ville = venue.area.as_ref().and_then(|a| a.name.clone());
+        // Accent-folded copy of the city: SQLite has no unaccent, and the
+        // artist-targeting sort compares against it (see vi_list_venues).
+        let ville_norm = ville.as_deref().map(normalise);
+        let pays = venue
+            .area
+            .as_ref()
+            .and_then(|a| a.country.as_ref())
+            .and_then(|c| c.url_code.clone());
+        let ra_url = venue
+            .content_url
+            .as_ref()
+            .map(|u| format!("https://ra.co{}", u));
+
+        // No `nb_events_periode + 1` here any more: re-harvesting an
+        // overlapping window counted the same events again (most areas
+        // were harvested 2 to 4 times, see the v1 dedup migration). The
+        // count is derived from vi_venue_events below instead.
+        let _ = conn.execute(
+            "INSERT INTO vi_venues (slug, nom, nom_normalise, ville, ville_norm, pays, region_cible, ra_venue_id, ra_url, nb_events_periode)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,0)
+             ON CONFLICT(ra_venue_id) DO UPDATE SET
+                ville = COALESCE(vi_venues.ville, excluded.ville),
+                ville_norm = COALESCE(vi_venues.ville_norm, excluded.ville_norm),
+                pays = COALESCE(vi_venues.pays, excluded.pays),
+                region_cible = COALESCE(vi_venues.region_cible, excluded.region_cible),
+                ra_url = COALESCE(vi_venues.ra_url, excluded.ra_url),
+                updated_at = datetime('now')",
+            params![slug, display_name, norm, ville, ville_norm, pays, region, ra_venue_id, ra_url],
+        );
+        let venue_id: i64 = match conn.query_row(
+            "SELECT id FROM vi_venues WHERE ra_venue_id=?1",
+            params![ra_venue_id],
+            |r| r.get(0),
+        ) {
+            Ok(x) => x,
+            Err(_) => continue,
+        };
+
+        let date_event = ev.date.as_deref().unwrap_or("").chars().take(10).collect::<String>();
+
+        // Each RA event is counted once, however many runs see it.
+        let new_event = match ev.id.parse::<i64>() {
+            Ok(eid) => conn
+                .execute(
+                    "INSERT OR IGNORE INTO vi_venue_events (ra_event_id, venue_id, date_event) VALUES (?1,?2,?3)",
+                    params![eid, venue_id, date_event],
+                )
+                .map(|n| n > 0)
+                .unwrap_or(false),
+            Err(_) => false,
+        };
+        if new_event {
+            let _ = conn.execute(
+                "UPDATE vi_venues SET nb_events_periode = MAX(nb_events_legacy,
+                    (SELECT COUNT(*) FROM vi_venue_events e WHERE e.venue_id = ?1))
+                 WHERE id = ?1",
+                params![venue_id],
+            );
+        }
+        let source_url = ev
+            .content_url
+            .as_ref()
+            .map(|u| format!("https://ra.co{}", u))
+            .or_else(|| ra_url.clone())
+            .unwrap_or_default();
+
+        // Evidence: exact match of normalised artist name against the active reference list.
+        for artist in &ev.artists {
+            let an = normalise(&artist.name);
+            if an.is_empty() {
+                continue;
+            }
+            let tier: Option<i64> = conn
+                .query_row(
+                    "SELECT tier FROM vi_reference_artists WHERE nom_normalise=?1 AND actif=1",
+                    params![an],
+                    |r| r.get(0),
+                )
+                .ok();
+            if let Some(tier) = tier {
+                if !date_event.is_empty() && !source_url.is_empty() {
+                    let _ = conn.execute(
+                        "INSERT OR IGNORE INTO vi_evidence (venue_id, artiste, artiste_tier, date_event, titre_event, source_url, source_type)
+                         VALUES (?1,?2,?3,?4,?5,?6,'ra')",
+                        params![venue_id, artist.name, tier, date_event, ev.title, source_url],
+                    );
+                }
+            }
+        }
+
+        // Promoters aggregated per venue, counted once per event like the
+        // venue itself. Their RA page is kept so the email retry can reach
+        // the promoter's own site.
+        for promo in &ev.promoters {
+            if promo.name.trim().is_empty() {
+                continue;
+            }
+            let purl = promo.id.as_deref().and_then(ra::promoter_url);
+            if new_event {
+                let _ = conn.execute(
+                    "INSERT INTO vi_promoters (venue_id, nom, nb_events, ra_url) VALUES (?1,?2,1,?3)
+                     ON CONFLICT(venue_id, nom) DO UPDATE SET nb_events = nb_events + 1,
+                        ra_url = COALESCE(vi_promoters.ra_url, excluded.ra_url)",
+                    params![venue_id, promo.name, purl],
+                );
+            } else if purl.is_some() {
+                let _ = conn.execute(
+                    "UPDATE vi_promoters SET ra_url = COALESCE(ra_url, ?3) WHERE venue_id=?1 AND nom=?2",
+                    params![venue_id, promo.name, purl],
+                );
+            }
+        }
+    }
 }
 
 /// Compute score_qualif and statut for all non-decided venues.
@@ -1479,6 +1483,42 @@ mod tests {
         let ids: Vec<i64> = st.query_map(refs.as_slice(), |r| r.get(0)).unwrap().flatten().collect();
         assert_eq!(ids, vec![1, 2, 6]);
         assert!(target_sql(&[]).is_none());
+    }
+
+    /// #18: replaying a page (an overlapping re-harvest) must not count its
+    /// events or promoters twice; a new event on the same venue still counts.
+    #[test]
+    fn event_counts_are_idempotent() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate_for_tests(&conn).unwrap();
+        let listing = |eid: &str| -> ra::Listing {
+            serde_json::from_value(json!({ "event": {
+                "id": eid, "title": "Night", "date": "2026-05-01T23:00:00",
+                "contentUrl": format!("/events/{eid}"),
+                "venue": { "id": "77", "name": "Club Cello", "contentUrl": "/clubs/77",
+                           "area": { "name": "Zürich", "country": { "urlCode": "CH" } } },
+                "promoters": [{ "id": "5", "name": "Promo" }]
+            }}))
+            .unwrap()
+        };
+        let counts = || -> (i64, i64, String) {
+            conn.query_row(
+                "SELECT v.nb_events_periode, p.nb_events, v.ville_norm FROM vi_venues v
+                 JOIN vi_promoters p ON p.venue_id = v.id WHERE v.ra_venue_id = 77",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+        };
+        let page = vec![listing("1001"), listing("1002")];
+        record_listings(&conn, &page, "Zurich");
+        assert_eq!(counts(), (2, 2, "zurich".to_string()));
+        record_listings(&conn, &page, "Zurich");
+        record_listings(&conn, &page[..1], "Zurich");
+        assert_eq!(counts(), (2, 2, "zurich".to_string()));
+        record_listings(&conn, &[listing("1003")], "Zurich");
+        assert_eq!(counts().0, 3);
+        assert_eq!(counts().1, 3);
     }
 
     /// Timing on a copy of the real database (never the live one):
