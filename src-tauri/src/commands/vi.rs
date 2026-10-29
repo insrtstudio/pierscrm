@@ -429,6 +429,33 @@ pub(crate) fn migrate_quality(conn: &rusqlite::Connection) {
     });
     once(conn, "vi_phone_cleanup_v1", clean_artefact_phones);
     once(conn, "vi_placeholder_cleanup_v1", archive_placeholder_venues);
+    once(conn, "vi_denied_email_cleanup_v1", |c| {
+        drop_denied_emails(c, "vi_contacts");
+        drop_denied_emails(c, "radar_contacts");
+    });
+}
+
+/// One-shot: addresses on a third party's domain (media, ticketing, agencies,
+/// see enrich::EMAIL_DENY_DOMAINS) stored before the source filter existed.
+/// Addresses the user verified by hand stay.
+fn drop_denied_emails(conn: &rusqlite::Connection, table: &str) -> usize {
+    let rows: Vec<(i64, String)> = match conn.prepare(&format!("SELECT id, valeur FROM {table} WHERE type='email' AND verifie=0")) {
+        Ok(mut st) => st
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map(|it| it.flatten().collect())
+            .unwrap_or_default(),
+        Err(_) => return 0,
+    };
+    let Ok(tx) = conn.unchecked_transaction() else { return 0 };
+    let mut dropped = 0;
+    for (id, valeur) in rows {
+        let Some((_, domain)) = valeur.trim().rsplit_once('@') else { continue };
+        if super::enrich::is_denied_email_domain(&domain.to_lowercase()) {
+            dropped += tx.execute(&format!("DELETE FROM {table} WHERE id=?1"), params![id]).unwrap_or(0);
+        }
+    }
+    let _ = tx.commit();
+    dropped
 }
 
 /// One-shot: phones scraped after a "tel:" inside a script came back as JS
@@ -692,6 +719,29 @@ mod placeholder_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn denied_emails_are_dropped_unless_verified() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate_for_tests(&c).unwrap();
+        c.execute_batch("PRAGMA foreign_keys=OFF;").unwrap();
+        for (v, verified) in [("olivia.stock@djmag.com", 0), ("custcare@skiddle.com", 0), ("booking@badaboum.paris", 0), ("press@djmag.com", 1)] {
+            c.execute(
+                "INSERT INTO vi_contacts(venue_id, type, valeur, source_url, verifie) VALUES (1, 'email', ?1, 'x', ?2)",
+                params![v, verified],
+            )
+            .unwrap();
+        }
+        assert_eq!(drop_denied_emails(&c, "vi_contacts"), 2);
+        let left: Vec<String> = c
+            .prepare("SELECT valeur FROM vi_contacts ORDER BY valeur")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(left, vec!["booking@badaboum.paris".to_string(), "press@djmag.com".to_string()]);
+    }
 
     #[test]
     fn harvest_factor_counts_overlap() {
