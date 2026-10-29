@@ -23,7 +23,6 @@ import {
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  addToCampaign,
   assignContactsArtist,
   countContacts,
   createContact,
@@ -33,7 +32,6 @@ import {
   listArtists,
   listContacts,
   listEmails,
-  listCampaigns,
   listEvents,
   listOrganisations,
   saveOrganisation,
@@ -49,6 +47,8 @@ import { PageHeader, Loader, ErrorState } from "../components/Layout";
 import { StatusBadge, StatusSelect, PriorityBadge } from "../components/StatusBadge";
 import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 import { ComposeModal } from "../components/ComposeModal";
+import { AddToCampaign, AssignUnassignedArtist, SetOrganisation } from "../components/BulkActions";
+import { OrganisationsModal } from "../components/Organisations";
 
 const PAGE_SIZE = 200;
 
@@ -98,6 +98,7 @@ export function Contacts() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [editing, setEditing] = useState<Contact | null>(null);
   const [composing, setComposing] = useState<Contact | null>(null);
+  const [orgsOpen, setOrgsOpen] = useState(false);
   // Typing must not fire a query per keystroke.
   const dSearch = useDebounced(search, 250);
 
@@ -257,6 +258,11 @@ export function Contacts() {
         subtitle={t("contacts.subtitle")}
         actions={
           <>
+          <AssignUnassignedArtist onDone={invalidateAll} />
+          <button className="btn-outline" onClick={() => setOrgsOpen(true)}>
+            <Building2 size={15} />
+            {t("orgs.title")}
+          </button>
           <button className="btn-outline" onClick={() => navigate("/import")}>
             <Upload size={15} />
             {t("nav.import")}
@@ -362,7 +368,7 @@ export function Contacts() {
 
         {/* Bulk bar */}
         {visibleSelected.length > 0 && (
-          <div className="mb-3 flex items-center gap-3 rounded-lg border border-border bg-surface px-4 py-2 text-sm">
+          <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface px-4 py-2 text-sm">
             <span className="text-fg-subtle">
               {t("contacts.selected", { count: visibleSelected.length })}
             </span>
@@ -408,6 +414,7 @@ export function Contacts() {
               </select>
             )}
             <AddToCampaign ids={visibleSelected} onDone={invalidateAll} />
+            <SetOrganisation ids={visibleSelected} onDone={invalidateAll} />
             <button
               className="btn-danger ml-auto py-1.5"
               disabled={bulkDelMut.isPending}
@@ -620,6 +627,15 @@ export function Contacts() {
           }}
         />
       )}
+      {orgsOpen && (
+        <OrganisationsModal
+          onClose={() => setOrgsOpen(false)}
+          onShowContacts={(id) => {
+            setOrgsOpen(false);
+            setOrg(String(id));
+          }}
+        />
+      )}
       <ComposeModal
         open={!!composing}
         contact={composing}
@@ -652,43 +668,6 @@ function StatusSelectInline({
     <button onClick={() => setEditing(true)}>
       <StatusBadge status={value} />
     </button>
-  );
-}
-
-// ---------------- Bulk: add to campaign ----------------
-
-// Planned audience of a campaign (campaign_contacts).
-function AddToCampaign({ ids, onDone }: { ids: number[]; onDone: () => void }) {
-  const { t } = useTranslation();
-  const toast = useToast();
-  const { data: campaigns = [] } = useQuery({ queryKey: ["campaigns"], queryFn: listCampaigns });
-  const qc = useQueryClient();
-  const mut = useMutation({
-    mutationFn: (campaignId: number) => addToCampaign(campaignId, ids),
-    onSuccess: (n) => {
-      qc.invalidateQueries({ queryKey: ["campaigns"] });
-      onDone();
-      toast(t("contacts.bulk_added_campaign", { count: typeof n === "number" ? n : ids.length }), "ok");
-    },
-    onError: (e) => toast(String(e), "error"),
-  });
-  const open = campaigns.filter((c) => c.status !== "archived" && c.status !== "done");
-  if (open.length === 0) return null;
-  return (
-    <select
-      className="input w-auto py-1.5 text-xs"
-      value=""
-      disabled={mut.isPending}
-      aria-label={t("contacts.bulk_campaign")}
-      onChange={(e) => e.target.value && mut.mutate(Number(e.target.value))}
-    >
-      <option value="">{t("contacts.bulk_campaign")}</option>
-      {open.map((c) => (
-        <option key={c.id} value={String(c.id)}>
-          {c.name}
-        </option>
-      ))}
-    </select>
   );
 }
 

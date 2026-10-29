@@ -51,7 +51,7 @@ import {
   removeFromCampaign,
 } from "../lib/api";
 import type { Campaign, Contact, EmailFilter, Template } from "../lib/types";
-import { CAMPAIGN_STATUSES, SUPPRESSION_REASONS } from "../lib/types";
+import { AUDIENCE_STATES, CAMPAIGN_STATUSES, SUPPRESSION_REASONS } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
 import { Modal, Field, useToast, useConfirm, useSubmit, errorMessage } from "../components/ui";
 import { useAppIntent, useDebounced } from "../lib/hooks";
@@ -869,8 +869,10 @@ function TemplateModal({
 const AUDIENCE_STYLE: Record<string, string> = {
   planned: "bg-chrome-dark/10 text-chrome-dark",
   sent: "bg-accent-soft text-accent",
+  grouped: "bg-accent-soft/60 text-fg-subtle",
   replied: "bg-ok/10 text-ok",
   bounced: "bg-danger/10 text-danger",
+  unsubscribed: "bg-danger/10 text-danger",
 };
 
 /// A campaign's recipients (campaign_contacts) with their state. Rows are
@@ -878,15 +880,18 @@ const AUDIENCE_STYLE: Record<string, string> = {
 function AudienceModal({ campaign, onClose }: { campaign: Campaign; onClose: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const { data: rows = [], isLoading } = useQuery({
+  const { data: all = [], isLoading } = useQuery({
     queryKey: ["campaigns", "audience", campaign.id],
     queryFn: () => listCampaignAudience(campaign.id!),
   });
+  // Click a state chip to see only those recipients.
+  const [only, setOnly] = useState<string | null>(null);
+  const rows = only ? all.filter((r) => r.state === only) : all;
   const remove = useMutation({
     mutationFn: (contactId: number) => removeFromCampaign(campaign.id!, [contactId]),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["campaigns"] }),
   });
-  const counts = rows.reduce<Record<string, number>>((acc, r) => {
+  const counts = all.reduce<Record<string, number>>((acc, r) => {
     acc[r.state] = (acc[r.state] ?? 0) + 1;
     return acc;
   }, {});
@@ -906,13 +911,26 @@ function AudienceModal({ campaign, onClose }: { campaign: Campaign; onClose: () 
       title={t("campaigns.audience_title", { name: campaign.name })}
     >
       <div className="mb-3 flex flex-wrap gap-2 text-2xs">
-        {(["planned", "sent", "replied", "bounced"] as const).map((st) => (
-          <span key={st} className={clsx("badge", AUDIENCE_STYLE[st])}>
+        {AUDIENCE_STATES.filter((st) => st === "planned" || st === "sent" || counts[st]).map((st) => (
+          <button
+            key={st}
+            className={clsx(
+              "badge cursor-pointer border",
+              AUDIENCE_STYLE[st],
+              only === st ? "border-current" : "border-transparent"
+            )}
+            aria-pressed={only === st}
+            title={t(`campaigns.aud_${st}_hint`, "")}
+            onClick={() => setOnly((o) => (o === st ? null : st))}
+          >
             {t(`campaigns.aud_${st}`)} · {counts[st] ?? 0}
-          </span>
+          </button>
         ))}
+        {(counts.planned ?? 0) > 0 && (
+          <span className="ml-auto text-fg-subtle">{t("campaigns.audience_send_hint")}</span>
+        )}
       </div>
-      {!isLoading && rows.length === 0 ? (
+      {!isLoading && all.length === 0 ? (
         <EmptyState icon={Users} title={t("campaigns.audience_empty")} />
       ) : (
         <div ref={scrollRef} className="max-h-[55vh] overflow-y-auto rounded-lg border border-border">

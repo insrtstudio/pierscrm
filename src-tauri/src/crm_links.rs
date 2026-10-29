@@ -1,5 +1,5 @@
-//! Links between CRM modules (audit 2026-10-29, items 5, 7, 9, 10, 15):
-//! contacts -> artist, budget lines -> Agenda events, contacts -> organisation,
+//! Links between CRM modules (audit 2026-10-29, items 5, 7, 9, 10, 15): the
+//! contacts -> artist / organisation columns, budget lines -> Agenda events,
 //! visa dossiers -> Agenda events, and free-text dates -> ISO `YYYY-MM-DD`.
 //!
 //! Called once per launch from `db::migrate`. Every step is idempotent:
@@ -11,7 +11,6 @@
 use chrono::{Datelike, NaiveDate, Weekday};
 use regex::Regex;
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
 // ---------------------------------------------------------------------------
@@ -239,8 +238,10 @@ fn is_iso_day(v: &str) -> bool {
 
 pub fn migrate(conn: &Connection) {
     schema(conn);
-    once(conn, "contacts_artist_backfill_v1", backfill_sole_artist);
-    once(conn, "organisations_v1", group_organisations);
+    // Contacts -> artist and contacts -> organisation are no longer backfilled
+    // here: both are proposed in the Pipeline and applied only once the user
+    // validates them (bulk "assign to an artist", organisation proposals in
+    // commands/organisations.rs). Rows a previous version already linked stay.
     once(conn, "dates_iso_v1", migrate_dates);
     // Cheap and safe on every launch: realigns the Agenda-linked revenue lines
     // with the events, whatever path changed an event's status or fee.
@@ -316,22 +317,7 @@ fn once(conn: &Connection, key: &str, f: fn(&Connection) -> rusqlite::Result<boo
     }
 }
 
-// ---- #5: contacts -> the only artist ----
-
-fn backfill_sole_artist(conn: &Connection) -> rusqlite::Result<bool> {
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM artists", [], |r| r.get(0))?;
-    if n == 0 {
-        return Ok(false); // decide once the first artist exists
-    }
-    if let Some(id) = crate::commands::artists::default_artist_id(conn) {
-        // updated_at left alone: this is not a user edit, and the "recent" sort
-        // must not suddenly list every contact as just modified.
-        conn.execute("UPDATE contacts SET artist_id=?1 WHERE artist_id IS NULL", [id])?;
-    }
-    Ok(true)
-}
-
-// ---- #9: organisations from shared addresses ----
+// ---- #9: which addresses can stand for an organisation ----
 
 /// Platforms whose addresses land on unrelated venues when a crawl reads a
 /// ticketing or listing page: never evidence of one organisation.
@@ -356,10 +342,6 @@ const NOT_A_PERSON_LOCALS: &[&str] = &[
     "youremail", "name", "email", "example", "test", "nome", "mailer",
 ];
 
-/// A shared address only means "one organisation" between 2 and 3 contacts:
-/// from 4 on it is an address scraped off a directory (the audit's threshold).
-const ORG_MAX_SIZE: usize = 3;
-
 pub(crate) fn is_org_address(email: &str) -> bool {
     static SHAPE: OnceLock<Regex> = OnceLock::new();
     let e = email.trim().to_lowercase();
@@ -374,53 +356,6 @@ pub(crate) fn is_org_address(email: &str) -> bool {
     !NOT_AN_ORGANISATION
         .iter()
         .any(|d| domain == *d || domain.ends_with(&format!(".{d}")))
-}
-
-fn group_organisations(conn: &Connection) -> rusqlite::Result<bool> {
-    let mut groups: HashMap<String, Vec<(i64, Option<String>)>> = HashMap::new();
-    {
-        let mut stmt = conn.prepare(
-            "SELECT id, lower(trim(email)), NULLIF(trim(promoter), '') FROM contacts
-             WHERE organisation_id IS NULL AND email LIKE '%@%'",
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
-        })?;
-        for r in rows {
-            let (id, email, promoter) = r?;
-            groups.entry(email).or_default().push((id, promoter));
-        }
-    }
-    let mut keys: Vec<&String> = groups.keys().collect();
-    keys.sort();
-    for email in keys {
-        let members = &groups[email];
-        if members.len() < 2 || members.len() > ORG_MAX_SIZE || !is_org_address(email) {
-            continue;
-        }
-        let domain = email.split_once('@').map(|(_, d)| d.to_string()).unwrap_or_default();
-        // Name: the promoter most of them share, else the address's domain.
-        let mut counts: HashMap<&str, usize> = HashMap::new();
-        for (_, p) in members {
-            if let Some(p) = p {
-                *counts.entry(p.as_str()).or_default() += 1;
-            }
-        }
-        let name = counts
-            .into_iter()
-            .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0)))
-            .map(|(p, _)| p.to_string())
-            .unwrap_or_else(|| domain.clone());
-        conn.execute(
-            "INSERT INTO organisations (name, email_domain, notes) VALUES (?1, ?2, ?3)",
-            params![name, domain, format!("Adresse partagée: {email}")],
-        )?;
-        let org = conn.last_insert_rowid();
-        for (id, _) in members {
-            conn.execute("UPDATE contacts SET organisation_id=?1 WHERE id=?2", params![org, id])?;
-        }
-    }
-    Ok(true)
 }
 
 // ---- #15: free-text dates -> ISO ----
@@ -659,14 +594,11 @@ mod tests {
         migrate(&conn);
         migrate(&conn); // idempotent
 
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM contacts WHERE artist_id=1", [], |r| r.get(0)).unwrap();
-        assert_eq!(n, 5);
+        // Nothing is linked silently: artist and organisation stay for the user to validate.
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM contacts WHERE artist_id IS NOT NULL", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
         let orgs: i64 = conn.query_row("SELECT COUNT(*) FROM organisations", [], |r| r.get(0)).unwrap();
-        assert_eq!(orgs, 1);
-        let grouped: i64 = conn
-            .query_row("SELECT COUNT(*) FROM contacts WHERE organisation_id IS NOT NULL", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(grouped, 2);
+        assert_eq!(orgs, 0);
         let get = |id: i64| -> (Option<String>, Option<String>) {
             conn.query_row("SELECT date, notes FROM contacts WHERE id=?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
                 .unwrap()

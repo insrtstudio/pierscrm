@@ -223,6 +223,32 @@ pub fn assign_contacts_artist(state: State<'_, AppState>, ids: Vec<i64>, artist_
     Ok(n)
 }
 
+/// Contacts not attached to any artist yet (the Pipeline's "assign all" action).
+#[tauri::command(async)]
+pub fn count_contacts_without_artist(state: State<'_, AppState>) -> Result<i64, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    conn.query_row("SELECT COUNT(*) FROM contacts WHERE artist_id IS NULL", [], |r| r.get(0))
+        .map_err(|e| e.to_string())
+}
+
+/// Attach every contact without an artist to `artist_id`, on the user's
+/// explicit request (never at startup). Returns how many rows changed.
+#[tauri::command(async)]
+pub fn assign_unassigned_contacts_artist(state: State<'_, AppState>, artist_id: i64) -> Result<usize, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let exists: bool = conn
+        .query_row("SELECT EXISTS (SELECT 1 FROM artists WHERE id=?1)", [artist_id], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if !exists {
+        return Err(format!("unknown artist: {artist_id}"));
+    }
+    conn.execute(
+        "UPDATE contacts SET artist_id=?1, updated_at=datetime('now') WHERE artist_id IS NULL",
+        [artist_id],
+    )
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command(async)]
 pub fn delete_contact(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;

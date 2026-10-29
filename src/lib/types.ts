@@ -95,6 +95,26 @@ export interface Organisation {
   contact_count?: number;
 }
 
+/// A suggested organisation (contacts sharing a non-webmail domain, or one
+/// exact address). Nothing is grouped until the user accepts it.
+export interface OrgProposal {
+  key: string;
+  kind: "domain" | "email";
+  name: string;
+  email_domain: string;
+  shared_email?: string | null;
+  contact_ids: number[];
+  contact_names: string[];
+  /// Join this existing organisation instead of creating one.
+  organisation_id?: number | null;
+  organisation_name?: string | null;
+}
+
+export interface OrganisationDetail {
+  contacts: Contact[];
+  venues: { id: number; nom: string; ville?: string | null; pays?: string | null; contact_id: number }[];
+}
+
 export interface Template {
   id?: number;
   name: string;
@@ -125,7 +145,15 @@ export interface Campaign {
   kind?: string;
 }
 
-export const AUDIENCE_STATES = ["planned", "sent", "replied", "bounced"] as const;
+/// grouped: not mailed itself, its organisation got the email through another contact.
+export const AUDIENCE_STATES = [
+  "planned",
+  "sent",
+  "grouped",
+  "replied",
+  "bounced",
+  "unsubscribed",
+] as const;
 export type AudienceState = (typeof AUDIENCE_STATES)[number];
 
 /// A campaign recipient: the contact plus its state in that campaign.
@@ -501,6 +529,8 @@ export interface BulkResult {
   /// Left unsent: daily cap reached.
   deferred: number;
   cap: number;
+  /// Skipped: their organisation was already mailed (also counted in skipped).
+  grouped?: number;
 }
 
 export interface VisaCountry {
