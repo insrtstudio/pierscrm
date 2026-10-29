@@ -544,6 +544,8 @@ export interface EventVisa {
   dossier_id?: number | null;
   dossier_status?: string | null;
   needs_visa: boolean;
+  /// Confirmed gig: the "no dossier" alert is raised for these only.
+  confirmed: boolean;
 }
 
 export const VISA_STATUSES = [
@@ -597,6 +599,8 @@ export interface PulseKpis {
   cpr_7d?: number | null;
   cpr_30d?: number | null;
   last_snapshot?: string | null;
+  /// Spotify left popularity / followers out (restricted for recent apps).
+  spotify_metrics_unavailable: boolean;
 }
 
 export interface PulsePoint {

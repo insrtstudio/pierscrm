@@ -295,6 +295,10 @@ pub struct PulseKpis {
     pub cpr_7d: Option<f64>,
     pub cpr_30d: Option<f64>,
     pub last_snapshot: Option<String>,
+    /// Spotify answered but left popularity / followers out (restricted for
+    /// apps created since late 2024): the UI says "unavailable" instead of
+    /// an empty value that looks like a missing setup.
+    pub spotify_metrics_unavailable: bool,
 }
 
 #[tauri::command(async)]
@@ -398,7 +402,34 @@ pub fn pulse_kpis(
         cpr_7d: cpr(7),
         cpr_30d: cpr(30),
         last_snapshot: setting(&conn, "pulse_last_snapshot"),
+        spotify_metrics_unavailable: metrics_unavailable(&conn, &aid),
     })
+}
+
+/// True when the latest snapshots came back without the restricted fields:
+/// the artist's last row has neither popularity nor followers, or the last
+/// track snapshot day has no popularity at all.
+fn metrics_unavailable(conn: &rusqlite::Connection, artist_sid: &str) -> bool {
+    let artist: Option<(Option<i64>, Option<i64>)> = conn
+        .query_row(
+            "SELECT popularity, followers FROM pulse_artist_snapshots WHERE artist_spotify_id=?1
+             ORDER BY snapshot_date DESC LIMIT 1",
+            params![artist_sid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+    if matches!(artist, Some((None, None))) {
+        return true;
+    }
+    let (rows, with_pop): (i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(*), COUNT(popularity) FROM pulse_track_snapshots
+             WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM pulse_track_snapshots)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((0, 0));
+    rows > 0 && with_pop == 0
 }
 
 #[derive(Serialize)]
@@ -686,4 +717,36 @@ pub fn pulse_watchlist_toggle(state: State<'_, AppState>, id: i64, active: bool)
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restricted_metrics_are_flagged() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate_for_tests(&c).unwrap();
+        assert!(!metrics_unavailable(&c, "a1"), "no snapshot yet: nothing to say");
+        c.execute(
+            "INSERT INTO pulse_artist_snapshots (artist_spotify_id, snapshot_date, popularity, followers)
+             VALUES ('a1', '2026-10-28', 31, 1200), ('a1', '2026-10-29', NULL, NULL)",
+            [],
+        )
+        .unwrap();
+        assert!(metrics_unavailable(&c, "a1"));
+        c.execute(
+            "UPDATE pulse_artist_snapshots SET followers=1250 WHERE snapshot_date='2026-10-29'",
+            [],
+        )
+        .unwrap();
+        assert!(!metrics_unavailable(&c, "a1"));
+        c.execute(
+            "INSERT INTO pulse_track_snapshots (track_spotify_id, track_name, snapshot_date, popularity)
+             VALUES ('t1', 'x', '2026-10-29', NULL)",
+            [],
+        )
+        .unwrap();
+        assert!(metrics_unavailable(&c, "a1"));
+    }
 }

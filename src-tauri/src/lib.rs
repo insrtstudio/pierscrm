@@ -231,6 +231,7 @@ pub fn run() {
             commands::data::list_budget,
             commands::data::save_budget_item,
             commands::data::delete_budget_item,
+            commands::data::link_budget_item,
             // tasks
             commands::data::list_tasks,
             commands::data::save_task,

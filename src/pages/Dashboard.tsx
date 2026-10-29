@@ -1,12 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
-import { Plus, Mail } from "lucide-react";
+import { Plus, Mail, AlertTriangle } from "lucide-react";
 import {
   dashboardStats,
   listArtists,
   listCampaigns,
   listEvents,
+  listEventVisas,
   listTasks,
 } from "../lib/api";
 import { PageHeader, EmptyState } from "../components/Layout";
@@ -30,6 +31,15 @@ export function Dashboard() {
   });
   // Cancelled gigs are not "upcoming".
   const upcoming = upcomingAll.filter((e) => e.status !== "cancelled");
+  // Confirmed gigs abroad that need a visa / work permit and have no dossier.
+  const { data: visas = [] } = useQuery({
+    queryKey: ["event_visas", today, null],
+    queryFn: () => listEventVisas({ from: today }),
+  });
+  const visaAlerts = visas
+    .filter((v) => v.confirmed && v.needs_visa && v.dossier_id == null)
+    .map((v) => ({ v, ev: upcoming.find((e) => e.id === v.event_id) }))
+    .filter((x) => x.ev);
 
   // Counted in SQL: the email log endpoint is capped at 300 rows, so the rate
   // drifted once more mail went out, and it counted opens on failed sends.
@@ -108,6 +118,26 @@ export function Dashboard() {
           </>
         }
       />
+
+      {visaAlerts.length > 0 && (
+        <div className="space-y-1.5 border-b border-border bg-warn/10 px-8 py-3 text-sm">
+          {visaAlerts.map(({ v, ev }) => (
+            <div key={v.event_id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <AlertTriangle size={14} className="shrink-0 text-warn" />
+              <span className="font-semibold">
+                {t("dashboard.visa_alert", {
+                  title: ev!.title,
+                  date: formatDate(ev!.date),
+                  country: v.country_name ?? v.country_code,
+                })}
+              </span>
+              <Link to={`/visa?event=${v.event_id}`} className="kicker text-accent hover:underline">
+                {t("actions.visa_cta")} →
+              </Link>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Stat band */}
       <div className="grid grid-cols-2 border-b border-border sm:grid-cols-3 xl:grid-cols-6">

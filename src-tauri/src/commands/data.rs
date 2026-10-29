@@ -140,6 +140,53 @@ pub fn delete_budget_item(state: State<'_, AppState>, id: i64) -> Result<(), Str
     Ok(())
 }
 
+/// Attach a hand-typed revenue line to the Agenda gig it duplicates (audit
+/// item 7). The line becomes that gig's line: the automatic one is dropped,
+/// the amount follows the event from now on, label and notes are kept.
+#[tauri::command(async)]
+pub fn link_budget_item(state: State<'_, AppState>, id: i64, event_id: i64) -> Result<(), String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    link_budget_line(&conn, id, event_id)
+}
+
+pub(crate) fn link_budget_line(conn: &rusqlite::Connection, id: i64, event_id: i64) -> Result<(), String> {
+    use rusqlite::OptionalExtension;
+    let current: Option<Option<i64>> = conn
+        .query_row("SELECT event_id FROM budget_items WHERE id=?1", params![id], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    match current {
+        None => return Err("Budget line not found.".into()),
+        Some(Some(e)) if e == event_id => return Ok(()),
+        Some(Some(_)) => return Err("This line already follows another Agenda event.".into()),
+        Some(None) => {}
+    }
+    // Only a confirmed gig with a fee owns a line (sync_event_budget would
+    // delete it otherwise, taking the user's line with it).
+    let owns_line: bool = conn
+        .query_row(
+            "SELECT status='confirmed' AND COALESCE(fee,0) > 0 FROM events WHERE id=?1",
+            params![event_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(false);
+    if !owns_line {
+        return Err("Only a confirmed gig with a fee can carry a budget line.".into());
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM budget_items WHERE event_id=?1 AND id<>?2",
+        params![event_id, id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute("UPDATE budget_items SET event_id=?2 WHERE id=?1", params![id, event_id])
+        .map_err(|e| e.to_string())?;
+    sync_event_budget(&tx, event_id).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
 fn linked_event(conn: &rusqlite::Connection, budget_id: i64) -> Option<i64> {
     conn.query_row(
         "SELECT event_id FROM budget_items WHERE id=?1",
@@ -513,4 +560,69 @@ pub fn dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStats, Str
         tasks_total,
         tasks_overdue,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn conn() -> rusqlite::Connection {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate_for_tests(&c).unwrap();
+        c
+    }
+
+    fn gig(c: &rusqlite::Connection, status: &str, fee: f64) -> i64 {
+        c.execute(
+            "INSERT INTO events (title, date, status, fee) VALUES ('Gig', '2026-11-20', ?1, ?2)",
+            params![status, fee],
+        )
+        .unwrap();
+        let id = c.last_insert_rowid();
+        sync_event_budget(c, id).unwrap();
+        id
+    }
+
+    fn revenue(c: &rusqlite::Connection) -> f64 {
+        c.query_row("SELECT COALESCE(SUM(actual),0) FROM budget_items WHERE kind='revenue'", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn linking_a_manual_line_removes_the_double_count() {
+        let c = conn();
+        let ev = gig(&c, "confirmed", 800.0);
+        c.execute(
+            "INSERT INTO budget_items (item, actual, kind, notes) VALUES ('Cachet Paradiso', 750, 'revenue', 'virement')",
+            [],
+        )
+        .unwrap();
+        let manual = c.last_insert_rowid();
+        assert_eq!(revenue(&c), 1550.0);
+
+        link_budget_line(&c, manual, ev).unwrap();
+        assert_eq!(revenue(&c), 800.0, "counted once, at the Agenda fee");
+        let (item, notes, event_id): (String, String, i64) = c
+            .query_row("SELECT item, notes, event_id FROM budget_items WHERE kind='revenue'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!((item.as_str(), notes.as_str(), event_id), ("Cachet Paradiso", "virement", ev));
+        // Idempotent, and a re-sync keeps the user's line.
+        link_budget_line(&c, manual, ev).unwrap();
+        sync_all_event_budgets(&c).unwrap();
+        assert_eq!(revenue(&c), 800.0);
+    }
+
+    #[test]
+    fn only_confirmed_paid_gigs_take_a_line() {
+        let c = conn();
+        let hold = gig(&c, "hold", 500.0);
+        c.execute("INSERT INTO budget_items (item, actual, kind) VALUES ('x', 500, 'revenue')", []).unwrap();
+        let manual = c.last_insert_rowid();
+        assert!(link_budget_line(&c, manual, hold).is_err());
+        assert!(link_budget_line(&c, 9999, hold).is_err());
+        let n: i64 = c.query_row("SELECT COUNT(*) FROM budget_items", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "nothing touched");
+    }
 }
