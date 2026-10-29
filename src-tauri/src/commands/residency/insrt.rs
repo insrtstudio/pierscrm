@@ -141,6 +141,8 @@ impl HttpInsrt {
             200..=299 => Ok(body),
             401 | 403 => Err("Jeton insrt invalide (Réglages, Intégrations).".into()),
             404 if body.contains("press_kit_not_found") => Err("insrt: press kit introuvable.".into()),
+            // A bare 404 means the CRM API itself is missing: site not deployed yet.
+            404 => Err("insrt: l'API CRM n'est pas encore en ligne sur le site (déploiement en attente).".into()),
             400 => Err(format!("insrt: requête refusée ({})", body.chars().take(80).collect::<String>())),
             _ => Err(format!("insrt: HTTP {}", status)),
         }
