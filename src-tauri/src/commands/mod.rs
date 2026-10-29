@@ -19,3 +19,4 @@ pub mod youtube;
 pub mod ra;
 pub mod vi;
 pub mod visa;
+pub mod residency;

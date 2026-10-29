@@ -104,7 +104,7 @@ export function Venues() {
   return (
     <div>
       <PageHeader title={t("venues.title")} subtitle={t("venues.subtitle")} />
-      <div className="px-8 py-6">
+      <div className="px-page py-6">
         <div className="segmented mb-6">
           {tabs.map((tb) => (
             <button key={tb} data-active={tab === tb} className="segmented-item" onClick={() => setTab(tb)}>
@@ -445,7 +445,7 @@ function VenuesTab() {
     <div className="space-y-4">
       {/* Dashboard bento */}
       {statChips.length > 0 && (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-2">
           {statChips.map((c) => (
             <button
               key={c.key}

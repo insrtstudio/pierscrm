@@ -401,6 +401,9 @@ pub fn list_followups(state: State<'_, AppState>) -> Result<Vec<Followup>, Strin
            AND NOT EXISTS (SELECT 1 FROM email_replies r
                            WHERE r.contact_id = c.id AND r.kind = 'reply' AND r.received_at >= a.last_email)
            AND NOT EXISTS (SELECT 1 FROM suppressions s WHERE s.address = lower(trim(c.email)))
+           -- A residency sequence still running relaunches on its own.
+           AND NOT EXISTS (SELECT 1 FROM campaign_messages cm
+                           WHERE cm.contact_id = c.id AND cm.status IN ('draft','scheduled'))
            AND due <= date('now')
          ORDER BY a.last_email ASC
          LIMIT 200",

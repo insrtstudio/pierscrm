@@ -557,6 +557,8 @@ pub struct InboundHeaders {
     pub message_id: Option<String>,
     pub refs: Vec<String>,
     pub content_type: String,
+    /// Content-Transfer-Encoding of a single-part message (base64, quoted-printable...).
+    pub transfer_encoding: String,
     pub auto_submitted: bool,
     pub failed_recipients: Vec<String>,
 }
@@ -586,6 +588,7 @@ pub fn read_inbound(raw: &[u8]) -> InboundHeaders {
         message_id: extract_ids(get("message-id")).into_iter().next(),
         refs,
         content_type: get("content-type").to_ascii_lowercase(),
+        transfer_encoding: get("content-transfer-encoding").trim().to_ascii_lowercase(),
         auto_submitted,
         failed_recipients: addresses_in(get("x-failed-recipients")),
     }
@@ -674,6 +677,191 @@ pub fn bounced_recipients(
         .into_iter()
         .filter(|a| known(a) && seen.insert(a.clone()))
         .collect()
+}
+
+// ---------------- Reply body text (pure) ----------------
+//
+// The residency agent reads what a club answered (to classify it), so the sync
+// keeps a short plain-text excerpt of each reply. Only what is needed: the
+// first text/plain part (else the HTML one, tags stripped), transfer encoding
+// and charset decoded, the quoted original cut off.
+
+/// Max characters kept per reply excerpt.
+pub const EXCERPT_MAX: usize = 3000;
+
+fn qp_decode(s: &str) -> Vec<u8> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'=' {
+            // Soft line break.
+            if i + 1 < b.len() && (b[i + 1] == b'\n' || b[i + 1] == b'\r') {
+                i += 1;
+                if b[i] == b'\r' && i + 1 < b.len() && b[i + 1] == b'\n' {
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            }
+            if i + 2 < b.len() {
+                let hex = |c: u8| (c as char).to_digit(16);
+                if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                    out.push((h * 16 + l) as u8);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+/// A header parameter (`boundary`, `charset`) out of a Content-Type value.
+fn ct_param(ct: &str, name: &str) -> Option<String> {
+    let low = ct.to_ascii_lowercase();
+    let key = format!("{}=", name);
+    let pos = low.find(&key)?;
+    let rest = &ct[pos + key.len()..];
+    let v = if let Some(r) = rest.strip_prefix('"') {
+        r.split('"').next().unwrap_or("")
+    } else {
+        rest.split(|c: char| c == ';' || c.is_whitespace()).next().unwrap_or("")
+    };
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+fn decode_part(body: &str, transfer_encoding: &str, content_type: &str) -> String {
+    let charset = ct_param(content_type, "charset").unwrap_or_else(|| "utf-8".into());
+    let te = transfer_encoding.trim().to_ascii_lowercase();
+    let bytes = if te.contains("base64") {
+        b64_decode(body).unwrap_or_else(|| body.as_bytes().to_vec())
+    } else if te.contains("quoted-printable") {
+        qp_decode(body)
+    } else {
+        body.as_bytes().to_vec()
+    };
+    decode_charset(bytes, &charset)
+}
+
+fn strip_html(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let lower = html.to_ascii_lowercase();
+    // Drop <style>/<script> contents and the quoted original (Gmail/Outlook).
+    let cut = ["<blockquote", "class=\"gmail_quote", "id=\"divrplyfwdmsg", "id=\"appendonsend"]
+        .iter()
+        .filter_map(|m| lower.find(m))
+        .min()
+        .unwrap_or(html.len());
+    for ch in html[..cut].chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                out.push(' ');
+            }
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&#39;", "'")
+        .replace("&quot;", "\"")
+}
+
+/// Cut the quoted original ("> ...", "On ... wrote:", "Le ... a écrit :",
+/// "-----Original Message-----", an Outlook "From:/De :" block) and squeeze blank lines.
+pub fn strip_quoted(text: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let l = line.trim();
+        let low = l.to_lowercase();
+        let marker = l.starts_with('>')
+            || low.starts_with("-----original message")
+            || low.starts_with("----- message d'origine")
+            || low.starts_with("-------- message original")
+            || ((low.starts_with("on ") && low.ends_with("wrote:"))
+                || (low.starts_with("le ") && (low.ends_with("a écrit :") || low.ends_with("a écrit:"))))
+            || ((low.starts_with("from:") || low.starts_with("de :") || low.starts_with("de:"))
+                && kept.iter().rev().take(3).any(|k| k.trim().is_empty() || k.trim().starts_with("___")));
+        if marker {
+            break;
+        }
+        kept.push(line);
+    }
+    let mut out = String::new();
+    let mut blank = 0;
+    for l in kept {
+        if l.trim().is_empty() {
+            blank += 1;
+            if blank > 1 {
+                continue;
+            }
+        } else {
+            blank = 0;
+        }
+        out.push_str(l.trim_end());
+        out.push('\n');
+    }
+    out.trim().to_string()
+}
+
+fn split_part(part: &str) -> (Vec<(String, String)>, &str) {
+    let idx = part
+        .find("\r\n\r\n")
+        .map(|i| (i, 4))
+        .or_else(|| part.find("\n\n").map(|i| (i, 2)));
+    match idx {
+        Some((i, n)) => (parse_headers(part[..i].as_bytes()), &part[i + n..]),
+        None => (Vec::new(), part),
+    }
+}
+
+/// (plain, html) candidates of a MIME body, depth-first.
+fn walk_mime(content_type: &str, transfer_encoding: &str, body: &str, depth: u8, out: &mut (Option<String>, Option<String>)) {
+    let ct = content_type.to_ascii_lowercase();
+    if ct.starts_with("multipart/") && depth < 4 {
+        let Some(boundary) = ct_param(content_type, "boundary") else { return };
+        let delim = format!("--{}", boundary);
+        for part in body.split(&delim).skip(1) {
+            if part.starts_with("--") {
+                break;
+            }
+            let part = part.trim_start_matches(['\r', '\n']);
+            let (h, b) = split_part(part);
+            let pct = header(&h, "content-type").unwrap_or("text/plain").to_string();
+            let pte = header(&h, "content-transfer-encoding").unwrap_or("").to_string();
+            let disp = header(&h, "content-disposition").unwrap_or("").to_ascii_lowercase();
+            if disp.starts_with("attachment") {
+                continue;
+            }
+            walk_mime(&pct, &pte, b, depth + 1, out);
+        }
+        return;
+    }
+    if ct.is_empty() || ct.starts_with("text/plain") {
+        if out.0.is_none() {
+            out.0 = Some(decode_part(body, transfer_encoding, content_type));
+        }
+    } else if ct.starts_with("text/html") && out.1.is_none() {
+        out.1 = Some(strip_html(&decode_part(body, transfer_encoding, content_type)));
+    }
+}
+
+/// The new text of a reply, as plain text, quoted original removed, at most
+/// EXCERPT_MAX characters.
+pub fn reply_text(content_type: &str, transfer_encoding: &str, body: &str) -> String {
+    let mut found = (None, None);
+    walk_mime(content_type, transfer_encoding, body, 0, &mut found);
+    let text = found.0.filter(|t| !t.trim().is_empty()).or(found.1).unwrap_or_default();
+    let clean = strip_quoted(&text.replace("\r\n", "\n"));
+    clean.chars().take(EXCERPT_MAX).collect()
 }
 
 /// IMAP host to use: the explicit `imap_host` setting, else derived from the
@@ -867,6 +1055,9 @@ pub fn sync_replies_blocking(pool: &DbPool) -> Result<SyncResult, String> {
     match &res {
         Ok(r) => {
             put_setting(&conn, "imap_last_result", &serde_json::to_string(r).unwrap_or_default());
+            // Last *successful* scan: the residency autopilot refuses to send
+            // when this is stale (stop-on-reply would be blind).
+            put_setting(&conn, "imap_last_ok", &chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
             let _ = conn.execute("DELETE FROM settings WHERE key = 'imap_last_error'", []);
         }
         Err(e) => put_setting(&conn, "imap_last_error", e),
@@ -944,6 +1135,9 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
     };
 
     let mut bounce_uids: Vec<(u32, InboundHeaders, String)> = Vec::new();
+    // Replies (and matched auto-replies) whose text is fetched afterwards, for
+    // the residency agent: (uid, message-id, content-type, transfer-encoding).
+    let mut text_uids: Vec<(u32, String, String, String)> = Vec::new();
     let mut max_uid = min_uid;
     for chunk in uids.chunks(50) {
         let set = chunk.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
@@ -975,6 +1169,16 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
                     if record_inbound(conn, Some(&sent), &from, &h.subject, &mid, "reply", by, &received) {
                         apply_reply(conn, &sent, &from, &received);
                         out.replies += 1;
+                        text_uids.push((uid, mid.clone(), h.content_type.clone(), h.transfer_encoding.clone()));
+                    }
+                }
+                // An out-of-office to one of our emails is not a reply (nothing
+                // moves in the pipeline) but the residency sequence reschedules
+                // around it, so it is recorded when it points at a sent email.
+                Inbound::AutoReply => {
+                    let Some(sent) = sent_by_message_ids(conn, &h.refs) else { continue };
+                    if record_inbound(conn, Some(&sent), &from, &h.subject, &mid, "auto_reply", "message_id", &received) {
+                        text_uids.push((uid, mid.clone(), h.content_type.clone(), h.transfer_encoding.clone()));
                     }
                 }
                 Inbound::Unsubscribe => {
@@ -988,7 +1192,7 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
                     }
                 }
                 Inbound::Bounce => bounce_uids.push((uid, h, received)),
-                Inbound::AutoReply | Inbound::Ignore => {}
+                Inbound::Ignore => {}
             }
         }
     }
@@ -1033,6 +1237,19 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
         }
     }
 
+    // Text of the new replies (best effort: a failure here keeps the reply).
+    for (uid, mid, ct, te) in text_uids {
+        let Ok(fetches) = session.uid_fetch(uid.to_string(), "(UID BODY.PEEK[TEXT])") else { continue };
+        let Some(raw) = fetches.iter().find_map(|f| f.text().map(|t| String::from_utf8_lossy(t).into_owned())) else {
+            continue;
+        };
+        let text = reply_text(&ct, &te, &raw);
+        let _ = conn.execute(
+            "UPDATE email_replies SET body_excerpt = ?2 WHERE message_id = ?1",
+            params![mid, text],
+        );
+    }
+
     let _ = session.logout();
     put_setting(
         conn,
@@ -1049,9 +1266,15 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
 #[tauri::command]
 pub async fn sync_replies(state: State<'_, AppState>) -> Result<SyncResult, String> {
     let pool = state.pool.clone();
-    tauri::async_runtime::spawn_blocking(move || sync_replies_blocking(&pool))
+    let p2 = pool.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || sync_replies_blocking(&pool))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    // New replies to residency campaigns get classified in the background.
+    if matches!(&res, Ok(r) if !r.skipped) {
+        crate::commands::residency::engine::classify_in_background(p2);
+    }
+    res
 }
 
 #[derive(Serialize)]
@@ -1172,6 +1395,18 @@ Also quoting someone@else.com in the text.";
         assert_eq!(classify(&ooo, "booking@insrt.fr"), Inbound::AutoReply);
         let unsub = read_inbound(b"From: a@club.nl\r\nSubject: unsubscribe\r\n\r\n");
         assert_eq!(classify(&unsub, "booking@insrt.fr"), Inbound::Unsubscribe);
+    }
+
+    #[test]
+    fn reply_text_extraction() {
+        let body = "--b1\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nBonjour, tr=C3=A8s int=C3=A9ress=C3=A9s !\r\nOn peut en parler =\r\njeudi.\r\n\r\nLe 28 oct. 2026 =C3=A0 10:00, Piers <booking@insrt.fr> a =C3=A9crit :\r\n> Bonjour\r\n--b1\r\nContent-Type: text/html\r\n\r\n<p>ignored</p>\r\n--b1--";
+        let t = reply_text("multipart/alternative; boundary=\"b1\"", "", body);
+        assert_eq!(t, "Bonjour, très intéressés !\nOn peut en parler jeudi.");
+        // HTML only, base64.
+        let html = "PHA+SGVsbG8gPGI+d29ybGQ8L2I+PC9wPjxibG9ja3F1b3RlPm9sZDwvYmxvY2txdW90ZT4=";
+        assert_eq!(reply_text("text/html; charset=utf-8", "base64", html), "Hello  world");
+        // Plain, with a quoted tail.
+        assert_eq!(reply_text("", "", "Not now, maybe in March.\n\nOn Tue, Piers wrote:\n> hi"), "Not now, maybe in March.");
     }
 
     #[test]

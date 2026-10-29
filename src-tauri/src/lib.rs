@@ -25,6 +25,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -74,12 +75,16 @@ pub fn run() {
                 secrets::migrate(&conn);
             }
             let pool_for_pulse = pool.clone();
+            let pool_for_residency = pool.clone();
             app.manage(AppState {
                 pool,
                 cancels: Arc::new(Mutex::new(HashSet::new())),
             });
             // Daily Pulse snapshot at launch (only if none was taken today).
             commands::pulse::auto_snapshot_on_launch(pool_for_pulse, app.handle().clone());
+            // Residency autopilot: sends validated sequences, reads replies,
+            // polls EPK activity, writes the daily report (see commands/residency).
+            commands::residency::engine::start(pool_for_residency, app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -135,6 +140,28 @@ pub fn run() {
             commands::outbox::list_emails_page,
             commands::outbox::sync_replies,
             commands::outbox::reply_sync_status,
+            // residency campaigns (autopilot)
+            commands::residency::commands::residency_presets,
+            commands::residency::commands::residency_create,
+            commands::residency::commands::residency_get,
+            commands::residency::commands::residency_save,
+            commands::residency::commands::residency_set_autopilot,
+            commands::residency::commands::residency_build_target,
+            commands::residency::commands::residency_add_targets,
+            commands::residency::commands::residency_remove_target,
+            commands::residency::commands::residency_board,
+            commands::residency::commands::residency_generate,
+            commands::residency::commands::residency_messages,
+            commands::residency::commands::residency_save_message,
+            commands::residency::commands::residency_set_message_status,
+            commands::residency::commands::residency_validate_all,
+            commands::residency::commands::residency_reports,
+            commands::residency::commands::residency_report_now,
+            commands::residency::commands::residency_log,
+            commands::residency::commands::residency_actions,
+            commands::residency::commands::residency_mark_handled,
+            commands::residency::commands::residency_press_kits,
+            commands::residency::commands::ai_cost_month,
             // events
             commands::events::list_events,
             commands::events::save_event,

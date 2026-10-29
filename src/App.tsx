@@ -19,6 +19,9 @@ const ArtistDetail = lazy(() =>
 const Contacts = lazy(() => import("./pages/Contacts").then((m) => ({ default: m.Contacts })));
 const Import = lazy(() => import("./pages/Import").then((m) => ({ default: m.Import })));
 const Emails = lazy(() => import("./pages/Emails").then((m) => ({ default: m.Emails })));
+const ResidencyPage = lazy(() =>
+  import("./pages/Residency").then((m) => ({ default: m.ResidencyPage }))
+);
 const Budget = lazy(() => import("./pages/Budget").then((m) => ({ default: m.Budget })));
 const Visa = lazy(() => import("./pages/Visa").then((m) => ({ default: m.Visa })));
 const Pulse = lazy(() => import("./pages/Pulse").then((m) => ({ default: m.Pulse })));
@@ -62,6 +65,7 @@ export function App() {
           <Route path="import" element={page(<Import />)} />
           <Route path="discovery" element={page(<Discovery />)} />
           <Route path="campaigns" element={page(<Emails section="campaigns" />)} />
+          <Route path="campaigns/:id" element={page(<ResidencyPage />)} />
           <Route path="outbox" element={page(<Emails section="outbox" />)} />
           <Route path="budget" element={page(<Budget />)} />
           <Route path="visa" element={page(<Visa />)} />

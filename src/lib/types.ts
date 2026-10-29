@@ -121,6 +121,8 @@ export interface Campaign {
   /// Audience (campaign_contacts): still to mail, and all recipients.
   planned_count?: number;
   audience_count?: number;
+  /// "standard" | "residency" (residency campaigns open their own page).
+  kind?: string;
 }
 
 export const AUDIENCE_STATES = ["planned", "sent", "replied", "bounced"] as const;

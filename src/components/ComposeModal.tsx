@@ -201,10 +201,20 @@ export function ComposeModal({
   open,
   onClose,
   contact,
+  initialSubject,
+  initialBody,
+  initialCampaignId,
+  onSent,
 }: {
   open: boolean;
   onClose: () => void;
   contact?: Contact | null;
+  /// Pre-filled draft (e.g. the reply the residency agent suggests). The
+  /// user always reviews and sends it: nothing goes out by itself.
+  initialSubject?: string;
+  initialBody?: string;
+  initialCampaignId?: number | null;
+  onSent?: () => void;
 }) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -237,11 +247,11 @@ export function ComposeModal({
   useEffect(() => {
     if (open) {
       setTo(contact?.email ?? "");
-      setSubject("");
-      setBody("");
+      setSubject(initialSubject ?? "");
+      setBody(initialBody ?? "");
       setTplId("");
       setLinks({ mix: "", listen: "", onepager: "", epk: "" });
-      setCampaignId("");
+      setCampaignId(initialCampaignId ?? "");
     }
     // Keyed on identity, not the object: callers pass inline literals, and a
     // parent re-render (refetch on focus) used to wipe the draft being typed.
@@ -250,8 +260,8 @@ export function ComposeModal({
 
   const lastCampaignId = history?.find((e) => e.status === "sent" && e.campaign_id)?.campaign_id;
   useEffect(() => {
-    if (open && lastCampaignId) setCampaignId(lastCampaignId);
-  }, [open, lastCampaignId]);
+    if (open && lastCampaignId && !initialCampaignId) setCampaignId(lastCampaignId);
+  }, [open, lastCampaignId, initialCampaignId]);
 
   const applyTemplate = (id: number | "") => {
     setTplId(id);
@@ -293,6 +303,7 @@ export function ComposeModal({
       if (res.ok) {
         toast(t("emails.sent_ok"), "ok");
         invalidateAfterSend(qc);
+        onSent?.();
         onClose();
       } else {
         // A hard bounce changed the suppression list and the log.

@@ -195,6 +195,24 @@ fn event_country(
     None
 }
 
+/// Whether the artist needs a work visa to play in `target` (ISO code or a
+/// Discovery country): listed in the visa module, not the artist's own
+/// country, outside the free movement area. (code, name) when it does.
+pub(crate) fn visa_needed(conn: &rusqlite::Connection, artist_country: Option<&str>, target: &str) -> Option<(String, String)> {
+    let code = country_code(conn, target)?;
+    let name: String = conn
+        .query_row("SELECT name FROM visa_countries WHERE code=?1", params![code], |r| r.get(0))
+        .ok()?;
+    let home = artist_country.and_then(|c| country_code(conn, c));
+    if home.as_deref() == Some(code.as_str()) {
+        return None;
+    }
+    let free = home
+        .as_deref()
+        .map_or(false, |h| FREE_MOVEMENT.contains(&h) && FREE_MOVEMENT.contains(&code.as_str()));
+    (!free).then_some((code, name))
+}
+
 #[derive(serde::Serialize)]
 pub struct EventVisa {
     pub event_id: i64,

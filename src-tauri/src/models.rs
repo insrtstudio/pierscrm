@@ -149,6 +149,13 @@ pub struct Campaign {
     pub planned_count: i64,
     #[serde(default)]
     pub audience_count: i64,
+    /// 'standard' | 'residency' (residency campaigns have their own page).
+    #[serde(default = "default_campaign_kind")]
+    pub kind: String,
+}
+
+fn default_campaign_kind() -> String {
+    "standard".into()
 }
 
 fn default_campaign_status() -> String {
@@ -174,6 +181,7 @@ impl Campaign {
             replied_count: row.get("replied_count").unwrap_or(0),
             planned_count: row.get("planned_count").unwrap_or(0),
             audience_count: row.get("audience_count").unwrap_or(0),
+            kind: row.get::<_, String>("kind").unwrap_or_else(|_| default_campaign_kind()),
         })
     }
 }

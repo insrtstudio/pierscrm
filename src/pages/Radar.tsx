@@ -266,7 +266,7 @@ export function Radar() {
   return (
     <div>
       <PageHeader title={t("radar.title")} subtitle={t("radar.subtitle")} />
-      <div className="space-y-5 px-8 py-6">
+      <div className="space-y-5 px-page py-6">
         {/* Scan: pick genres, press once. */}
         <div className="card p-5">
           <div className="kicker mb-3">{t("radar.new_scan")}</div>

@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { TabbedPage } from "../components/Layout";
 import { Agenda } from "./Agenda";
 import { Timeline } from "./Timeline";
+import { Actions } from "./Actions";
 import { Venues } from "./Venues";
 import { Radar } from "./Radar";
 
@@ -16,6 +17,7 @@ export function AgendaSection() {
       subtitle={t("agenda.subtitle")}
       tabs={[
         { key: "calendar", label: t("sections.agenda_calendar"), render: () => <Agenda /> },
+        { key: "actions", label: t("sections.agenda_actions"), render: () => <Actions /> },
         { key: "planning", label: t("sections.agenda_planning"), render: () => <Timeline /> },
       ]}
     />

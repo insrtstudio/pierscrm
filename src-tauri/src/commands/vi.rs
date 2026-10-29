@@ -246,6 +246,150 @@ pub fn vi_exclude_email(state: State<'_, AppState>, email: String, raison: Optio
     Ok((n + m) as i64)
 }
 
+// ---------------- Placeholder venues (TBA / TBD / secret location) ----------------
+//
+// RA lets promoters publish an event before the room is public: the "venue" is
+// then "TBA", "TBA - Paris", "Secret Location (Barcelona)"... Each such label is
+// shared by hundreds of unrelated parties in a city, so it piled up events
+// (TBA Berlin: 1 674), scored as a top club and was promoted into the pipeline.
+
+/// Words that only say "the place is not public yet", plus geography.
+const PLACEHOLDER_WORDS: &[&str] = &[
+    "tba", "tbd", "tbc", "tbaa", "to", "be", "announced", "announce", "determined", "confirmed",
+    "secret", "location", "locations", "place", "venue", "venues", "various", "warehouse",
+    "hidden", "private", "address", "spot", "soon", "the", "a", "in", "de", "del", "la", "le",
+    "east", "west", "north", "south", "central", "centre", "center", "city", "area", "district",
+    "uk", "england", "scotland", "wales", "portugal", "spain", "france", "germany", "italy",
+    "netherlands", "belgium", "sweden", "denmark", "norway", "finland", "austria", "switzerland",
+    "poland", "hungary", "czechia", "greece", "ireland", "croatia", "romania", "bulgaria",
+    "estonia", "latvia", "lithuania", "serbia", "slovenia", "slovakia", "europe",
+    // Local names RA areas don't use ("TBA - Roma" in area "Rome").
+    "roma", "milano", "napoli", "torino", "firenze", "venezia", "munchen", "koln", "wien",
+    "praha", "lisboa", "porto", "bruxelles", "brussel", "antwerpen", "kobenhavn", "warszawa",
+    "krakow", "athina", "beograd", "bucuresti", "sevilla", "zurich", "geneve", "den", "haag",
+];
+
+/// True when an RA venue name is a placeholder rather than a room: it carries a
+/// TBA/TBD/TBC or "secret location" marker and nothing else than geography once
+/// those words are removed. "TBA - Venus Club" stays (the room is named), "TBA -
+/// Powered by: Void Acoustics" goes (a sponsor, not a room).
+pub(crate) fn is_placeholder_venue(nom: &str, ville: Option<&str>) -> bool {
+    let words = |t: &str| -> Vec<String> {
+        t.split(|c: char| !c.is_alphanumeric())
+            .map(normalise)
+            .filter(|w| !w.is_empty())
+            .collect()
+    };
+    let tokens = words(nom);
+    if tokens.is_empty() {
+        return true;
+    }
+    let has = |w: &str| tokens.iter().any(|t| t == w);
+    // "Secret location <anything>": what follows is a district or a hint
+    // ("Neukölln", "near the canal"), never the name of a room.
+    let secret = has("secret")
+        && (has("location") || has("place") || has("venue") || has("warehouse") || has("spot") || has("address"));
+    if secret {
+        return true;
+    }
+    let marker = has("tba")
+        || has("tbd")
+        || has("tbc")
+        || (has("announced") || has("determined")) && has("be");
+    if !marker {
+        return false;
+    }
+    // A sponsor or a sentence about how the address will be shared ("tickets
+    // holders will be notified 3 hours before", "45 locations across Antwerp").
+    const HINTS: &[&str] = &[
+        "powered", "ticket", "tickets", "ticketholders", "holders", "notified", "revealed", "reveal",
+        "hours", "before", "email", "sms", "whatsapp", "locations", "across",
+    ];
+    if HINTS.iter().any(|h| has(h)) {
+        return true;
+    }
+    let city = ville.map(words).unwrap_or_default();
+    tokens
+        .iter()
+        .all(|t| PLACEHOLDER_WORDS.contains(&t.as_str()) || city.contains(t) || t.len() <= 1)
+}
+
+/// "TBA - Club Cello" -> "Club Cello": the room is known, RA just kept the
+/// promoter's "to be announced" prefix. None when there is no such prefix or
+/// nothing usable after it.
+pub(crate) fn strip_tba_prefix(nom: &str) -> Option<String> {
+    let t = nom.trim_start();
+    let head = t.get(..3)?.to_ascii_lowercase();
+    if !matches!(head.as_str(), "tba" | "tbc" | "tbd") {
+        return None;
+    }
+    let rest = &t[3..];
+    // "TBAR" or "Tbilisi": the marker must stand alone.
+    if rest.chars().next().is_some_and(|c| c.is_alphanumeric()) {
+        return None;
+    }
+    let rest = rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '–' | '—' | ':' | '|' | '/' | ','));
+    let rest = rest.trim();
+    (rest.chars().filter(|c| c.is_alphanumeric()).count() >= 2).then(|| rest.to_string())
+}
+
+/// One-shot: archive every placeholder venue, exclude it from later harvests,
+/// and take its pipeline contact out when nothing was ever done with it (still
+/// "to contact", never dated, never emailed, no other venue or curator on it).
+fn archive_placeholder_venues(conn: &rusqlite::Connection) {
+    let rows: Vec<(i64, String, Option<String>, Option<i64>, Option<i64>)> = match conn
+        .prepare("SELECT id, nom, ville, ra_venue_id, crm_contact_id FROM vi_venues WHERE statut != 'archive'")
+    {
+        Ok(mut st) => st
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+            .map(|it| it.flatten().collect())
+            .unwrap_or_default(),
+        Err(_) => return,
+    };
+    let Ok(tx) = conn.unchecked_transaction() else { return };
+    for (id, nom, ville, ra_id, contact) in rows {
+        if !is_placeholder_venue(&nom, ville.as_deref()) {
+            // A real room behind a "TBA - " prefix: keep it, under its own name,
+            // and rename its pipeline contact where it still carries the old one.
+            if let Some(clean) = strip_tba_prefix(&nom) {
+                let _ = tx.execute(
+                    "UPDATE vi_venues SET nom=?2, nom_normalise=?3, updated_at=datetime('now') WHERE id=?1",
+                    params![id, clean, normalise(&clean)],
+                );
+                if let Some(cid) = contact {
+                    let _ = tx.execute(
+                        "UPDATE contacts SET name = CASE WHEN name=?2 THEN ?3 ELSE name END,
+                                             venue = CASE WHEN venue=?2 THEN ?3 ELSE venue END
+                         WHERE id=?1",
+                        params![cid, nom, clean],
+                    );
+                }
+            }
+            continue;
+        }
+        if let Some(ra_id) = ra_id {
+            let _ = tx.execute(
+                "INSERT OR IGNORE INTO vi_exclusions (valeur_normalisee, type, raison) VALUES (?1,'venue','placeholder')",
+                params![venue_exclusion_key(ra_id)],
+            );
+        }
+        let _ = tx.execute(
+            "UPDATE vi_venues SET statut='archive', crm_contact_id=NULL, updated_at=datetime('now') WHERE id=?1",
+            params![id],
+        );
+        if let Some(cid) = contact {
+            let _ = tx.execute(
+                "DELETE FROM contacts WHERE id=?1 AND status='to_contact' AND first_contact IS NULL
+                   AND NOT EXISTS(SELECT 1 FROM emails WHERE contact_id=?1)
+                   AND NOT EXISTS(SELECT 1 FROM vi_venues WHERE crm_contact_id=?1)
+                   AND NOT EXISTS(SELECT 1 FROM radar_curators WHERE crm_contact_id=?1)",
+                params![cid],
+            );
+        }
+    }
+    let _ = tx.commit();
+}
+
 // ---------------- Data-quality migrations (audit 2026-10-29) ----------------
 
 /// Venue Intelligence / Radar schema and data fixes, called once per launch from
@@ -281,6 +425,7 @@ pub(crate) fn migrate_quality(conn: &rusqlite::Connection) {
         clean_artefact_emails(c, "radar_contacts");
     });
     once(conn, "vi_phone_cleanup_v1", clean_artefact_phones);
+    once(conn, "vi_placeholder_cleanup_v1", archive_placeholder_venues);
 }
 
 /// One-shot: phones scraped after a "tel:" inside a script came back as JS
@@ -478,6 +623,67 @@ fn clean_artefact_emails(conn: &rusqlite::Connection, table: &str) {
         }
     }
     let _ = tx.commit();
+}
+
+#[cfg(test)]
+mod placeholder_tests {
+    use super::is_placeholder_venue as p;
+
+    #[test]
+    fn placeholders_from_real_data() {
+        for (n, v) in [
+            ("TBA", "Berlin"),
+            ("TBA - Secret Location (Madrid)", "Madrid"),
+            ("TBA - Paris", "Paris"),
+            ("Secret Location", "London"),
+            ("Secret Location (Barcelona)", "Barcelona"),
+            ("TBA - Portugal", "Lisbon"),
+            ("TBA - various venues ", "London"),
+            ("TBA - TBA", "Milan"),
+            ("TBA - EAST LONDON", "London"),
+            ("TBA - Secret location Neukölln", "Berlin"),
+            ("TBA - Secret warehouse", "Paris"),
+            ("TBA - Powered by: Void Acoustics", "Madrid"),
+            ("Secret London Location TBA", "London"),
+            ("East London TBA", "London"),
+            ("TBA - Roma", "Rome"),
+            ("TBD", "Paris"),
+            ("Location to be announced", "Paris"),
+            ("TBA - 24 hours before the event only to ticket holders", "Antwerp"),
+            ("TBA - Ticketholders will be notified 3 hours before the event", "Antwerp"),
+            ("TBC", "Paris"),
+            ("TBA - More than 45 locations across Antwerp", "Antwerp"),
+        ] {
+            assert!(p(n, Some(v)), "{n}");
+        }
+    }
+
+    #[test]
+    fn prefix_is_stripped() {
+        use super::strip_tba_prefix as s;
+        assert_eq!(s("TBA - Club Cello").as_deref(), Some("Club Cello"));
+        assert_eq!(s("TBC - THE BASEMENT CLUB").as_deref(), Some("THE BASEMENT CLUB"));
+        assert_eq!(s("TBA: Canal54").as_deref(), Some("Canal54"));
+        assert_eq!(s("TBA -  "), None);
+        assert_eq!(s("Tbilisi Club"), None);
+        assert_eq!(s("Berghain"), None);
+    }
+
+    #[test]
+    fn real_rooms_stay() {
+        for (n, v) in [
+            ("TBA - Venus Club", "Tallinn"),
+            ("TBA - DOJO Boutique Club, 1051 Budapest, Zrínyi utca 4/A", "Budapest"),
+            ("TBA - El Gat Negre", "Barcelona"),
+            ("TBC - THE BASEMENT CLUB", "London"),
+            ("Secret Room Budapest", "Budapest"),
+            ("Berghain", "Berlin"),
+            ("Tobacco Factory", "Bristol"),
+            ("Le Bataclan", "Paris"),
+        ] {
+            assert!(!p(n, Some(v)), "{n}");
+        }
+    }
 }
 
 #[cfg(test)]

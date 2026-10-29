@@ -19,6 +19,7 @@ import type { SmtpConfig } from "../lib/types";
 import { PageHeader } from "../components/Layout";
 import clsx from "clsx";
 import { Field, errorMessage, useSubmit, useToast } from "../components/ui";
+import { ResidencySettingsCard } from "../components/ResidencySettings";
 
 type SignatureFields = {
   name: string;
@@ -50,7 +51,11 @@ const selectOnFocus = { onFocus: (e: FocusEvent<HTMLInputElement>) => e.currentT
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 export function Settings() {
-  const [tab, setTab] = useState<SettingsTab>("general");
+  // `?tab=integrations` deep-links (the residency page points here for the API keys).
+  const [tab, setTab] = useState<SettingsTab>(() => {
+    const q = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("tab");
+    return (SETTINGS_TABS as readonly string[]).includes(q ?? "") ? (q as SettingsTab) : "general";
+  });
   const { t } = useTranslation();
   const toast = useToast();
   const qc = useQueryClient();
@@ -625,6 +630,9 @@ export function Settings() {
         )}
         {tab === "integrations" && (
         <>
+        {/* Residency agent (Claude + insrt.studio) */}
+        <ResidencySettingsCard />
+
         {/* Pulse (Spotify + Meta) */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">

@@ -17,6 +17,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
+# Native macOS notification when the daily residency report is ready.
+tauri-plugin-notification = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
@@ -36,7 +38,7 @@ calamine = "0.26"
 csv = "1"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "blocking"] }
 tokio = { version = "1", features = ["time"] }
 regex = "1"
 # Secrets (SMTP password, API keys) live in the macOS Keychain, not in SQLite.

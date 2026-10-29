@@ -10,7 +10,7 @@ pub fn list_campaigns(state: State<'_, AppState>) -> Result<Vec<Campaign>, Strin
     let mut stmt = conn
         .prepare(
             "SELECT c.id, c.name, c.purpose, c.event_name, c.artist_id, c.target_date, c.status, c.color,
-                    c.created_at, c.updated_at,
+                    c.created_at, c.updated_at, c.kind,
                     COALESCE((SELECT COUNT(*) FROM emails e WHERE e.campaign_id = c.id AND e.status='sent'), 0) AS sent_count,
                     COALESCE((SELECT COUNT(*) FROM emails e WHERE e.campaign_id = c.id AND e.status='sent' AND e.opened_at IS NOT NULL), 0) AS opened_count,
                     COALESCE((SELECT COUNT(DISTINCT e.contact_id) FROM emails e WHERE e.campaign_id = c.id AND e.status='sent' AND e.contact_id IS NOT NULL), 0) AS reached_count,

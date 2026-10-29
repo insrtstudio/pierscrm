@@ -33,6 +33,10 @@ pub const SECRET_KEYS: &[&str] = &[
     "youtube_api_key",
     "spotify_client_secret",
     "meta_access_token",
+    // Residency agent: Claude (reply classification, drafts, daily note) and
+    // the insrt.studio CRM API (personal EPK links, link activity).
+    "anthropic_api_key",
+    "insrt_api_token",
 ];
 
 /// Vault key of the SMTP password (stored inside the `smtp` JSON setting before).

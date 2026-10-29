@@ -226,7 +226,7 @@ fn render_signature(s: &SignatureData) -> (String, String) {
     (plain_out, html_out)
 }
 
-fn build_transport(cfg: &SmtpConfig) -> Result<SmtpTransport, String> {
+pub(crate) fn build_transport(cfg: &SmtpConfig) -> Result<SmtpTransport, String> {
     // Sanitize inputs — stray whitespace / a pasted protocol prefix is a very
     // common cause of "535 authentication rejected".
     let host = cfg
@@ -263,7 +263,7 @@ fn html_escape(s: &str) -> String {
 }
 
 /// Substitute {{ key }} placeholders from a map; unknown keys are left intact.
-fn render_template(input: &str, vars: &HashMap<String, String>) -> String {
+pub(crate) fn render_template(input: &str, vars: &HashMap<String, String>) -> String {
     let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut i = 0;
@@ -371,7 +371,7 @@ fn contact_for_address(conn: &rusqlite::Connection, addr: &str) -> Option<i64> {
 /// Artist name for {{artist}}: the campaign's, else the contact's, else the
 /// only artist in the roster (a one-artist CRM sending without a campaign used
 /// to mail a literal "{{artist}}").
-fn sole_artist(conn: &rusqlite::Connection) -> Option<String> {
+pub(crate) fn sole_artist(conn: &rusqlite::Connection) -> Option<String> {
     let mut stmt = conn.prepare("SELECT name FROM artists LIMIT 2").ok()?;
     let names: Vec<String> = stmt
         .query_map([], |r| r.get::<_, String>(0))
@@ -482,36 +482,57 @@ pub fn send_email(
     subject: String,
     body: String,
 ) -> Result<SendResult, String> {
-    let cfg = load_smtp(&state)?;
+    send_one(&state.pool, contact_id, campaign_id, &to, &subject, &body).map(|(r, _)| r)
+}
+
+/// One email through every guardrail (suppression list, daily cap), with our
+/// Message-ID and List-Unsubscribe, logged in `emails` and applied to the
+/// pipeline and the campaign audience. Shared by the Compose tab and the
+/// residency autopilot. Returns the result and the id of the logged email.
+pub(crate) fn send_one(
+    pool: &crate::db::DbPool,
+    contact_id: Option<i64>,
+    campaign_id: Option<i64>,
+    to: &str,
+    subject: &str,
+    body: &str,
+) -> Result<(SendResult, Option<i64>), String> {
+    let cfg = load_smtp_from(pool)?;
     if cfg.from_email.trim().is_empty() {
         return Err("Sender email is not configured (Settings → Email).".into());
     }
 
     let from_mbox = sender_mailbox(&cfg)?;
     let to_mbox: Mailbox =
-        parse_recipient(&to).ok_or_else(|| format!("Invalid recipient address: {}", to))?;
+        parse_recipient(to).ok_or_else(|| format!("Invalid recipient address: {}", to))?;
     let addr = to_mbox.email.to_string();
 
     // Guardrails first: a suppressed address is never mailed, and the daily cap
     // holds for single sends too.
     let (tracking_base, signature) = {
-        let conn = state.pool.get().map_err(|e| e.to_string())?;
+        let conn = pool.get().map_err(|e| e.to_string())?;
         if let Some(reason) = outbox::suppression_reason(&conn, &addr) {
-            return Ok(SendResult {
-                ok: false,
-                error: Some(format!("{} : adresse en liste de suppression ({})", addr, reason)),
-                tracked: false,
-                code: Some("suppressed".into()),
-            });
+            return Ok((
+                SendResult {
+                    ok: false,
+                    error: Some(format!("{} : adresse en liste de suppression ({})", addr, reason)),
+                    tracked: false,
+                    code: Some("suppressed".into()),
+                },
+                None,
+            ));
         }
         let q = outbox::quota(&conn);
         if q.remaining <= 0 {
-            return Ok(SendResult {
-                ok: false,
-                error: Some(format!("Quota journalier atteint ({}/{}).", q.sent_today, q.cap)),
-                tracked: false,
-                code: Some("quota".into()),
-            });
+            return Ok((
+                SendResult {
+                    ok: false,
+                    error: Some(format!("Quota journalier atteint ({}/{}).", q.sent_today, q.cap)),
+                    tracked: false,
+                    code: Some("quota".into()),
+                },
+                None,
+            ));
         }
         // Open-tracking: only if a public tracking base URL is configured.
         (setting(&conn, "tracking_base_url"), load_signature(&conn))
@@ -521,13 +542,13 @@ pub fn send_email(
     let message_id = outbox::gen_message_id(&cfg.from_email);
 
     let email = build_message(
-        &from_mbox, &to_mbox, &subject, &body, &signature, &tracking_base, &token, &message_id,
+        &from_mbox, &to_mbox, subject, body, &signature, &tracking_base, &token, &message_id,
     )?;
 
     let transport = build_transport(&cfg)?;
     let (outcome, error, hard_bounce) = deliver(&transport, &email);
 
-    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let conn = pool.get().map_err(|e| e.to_string())?;
     // A free-typed address (Compose tab) is tied to its contact, so the email
     // shows in the contact's history, counts for follow-ups and moves the pipeline.
     let contact_id = contact_id.or_else(|| contact_for_address(&conn, &addr));
@@ -538,6 +559,7 @@ pub fn send_email(
             (outcome == "sent").then_some(&message_id)],
     )
     .map_err(|e| e.to_string())?;
+    let email_id = conn.last_insert_rowid();
 
     if outcome == "sent" {
         status::on_email_sent(&conn, contact_id, &addr);
@@ -548,12 +570,15 @@ pub fn send_email(
         outbox::suppress(&conn, &addr, "bounce", error.as_deref());
     }
 
-    Ok(SendResult {
-        ok: outcome == "sent",
-        error,
-        tracked,
-        code: hard_bounce.then(|| "bounced".to_string()),
-    })
+    Ok((
+        SendResult {
+            ok: outcome == "sent",
+            error,
+            tracked,
+            code: hard_bounce.then(|| "bounced".to_string()),
+        },
+        Some(email_id),
+    ))
 }
 
 #[tauri::command(async)]

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { NewResidencyModal } from "./Residency";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Plus,
@@ -91,7 +93,9 @@ const SECTIONS: Record<"campaigns" | "outbox", Tab[]> = {
 export function Emails({ section = "outbox" }: { section?: "campaigns" | "outbox" }) {
   const { t } = useTranslation();
   const tabs = SECTIONS[section];
-  const [selTab, setTab] = useState<Tab>(tabs[0]);
+  // `?tab=` lets other pages deep-link (Agenda › Actions opens the bulk send).
+  const [params] = useSearchParams();
+  const [selTab, setTab] = useState<Tab>(() => (params.get("tab") as Tab) || tabs[0]);
   // /campaigns and /outbox render this same component at the same spot, so React
   // keeps the state across them: a tab of the other section rendered a blank page.
   const tab = tabs.includes(selTab) ? selTab : tabs[0];
@@ -410,6 +414,8 @@ function CampaignsTab() {
   const { data: artists = [] } = useQuery({ queryKey: ["artists"], queryFn: listArtists });
   const [editing, setEditing] = useState<Campaign | null>(null);
   const [audienceOf, setAudienceOf] = useState<Campaign | null>(null);
+  const [newResidency, setNewResidency] = useState(false);
+  const navigate = useNavigate();
   // Menu "Nouvelle campagne" lands here (Campaigns is the section's first tab).
   useAppIntent("new:campaign", () =>
     setEditing({ name: "", status: "active", color: CAMPAIGN_COLORS[0] } as Campaign)
@@ -433,6 +439,10 @@ function CampaignsTab() {
         <Plus size={16} />
         {t("campaigns.new")}
       </button>
+      <button className="btn-outline ml-2" onClick={() => setNewResidency(true)}>
+        <Plus size={16} />
+        {t("residency.new")}
+      </button>
 
       {campaigns.length === 0 ? (
         <div className="card">
@@ -445,7 +455,12 @@ function CampaignsTab() {
             // Calendar days: the old ms diff rounded "tomorrow, before noon" to 0.
             const dd = daysUntil(c.target_date);
             return (
-              <div key={c.id} className="card group overflow-hidden p-5">
+              <div
+                key={c.id}
+                className={clsx("card group overflow-hidden p-5", c.kind === "residency" && "cursor-pointer hover:border-fg-subtle")}
+                // A residency campaign lives on its own page.
+                onClick={c.kind === "residency" ? () => navigate(`/campaigns/${c.id}`) : undefined}
+              >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <span
@@ -453,6 +468,9 @@ function CampaignsTab() {
                       style={{ background: c.color ?? "#ff5a1f" }}
                     />
                     <span className="truncate font-semibold">{c.name}</span>
+                    {c.kind === "residency" && (
+                      <span className="badge shrink-0 bg-accent-soft text-accent-ink">{t("residency.badge")}</span>
+                    )}
                   </div>
                   <span
                     className={clsx(
@@ -491,7 +509,7 @@ function CampaignsTab() {
                   </div>
                 </div>
 
-                <div className="mt-3 flex items-center justify-end gap-1">
+                <div className="mt-3 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                   <button
                     className="btn-ghost mr-auto px-2 py-1.5 text-xs"
                     onClick={() => setAudienceOf(c)}
@@ -518,6 +536,7 @@ function CampaignsTab() {
       )}
 
       {audienceOf && <AudienceModal campaign={audienceOf} onClose={() => setAudienceOf(null)} />}
+      {newResidency && <NewResidencyModal onClose={() => setNewResidency(false)} />}
 
       {editing && (
         <CampaignModal

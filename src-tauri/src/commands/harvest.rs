@@ -675,7 +675,18 @@ async fn process_harvest_task(
                 if crate::commands::vi::is_excluded(&conn, &crate::commands::vi::venue_exclusion_key(ra_venue_id)) {
                     continue;
                 }
-                let norm = normalise(&venue.name);
+                // "TBA", "Secret Location (Paris)"...: a label shared by every
+                // unannounced party in the city, not a room to pitch.
+                if crate::commands::vi::is_placeholder_venue(
+                    &venue.name,
+                    venue.area.as_ref().and_then(|a| a.name.as_deref()),
+                ) {
+                    continue;
+                }
+                // "TBA - Club Cello" is stored as "Club Cello".
+                let display_name =
+                    crate::commands::vi::strip_tba_prefix(&venue.name).unwrap_or_else(|| venue.name.clone());
+                let norm = normalise(&display_name);
                 let slug = format!("{}-{}", norm, ra_venue_id);
                 let ville = venue.area.as_ref().and_then(|a| a.name.clone());
                 // Accent-folded copy of the city: SQLite has no unaccent, and the
@@ -705,7 +716,7 @@ async fn process_harvest_task(
                         region_cible = COALESCE(vi_venues.region_cible, excluded.region_cible),
                         ra_url = COALESCE(vi_venues.ra_url, excluded.ra_url),
                         updated_at = datetime('now')",
-                    params![slug, venue.name, norm, ville, ville_norm, pays, region, ra_venue_id, ra_url],
+                    params![slug, display_name, norm, ville, ville_norm, pays, region, ra_venue_id, ra_url],
                 );
                 let venue_id: i64 = match conn.query_row(
                     "SELECT id FROM vi_venues WHERE ra_venue_id=?1",
@@ -1233,7 +1244,7 @@ pub fn vi_promote_venue(state: State<'_, AppState>, id: i64) -> Result<i64, Stri
     promote_venue_inner(&conn, id)
 }
 
-fn promote_venue_inner(conn: &rusqlite::Connection, id: i64) -> Result<i64, String> {
+pub(crate) fn promote_venue_inner(conn: &rusqlite::Connection, id: i64) -> Result<i64, String> {
     if let Ok(Some(cid)) = conn.query_row(
         "SELECT crm_contact_id FROM vi_venues WHERE id=?1",
         params![id],

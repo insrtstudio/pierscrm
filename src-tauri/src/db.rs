@@ -749,7 +749,19 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // one-shot cleanup of scraping-artefact addresses. See commands/vi.rs.
     crate::commands::vi::migrate_quality(conn);
 
+    // ---- Residency campaigns (autopilot, reply intelligence, EPK activity, reports) ----
+    // campaigns.kind, residency_campaigns, campaign_messages, reply_insights,
+    // press_activity, campaign_reports, residency_log, ai_usage and
+    // email_replies.body_excerpt. Additive and idempotent, see
+    // commands/residency/mod.rs.
+    crate::commands::residency::migrate(conn);
+
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn migrate_for_tests(conn: &rusqlite::Connection) -> Result<(), String> {
+    migrate(conn)
 }
 
 /// Vetted pack of professional booking templates, kept available on every launch.
