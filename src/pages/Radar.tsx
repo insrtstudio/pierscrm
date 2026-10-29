@@ -173,6 +173,19 @@ export function Radar() {
       toast(backendError(e), "error");
     }
   };
+  // Same hunt for a single curator, whatever it already has on file.
+  const retryOne = async (id: number) => {
+    setRunId(-1);
+    setProgress(null);
+    try {
+      setRunId(await radarEnrich(true, [id]));
+      qc.invalidateQueries({ queryKey: ["vi_runs"] });
+      toast(t("radar.retry_one_started"), "ok");
+    } catch (e: any) {
+      setRunId(null);
+      toast(backendError(e), "error");
+    }
+  };
 
   // A promotion creates a contact: every view that counts or lists contacts
   // (contacts list, dashboard tiles, campaign audiences) has to refetch.
@@ -547,6 +560,17 @@ export function Radar() {
                             disabled={unpromote.isPending}
                           >
                             <UserMinus size={14} />
+                          </button>
+                        )}
+                        {!c.rejected && (
+                          <button
+                            className="btn-ghost px-2 py-1.5"
+                            aria-label={t("radar.retry_one")}
+                            title={t("radar.retry_one_hint")}
+                            onClick={() => retryOne(c.id)}
+                            disabled={running}
+                          >
+                            <Search size={14} />
                           </button>
                         )}
                         {c.rejected ? (

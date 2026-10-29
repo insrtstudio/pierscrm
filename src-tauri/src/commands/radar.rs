@@ -5,9 +5,10 @@
 //! contact info is stored, always with its source_url.
 
 use crate::commands::enrich::{
-    base_candidates, clean_email, crawl_client, extract_contacts, host_in, host_of, internal_links,
-    is_non_pitch_email, is_placeholder_email, normalize_site, origin_of, resolve_website_via_search,
-    score_email, CRAWL_PATHS,
+    base_candidates, clean_email, crawl_client, email_domain, extract_contacts, host_in, host_of,
+    internal_links, is_denied_email_domain, is_non_pitch_email, is_placeholder_email,
+    keep_search_email, normalize_site, origin_of, resolve_website_via_search, score_email,
+    CRAWL_PATHS,
 };
 use crate::commands::ra::RaError;
 use crate::commands::{deezer, spotify::Spotify};
@@ -98,6 +99,9 @@ pub(crate) const NON_PITCH_LOCALS: &[&str] = &[
     "privacy", "legal", "support", "help", "dsa", "dpo", "gdpr", "abuse", "security", "noreply",
     "no-reply", "donotreply", "webmaster", "postmaster", "copyright", "dmca", "compliance",
     "billing", "invoice", "unsubscribe",
+    // customer service desks (custcare@skiddle.com sat on 136 venues)
+    "custcare", "customercare", "customerservice", "customer-service", "customer.service",
+    "kundenservice", "serviceclient", "service-client", "mailer-daemon", "bounce", "bounces",
 ];
 
 /// Template addresses and scraping artefacts that are never a real mailbox:
@@ -187,11 +191,13 @@ fn official_domain_sql(col: &str) -> String {
 
 fn store_email(conn: &rusqlite::Connection, curator_id: i64, email: &str, score: i64, src: &str, method: &str) {
     // Write-time filter, same rules the read side applies: scraping artefacts,
-    // template addresses, compliance mailboxes and RGPD-erased addresses are
-    // never stored.
+    // template addresses, compliance mailboxes, third-party domains (media,
+    // agencies, directories, ticketing) and RGPD-erased addresses are never
+    // stored.
     let Some(email) = clean_email(email) else { return };
     if is_placeholder_email(&email)
         || is_non_pitch_email(&email)
+        || is_denied_email_domain(email_domain(&email))
         || crate::commands::vi::is_excluded(conn, &email)
     {
         return;
@@ -452,13 +458,16 @@ pub async fn process_enrich_task(pool: &DbPool, payload: &str) -> Result<(), RaE
     };
 
     // No site yet? Try to resolve one via web search (Serper), if a key is set.
+    // Addresses on a site found that way must sit on a domain matching the
+    // curator's name (keep_search_email): a search hit is often someone else's.
+    let mut searched = false;
     if site.is_none() {
         if let Some(key) = api_key {
             let query = format!("{} playlist curator submit demo contact", nom);
-            // Accepted only when the result's domain or title carries the
-            // curator's name, never a directory from RADAR_SITE_SKIP.
+            // Accepted only when the result's domain matches the curator's
+            // name, never a directory from RADAR_SITE_SKIP.
             if let Some(found) =
-                resolve_website_via_search(&crawl_client(), &key, &query, &nom, RADAR_SITE_SKIP).await
+                resolve_website_via_search(&crawl_client(), &key, &query, &nom, None, RADAR_SITE_SKIP).await
             {
                 let foreign = pool
                     .get()
@@ -466,6 +475,7 @@ pub async fn process_enrich_task(pool: &DbPool, payload: &str) -> Result<(), RaE
                     .unwrap_or(true);
                 if !foreign {
                     site = Some(found);
+                    searched = true;
                 }
             }
             tokio::time::sleep(std::time::Duration::from_millis(400)).await;
@@ -521,8 +531,12 @@ pub async fn process_enrich_task(pool: &DbPool, payload: &str) -> Result<(), RaE
                 body.truncate(cut);
             }
             let (emails, _) = extract_contacts(&body);
+            let site_host = host_of(&base);
             if let Ok(conn) = pool.get() {
                 for (email, from_mailto) in emails {
+                    if searched && !keep_search_email(&email, Some(&site_host), &nom, None) {
+                        continue;
+                    }
                     let (score, _) = score_email(&email, from_mailto);
                     store_email(&conn, cid, &email, score, url, if from_mailto { "mailto" } else { "regex" });
                 }
@@ -623,9 +637,18 @@ pub fn queue_enrich_tasks(pool: &DbPool, run_id: i64) -> i64 {
     n
 }
 
+/// Queue an email hunt. Without `ids`: every curator still without a usable
+/// address (`force` includes those already searched). With `ids`: exactly those
+/// curators, whatever they already have (the per-row "search again" button).
 #[tauri::command]
-pub async fn radar_enrich(app: AppHandle, state: State<'_, AppState>, force: Option<bool>) -> Result<i64, String> {
+pub async fn radar_enrich(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    force: Option<bool>,
+    ids: Option<Vec<i64>>,
+) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let picked = ids.filter(|v| !v.is_empty());
     // A curator whose only addresses are compliance/directory ones still needs a
     // hunt, so "has an email" means a usable one, as everywhere else.
     let mut sql = format!(
@@ -633,7 +656,10 @@ pub async fn radar_enrich(app: AppHandle, state: State<'_, AppState>, force: Opt
          AND NOT EXISTS(SELECT 1 FROM radar_contacts c WHERE c.curator_id=radar_curators.id AND c.type='email' AND {})",
         pitchable_sql("c.valeur")
     );
-    if !force.unwrap_or(false) {
+    if let Some(v) = &picked {
+        let list: Vec<String> = v.iter().map(|i| i.to_string()).collect();
+        sql = format!("SELECT id FROM radar_curators WHERE id IN ({})", list.join(","));
+    } else if !force.unwrap_or(false) {
         sql.push_str(" AND enriched_at IS NULL");
     }
     sql.push_str(" ORDER BY score DESC LIMIT 400");

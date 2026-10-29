@@ -273,6 +273,47 @@ pub(crate) fn host_hit(host: &str, pat: &str) -> bool {
     }
 }
 
+/// Domains whose addresses never belong to a venue or a curator, even when one
+/// shows up on the venue's own page (a press clipping, a partner footer, an
+/// agency signature): music media, booking agencies, playlist directories and
+/// submission tools, ticketing, platform mailboxes. Same pattern syntax as
+/// THIRD_PARTY_HOSTS. Checked on email domains only: venues get it on top of
+/// THIRD_PARTY_HOSTS, curators get it alone, since an address on a streaming
+/// platform's own domain is a real editorial route there (radar::PLATFORM_DOMAINS).
+///
+/// Seen in the real data: olivia.stock@djmag.com on Vault Paris,
+/// info@solidnames.fr on La Casbah, custcare@skiddle.com on 136 venues,
+/// support@playlistlookup.com on 93 curators.
+pub(crate) const EMAIL_DENY_DOMAINS: &[&str] = &[
+    // music media
+    "djmag.", "mixmag.", "residentadvisor.", "ra.co", "trax-magazine.", "traxmag.", "tsugi.",
+    "pitchfork.", "billboard.", "factmag.", "vice.com", "timeout.", "lefooding.", "beatportal.",
+    "electronicbeats.", "groove.de", "fazemag.", "musicradar.", "attackmagazine.",
+    // booking agencies and talent marketplaces
+    "solidnames.", "wmeagency.", "caa.com", "unitedtalent.", "codaagency.", "atc-live.",
+    "paradigmagency.", "primarytalent.", "elastic-artists.", "gigmit.",
+    // playlist directories, submission tools, link hubs
+    "playlistlookup.", "playlistpartner.", "playlistsupply.", "isitagoodplaylist.", "submithub.",
+    "groover.", "playlist-push.", "playlistpush.", "dailyplaylists.", "soundplate.",
+    "linktr.ee", "linktree.", "beacons.ai",
+    // ticketing, listings, guides
+    "skiddle.", "xceed.", "feverup.", "dice.fm", "eventbrite.", "shotgun.", "songkick.",
+    "bandsintown.", "ticketmaster.", "seetickets.", "eventim.", "fnac.", "fnacspectacles.",
+    "billetweb.", "weezevent.", "ticketswap.", "digitick.", "tixr.", "wegow.", "partyflock.",
+    "allevents.", "tripadvisor.", "yelp.", "foursquare.", "petitfute.", "nightlifeticket.",
+    "festscanner.", "clubbable.", "designmynight.",
+    // platform mailboxes of socials, site builders and mailing tools
+    "facebook.", "fb.com", "facebookmail.", "instagram.", "meta.com", "twitter.", "x.com",
+    "tiktok.", "google.", "wix.com", "squarespace.", "godaddy.", "shopify.", "mailchimp.",
+    "sendinblue.", "brevo.",
+];
+
+/// True when an email domain is a third party's (EMAIL_DENY_DOMAINS, tourism
+/// offices and public bodies), whatever page it was found on.
+pub(crate) fn is_denied_email_domain(domain: &str) -> bool {
+    host_in(&host_of(domain), EMAIL_DENY_DOMAINS)
+}
+
 /// True when the host is in `list` or is a public body / tourism office.
 pub(crate) fn host_in(host: &str, list: &[&str]) -> bool {
     if list.iter().any(|p| host_hit(host, p)) {
@@ -288,6 +329,13 @@ pub(crate) fn host_in(host: &str, list: &[&str]) -> bool {
 /// A venue site we must not crawl as if it were the venue's own.
 pub(crate) fn is_third_party_host(host: &str) -> bool {
     host_in(host, THIRD_PARTY_HOSTS)
+}
+
+/// A site URL that is a third party's (listing, social, public body) or a
+/// media / agency / directory site whose addresses are never a venue's.
+pub(crate) fn is_foreign_venue_site(url: &str) -> bool {
+    let h = host_of(url);
+    is_third_party_host(&h) || is_denied_email_domain(&h)
 }
 
 /// Instagram handle from a profile URL ("https://www.instagram.com/b21_brussels?igsh=..").
@@ -421,6 +469,10 @@ pub(crate) fn keep_venue_email(email: &str, site_host: Option<&str>, seen_elsewh
         return false;
     }
     let d = email_domain(email);
+    // Media, agencies, ticketing: never the venue's, even found on its own page.
+    if is_denied_email_domain(d) {
+        return false;
+    }
     if let Some(h) = site_host.filter(|h| !h.is_empty()) {
         if same_site(d, h) {
             return true;
@@ -458,19 +510,94 @@ pub(crate) fn name_tokens(name: &str) -> Vec<String> {
     out
 }
 
-/// Pick a site out of a Serper response. A result is accepted only when it is
-/// not skipped and its domain (first pass) or title (second pass) contains a
-/// distinctive token of the name: "the first organic result" used to be a
-/// directory page often enough to poison hundreds of rows.
-pub(crate) fn pick_site_from_search(d: &serde_json::Value, name: &str, skip: &[&str]) -> Option<String> {
-    let tokens = name_tokens(name);
-    if tokens.is_empty() {
-        return None;
+/// Labels that sit between a registrable name and its TLD ("club.co.uk").
+const SECOND_LEVEL: &[&str] = &["co", "com", "org", "net", "gov", "gouv", "gob", "ac", "edu", "or", "ne"];
+
+/// Registrable label of a domain, normalised: "www.Le-Sucre.eu" -> "lesucre",
+/// "mail.printworkslondon.co.uk" -> "printworkslondon", "info@ifz.de" -> "ifz".
+pub(crate) fn domain_core(domain: &str) -> String {
+    let d = email_domain(domain);
+    let host = host_of(if d.is_empty() { domain } else { d });
+    let mut labels: Vec<&str> = host.split('.').filter(|l| !l.is_empty()).collect();
+    if labels.len() > 1 {
+        labels.pop(); // TLD
     }
-    let has_token = |s: &str| {
-        let n = crate::db::normalise(s);
-        tokens.iter().any(|t| n.contains(t.as_str()))
-    };
+    while labels.len() > 1 && SECOND_LEVEL.contains(labels.last().unwrap_or(&"")) {
+        labels.pop();
+    }
+    labels.last().map(|l| crate::db::normalise(l)).unwrap_or_default()
+}
+
+/// Whether a domain (a site host or the part of an address after the @)
+/// plausibly belongs to the venue or curator called `name`. `city` is the
+/// venue's city: a city word alone proves nothing ("Vault Paris" against
+/// parisclubbing.com). Accents and punctuation are folded on both sides.
+///
+/// Accepted when the domain's registrable label contains a distinctive token of
+/// the name (a 3-letter token only as a prefix: rexclub.com for "Rex Club"),
+/// when that label is itself a part of the name (cafeoto.co.uk for "Café
+/// Oto"), or when it starts with the name's initials (ifz-leipzig.de for
+/// "Institut für Zukunft"). Everything else is a third party: djmag.com for
+/// Vault Paris, paris-society.com for La Pause Parisienne, solidnames.fr for
+/// La Casbah, gmail.com for anyone.
+pub(crate) fn domain_matches_name(domain: &str, name: &str, city: Option<&str>) -> bool {
+    let core = domain_core(domain);
+    if core.len() < 3 {
+        return false;
+    }
+    let city_words: Vec<String> = city
+        .map(|c| c.split(|ch: char| !ch.is_alphanumeric()).map(crate::db::normalise).filter(|w| !w.is_empty()).collect())
+        .unwrap_or_default();
+    let words: Vec<String> = name
+        .split(|c: char| !c.is_alphanumeric())
+        .map(crate::db::normalise)
+        .filter(|w| !w.is_empty())
+        .collect();
+    let not_city = |w: &String| !city_words.contains(w);
+    let mut tokens: Vec<String> = name_tokens(name).into_iter().filter(not_city).collect();
+    let own: Vec<&String> = words.iter().filter(|w| not_city(w)).collect();
+    // A name made only of city words ("Paris Paris"): the city is the name.
+    let compact: String = if own.is_empty() { words.concat() } else { own.into_iter().cloned().collect() };
+    if tokens.is_empty() && compact.len() >= 3 {
+        tokens.push(compact.clone());
+    }
+    if tokens
+        .iter()
+        .any(|t| (t.len() >= 4 && core.contains(t.as_str())) || (t.len() == 3 && core.starts_with(t.as_str())))
+    {
+        return true;
+    }
+    if core.len() >= 4
+        && !NAME_STOPWORDS.contains(&core.as_str())
+        && !city_words.contains(&core)
+        && compact.contains(core.as_str())
+    {
+        return true;
+    }
+    let initials: String = words.iter().filter_map(|w| w.chars().next()).collect();
+    initials.len() >= 3 && core.starts_with(initials.as_str())
+}
+
+/// Write-time rule for an address found on a site that came out of a web
+/// search rather than from RA or the curator's own profile: kept only on the
+/// site's own domain or on a domain that matches the name (a search hit is
+/// much more often a third party than a site RA lists).
+pub(crate) fn keep_search_email(email: &str, site_host: Option<&str>, name: &str, city: Option<&str>) -> bool {
+    let d = email_domain(email);
+    site_host.is_some_and(|h| !h.is_empty() && same_site(d, h)) || domain_matches_name(d, name, city)
+}
+
+/// Pick a site out of a Serper response. A result is accepted only when it is
+/// not skipped and its domain matches the name (domain_matches_name): "the
+/// first organic result" used to be a directory page often enough to poison
+/// hundreds of rows, and a title match alone let in a magazine's article
+/// (djmag.com for Vault Paris) whose staff addresses were then crawled.
+pub(crate) fn pick_site_from_search(
+    d: &serde_json::Value,
+    name: &str,
+    city: Option<&str>,
+    skip: &[&str],
+) -> Option<String> {
     let usable = |link: &str| -> Option<(String, String)> {
         let n = normalize_site(link)?;
         let host = host_of(&n);
@@ -479,44 +606,33 @@ pub(crate) fn pick_site_from_search(d: &serde_json::Value, name: &str, skip: &[&
         }
         Some((origin_of(&n), host))
     };
+    let matches = |host: &str| domain_matches_name(host, name, city);
     if let Some(kg) = d.get("knowledgeGraph") {
         if let Some((origin, host)) = kg.get("website").and_then(|w| w.as_str()).and_then(usable) {
-            let title = kg.get("title").and_then(|t| t.as_str()).unwrap_or("");
-            if has_token(&host) || has_token(title) {
+            if matches(&host) {
                 return Some(origin);
             }
         }
     }
-    let organic: Vec<(String, String, String)> = d
-        .get("organic")
-        .and_then(|o| o.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|it| {
-                    let link = it.get("link")?.as_str()?;
-                    let title = it.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string();
-                    let (origin, host) = usable(link)?;
-                    Some((origin, host, title))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    organic
+    d.get("organic")
+        .and_then(|o| o.as_array())?
         .iter()
-        .find(|(_, host, _)| has_token(host))
-        .or_else(|| organic.iter().find(|(_, _, title)| has_token(title)))
-        .map(|(o, _, _)| o.clone())
+        .filter_map(|it| usable(it.get("link")?.as_str()?))
+        .find(|(_, host)| matches(host))
+        .map(|(o, _)| o)
 }
 
 /// Resolve an official website via the Serper (Google) search API, used only
-/// when no site is known. `name` is what the site must be about (see
-/// pick_site_from_search) and `skip` the hosts never accepted (THIRD_PARTY_HOSTS
-/// for venues, radar's own directory list for curators). Returns an origin.
+/// when no site is known. `name` (and the venue's `city`) is what the site's
+/// domain must match (see pick_site_from_search) and `skip` the hosts never
+/// accepted (THIRD_PARTY_HOSTS for venues, radar's own directory list for
+/// curators). Returns an origin.
 pub(crate) async fn resolve_website_via_search(
     client: &reqwest::Client,
     api_key: &str,
     query: &str,
     name: &str,
+    city: Option<&str>,
     skip: &[&str],
 ) -> Option<String> {
     let resp = client
@@ -530,7 +646,7 @@ pub(crate) async fn resolve_website_via_search(
         return None;
     }
     let d: serde_json::Value = resp.json().await.ok()?;
-    pick_site_from_search(&d, name, skip)
+    pick_site_from_search(&d, name, city, skip)
 }
 
 /// Deeper path list for the "retry the venues without an email" pass: the
@@ -572,14 +688,17 @@ async fn fetch_html(client: &reqwest::Client, url: &str) -> Option<String> {
 }
 
 /// Store the addresses found on one page for a venue, applying the write-time
-/// rules (keep_venue_email, RGPD exclusions). Returns how many were kept and the
-/// best score among them.
+/// rules (keep_venue_email, RGPD exclusions). `searched` is (name, city) when
+/// the site came out of a web search: its addresses must then also pass
+/// keep_search_email. Returns how many were kept and the best score among them.
+#[allow(clippy::too_many_arguments)]
 fn store_venue_emails(
     conn: &rusqlite::Connection,
     venue_id: i64,
     emails: Vec<(String, bool)>,
     url: &str,
     site_host: Option<&str>,
+    searched: Option<(&str, Option<&str>)>,
     method: Option<&str>,
     score_delta: i64,
 ) -> (i64, i64) {
@@ -587,6 +706,11 @@ fn store_venue_emails(
     for (email, from_mailto) in emails {
         if super::vi::is_excluded(conn, &email) {
             continue;
+        }
+        if let Some((name, city)) = searched {
+            if !keep_search_email(&email, site_host, name, city) {
+                continue;
+            }
         }
         let seen_elsewhere: bool = conn
             .query_row(
@@ -623,7 +747,7 @@ struct CrawlOutcome {
 /// Crawl a site (homepage + `paths` + contact-ish links found on the homepage)
 /// for addresses, at most `budget` fetches. `own_site` says whether the site is
 /// the venue's own: only then does an address on its domain bypass the
-/// "already on another venue" rule.
+/// "already on another venue" rule. `searched` see store_venue_emails.
 #[allow(clippy::too_many_arguments)]
 async fn crawl_site(
     client: &reqwest::Client,
@@ -633,6 +757,7 @@ async fn crawl_site(
     paths: &[&str],
     budget: usize,
     own_site: bool,
+    searched: Option<(&str, Option<&str>)>,
     method: Option<&str>,
     score_delta: i64,
 ) -> CrawlOutcome {
@@ -689,7 +814,7 @@ async fn crawl_site(
             out.contact_page = Some(url.clone());
         }
         let Ok(conn) = pool.get() else { continue };
-        let (kept, best) = store_venue_emails(&conn, venue_id, emails, url, site_host, method, score_delta);
+        let (kept, best) = store_venue_emails(&conn, venue_id, emails, url, site_host, searched, method, score_delta);
         out.kept += kept;
         best_score = best_score.max(best);
         // store a phone from the site only if RA gave none
@@ -764,7 +889,7 @@ pub async fn process_enrich_task(
             // A Facebook page or a ticketing listing is not the venue's site; an
             // Instagram profile is kept for what it is.
             let (own, ig) = match ra_site {
-                Some(s) if is_third_party_host(&host_of(&s)) => (None, instagram_handle(&s)),
+                Some(s) if is_foreign_venue_site(&s) => (None, instagram_handle(&s)),
                 other => (other, None),
             };
             let capacite: Option<i64> = d
@@ -794,9 +919,13 @@ pub async fn process_enrich_task(
     }
 
     // The stored site may itself be a third-party page (1 152 venues had a
-    // Facebook, Instagram or ticketing URL there): never crawl it as theirs.
+    // Facebook, Instagram or ticketing URL there, and a title-only search match
+    // filed magazines and agencies): never crawl it as theirs, and let a search
+    // hit replace it below.
+    let mut stored_foreign = false;
     if let Some(s) = site.clone() {
-        if is_third_party_host(&host_of(&s)) {
+        if is_foreign_venue_site(&s) {
+            stored_foreign = true;
             if insta.is_none() {
                 insta = instagram_handle(&s);
                 if let (Some(h), Ok(conn)) = (&insta, pool.get()) {
@@ -811,6 +940,9 @@ pub async fn process_enrich_task(
     }
 
     // 1b. Still no website? Resolve it with a web search (Serper), if a key is set.
+    //     A site found that way only yields addresses on its own (name-matching)
+    //     domain or another domain matching the name (keep_search_email).
+    let mut searched = false;
     if site.is_none() {
         let api_key = pool.get().ok().and_then(|conn| {
             // Keychain-backed (see crate::secrets).
@@ -824,15 +956,18 @@ pub async fn process_enrich_task(
                     ville.clone().unwrap_or_default()
                 );
                 if let Some(found) =
-                    resolve_website_via_search(&crawl_client(), &key, &query, &nom, THIRD_PARTY_HOSTS).await
+                    resolve_website_via_search(&crawl_client(), &key, &query, &nom, ville.as_deref(), THIRD_PARTY_HOSTS)
+                        .await
                 {
                     if let Ok(conn) = pool.get() {
                         let _ = conn.execute(
-                            "UPDATE vi_venues SET site_web = COALESCE(site_web, ?2), updated_at = datetime('now') WHERE id=?1",
-                            params![venue_id, found],
+                            "UPDATE vi_venues SET site_web = CASE WHEN ?3 THEN ?2 ELSE COALESCE(site_web, ?2) END,
+                                updated_at = datetime('now') WHERE id=?1",
+                            params![venue_id, found, stored_foreign],
                         );
                     }
                     site = Some(found);
+                    searched = true;
                 }
                 // Politeness / rate-limit courtesy toward the search API.
                 tokio::time::sleep(std::time::Duration::from_millis(400)).await;
@@ -846,7 +981,8 @@ pub async fn process_enrich_task(
     let mut kept = 0i64;
     if let Some(raw) = &site {
         let (paths, budget) = if retry { (RETRY_PATHS, 14) } else { (CRAWL_PATHS, 8) };
-        let o = crawl_site(&client, pool, venue_id, raw, paths, budget, true, None, 0).await;
+        let rule = searched.then_some((nom.as_str(), ville.as_deref()));
+        let o = crawl_site(&client, pool, venue_id, raw, paths, budget, true, rule, None, 0).await;
         contact_page = o.contact_page;
         kept += o.kept;
     }
@@ -865,7 +1001,7 @@ pub async fn process_enrich_task(
                     .join(" ");
                 let (emails, _) = extract_contacts(&bio);
                 if let Ok(conn) = pool.get() {
-                    kept += store_venue_emails(&conn, venue_id, emails, &url, None, Some("instagram"), 0).0;
+                    kept += store_venue_emails(&conn, venue_id, emails, &url, None, None, Some("instagram"), 0).0;
                 }
             }
         }
@@ -882,10 +1018,10 @@ pub async fn process_enrich_task(
         });
         if let Some(pid) = promoter.as_deref().and_then(ra::promoter_id_from_url) {
             if let Ok(Some(w)) = ra::fetch_promoter_website(ra_client, pid).await {
-                if let Some(ws) = normalize_site(&w).filter(|s| !is_third_party_host(&host_of(s))) {
+                if let Some(ws) = normalize_site(&w).filter(|s| !is_foreign_venue_site(s)) {
                     // Not the venue's own site: a promoter running several rooms
                     // must not hand the same inbox to all of them.
-                    let o = crawl_site(&client, pool, venue_id, &ws, CRAWL_PATHS, 6, false, Some("promoter"), -15).await;
+                    let o = crawl_site(&client, pool, venue_id, &ws, CRAWL_PATHS, 6, false, None, Some("promoter"), -15).await;
                     kept += o.kept;
                 }
             }
@@ -894,9 +1030,13 @@ pub async fn process_enrich_task(
     let _ = kept;
 
     if let Ok(conn) = pool.get() {
+        // email_retry_at marks the venue as done for the retry pass, found or
+        // not, so a second click (or an interrupted run) does not start over.
         let _ = conn.execute(
-            "UPDATE vi_venues SET page_contact = COALESCE(page_contact, ?2), enriched_at = datetime('now'), updated_at = datetime('now') WHERE id=?1",
-            params![venue_id, contact_page],
+            "UPDATE vi_venues SET page_contact = COALESCE(page_contact, ?2), enriched_at = datetime('now'),
+                email_retry_at = CASE WHEN ?3 THEN datetime('now') ELSE email_retry_at END,
+                updated_at = datetime('now') WHERE id=?1",
+            params![venue_id, contact_page, retry],
         );
     }
     Ok(())
@@ -904,9 +1044,15 @@ pub async fn process_enrich_task(
 
 // ---------------- Commands ----------------
 
+/// A venue the retry pass went over is not retried again before this many days:
+/// sites change slowly, and the pass costs up to 20 fetches per venue.
+pub(crate) const RETRY_COOLDOWN_DAYS: i64 = 30;
+
 /// Queue an enrichment run over qualified/validated venues. `force` re-runs every
 /// venue; `only_missing_email` queues the deeper retry (RETRY_PATHS, Instagram,
-/// RA promoter) for venues already enriched that still have no usable address.
+/// RA promoter) for venues already enriched that still have no usable address
+/// and were not retried in the last RETRY_COOLDOWN_DAYS (email_retry_at), so the
+/// pass is idempotent: clicking again picks up where an interrupted run stopped.
 /// Errors are stable codes the UI translates ("vi.enrich_none", "vi.retry_none").
 #[tauri::command]
 pub async fn vi_start_enrich(
@@ -924,6 +1070,7 @@ pub async fn vi_start_enrich(
     if retry {
         sql.push_str(&format!(
             " AND v.enriched_at IS NOT NULL
+              AND (v.email_retry_at IS NULL OR v.email_retry_at < datetime('now', '-{RETRY_COOLDOWN_DAYS} days'))
               AND NOT EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email' AND {})",
             super::harvest::own_email_sql("c.valeur")
         ));
@@ -1166,33 +1313,125 @@ mod tests {
             ]
         });
         assert_eq!(
-            pick_site_from_search(&d, "Fabric", THIRD_PARTY_HOSTS).as_deref(),
+            pick_site_from_search(&d, "Fabric", None, THIRD_PARTY_HOSTS).as_deref(),
             Some("https://www.fabriclondon.com")
         );
         // nothing carries the name: nothing accepted (the old code took the blog)
         let d2 = serde_json::json!({
             "organic": [{ "link": "https://www.someblog.com/top-10", "title": "Top 10 clubs" }]
         });
-        assert_eq!(pick_site_from_search(&d2, "Fabric", THIRD_PARTY_HOSTS), None);
-        // title match as a second pass
+        assert_eq!(pick_site_from_search(&d2, "Fabric", None, THIRD_PARTY_HOSTS), None);
+        // a title match alone is not enough any more: that is how a magazine's
+        // article (djmag.com for Vault Paris) got crawled as the venue's site
         let d3 = serde_json::json!({
-            "organic": [{ "link": "https://www.k-club.de/", "title": "Kantine am Berghain" }]
+            "organic": [
+                { "link": "https://djmag.com/news/vault-paris-opens", "title": "Vault Paris opens its doors" },
+                { "link": "https://www.k-club.de/", "title": "Kantine am Berghain" }
+            ]
         });
-        assert_eq!(
-            pick_site_from_search(&d3, "Kantine", THIRD_PARTY_HOSTS).as_deref(),
-            Some("https://www.k-club.de")
-        );
+        assert_eq!(pick_site_from_search(&d3, "Vault Paris", Some("Paris"), THIRD_PARTY_HOSTS), None);
+        assert_eq!(pick_site_from_search(&d3, "Kantine", None, THIRD_PARTY_HOSTS), None);
+        // a city word alone does not make a match
+        let d6 = serde_json::json!({
+            "organic": [{ "link": "https://www.parisclubbing.com/vault", "title": "Vault" }]
+        });
+        assert_eq!(pick_site_from_search(&d6, "Vault Paris", Some("Paris"), THIRD_PARTY_HOSTS), None);
         // knowledge graph site is checked like any other result
         let d4 = serde_json::json!({
             "knowledgeGraph": { "title": "Fabric", "website": "https://www.facebook.com/fabric" },
             "organic": []
         });
-        assert_eq!(pick_site_from_search(&d4, "Fabric", THIRD_PARTY_HOSTS), None);
+        assert_eq!(pick_site_from_search(&d4, "Fabric", None, THIRD_PARTY_HOSTS), None);
+        // a knowledge graph site whose domain matches is taken first
+        let d7 = serde_json::json!({
+            "knowledgeGraph": { "title": "Le Sucre", "website": "https://le-sucre.eu/" },
+            "organic": [{ "link": "https://www.lesucre-lyon.fr/", "title": "Le Sucre" }]
+        });
+        assert_eq!(
+            pick_site_from_search(&d7, "Le Sucre", Some("Lyon"), THIRD_PARTY_HOSTS).as_deref(),
+            Some("https://le-sucre.eu")
+        );
         // a caller-specific skip list (radar passes its directories)
         let d5 = serde_json::json!({
             "organic": [{ "link": "https://playlistlookup.com/deep-vibes", "title": "Deep Vibes playlist" }]
         });
-        assert_eq!(pick_site_from_search(&d5, "Deep Vibes", &["playlistlookup."]), None);
+        assert_eq!(pick_site_from_search(&d5, "Deep Vibes", None, &["playlistlookup."]), None);
+    }
+
+    #[test]
+    fn domain_core_strips_tld_and_second_level() {
+        assert_eq!(domain_core("www.Le-Sucre.eu"), "lesucre");
+        assert_eq!(domain_core("mail.printworkslondon.co.uk"), "printworkslondon");
+        assert_eq!(domain_core("info@ifz-leipzig.de"), "ifzleipzig");
+        assert_eq!(domain_core("https://berghain.berlin/contact"), "berghain");
+        assert_eq!(domain_core("club.com.au"), "club");
+    }
+
+    #[test]
+    fn domain_must_match_the_name() {
+        // the venue's or curator's own domain
+        assert!(domain_matches_name("fabriclondon.com", "Fabric", Some("London")));
+        assert!(domain_matches_name("berghain.berlin", "Berghain", Some("Berlin")));
+        assert!(domain_matches_name("le-sucre.eu", "Le Sucre", Some("Lyon")));
+        assert!(domain_matches_name("rexclub.com", "Rex Club", Some("Paris")));
+        assert!(domain_matches_name("cafeoto.co.uk", "Café Oto", Some("London")));
+        assert!(domain_matches_name("ifz-leipzig.de", "Institut für Zukunft", Some("Leipzig")));
+        assert!(domain_matches_name("printworkslondon.co.uk", "Printworks", None));
+        assert!(domain_matches_name("deephousevibes.com", "Deep House Vibes", None));
+        assert!(domain_matches_name("zurichhive.ch", "Zürich Club Hive", None));
+        assert!(domain_matches_name("lacasbah.fr", "La Casbah", None));
+        // a name made only of city words still matches its own domain
+        assert!(domain_matches_name("parisparis.fr", "Paris Paris", Some("Paris")));
+        // the real failures: a magazine, a group, an agency, generic mail
+        assert!(!domain_matches_name("djmag.com", "Vault Paris", Some("Paris")));
+        assert!(!domain_matches_name("paris-society.com", "La Pause Parisienne", Some("Paris")));
+        assert!(!domain_matches_name("solidnames.fr", "La Casbah", None));
+        assert!(!domain_matches_name("skiddle.com", "Fabric", Some("London")));
+        assert!(!domain_matches_name("playlistlookup.com", "Deep House Vibes", None));
+        assert!(!domain_matches_name("gmail.com", "Deep House Vibes", None));
+        // the city alone, a 3-letter token in the middle, a stopword domain
+        assert!(!domain_matches_name("parisclubbing.com", "Vault Paris", Some("Paris")));
+        assert!(!domain_matches_name("torexpress.com", "Rex Club", None));
+        assert!(!domain_matches_name("club.com", "Rex Club", None));
+        assert!(!domain_matches_name("ra.co", "Fabric", None));
+        assert!(!domain_matches_name("dj.com", "DJ", None));
+    }
+
+    #[test]
+    fn search_site_emails_need_a_matching_domain() {
+        // on the found site's own domain, or another domain carrying the name
+        assert!(keep_search_email("booking@vaultparis.fr", Some("vaultparis.fr"), "Vault Paris", Some("Paris")));
+        assert!(keep_search_email("booking@vault-club.com", Some("vaultparis.fr"), "Vault Paris", Some("Paris")));
+        // anyone else's: dropped, even a unique gmail address
+        assert!(!keep_search_email("olivia.stock@djmag.com", Some("vaultparis.fr"), "Vault Paris", Some("Paris")));
+        assert!(!keep_search_email("digital@paris-society.com", None, "La Pause Parisienne", Some("Paris")));
+        assert!(!keep_search_email("someone@gmail.com", Some("vaultparis.fr"), "Vault Paris", Some("Paris")));
+    }
+
+    #[test]
+    fn denied_email_domains() {
+        for e in [
+            "olivia.stock@djmag.com", "info@solidnames.fr", "custcare@skiddle.com",
+            "support@playlistlookup.com", "hello@eventbrite.co.uk", "x@shotgun.live",
+            "a@dice.fm", "b@fnac.com", "c@ticketmaster.fr", "d@tripadvisor.com",
+            "e@facebookmail.com", "f@instagram.com", "g@ra.co", "h@residentadvisor.net",
+            "i@parisinfo.tourisme.fr", "j@submithub.com",
+        ] {
+            assert!(is_denied_email_domain(email_domain(e)), "{e} should be denied");
+        }
+        for e in ["booking@fabriclondon.com", "club@gmail.com", "info@lacasbah.fr", "a@sierra.co", "x@netflix.com"] {
+            assert!(!is_denied_email_domain(email_domain(e)), "{e} should be allowed");
+        }
+        // write rule: denied even when found on the venue's own page
+        assert!(!keep_venue_email("olivia.stock@djmag.com", Some("vaultparis.fr"), false));
+        assert!(!keep_venue_email("info@solidnames.fr", Some("lacasbah.fr"), false));
+        // customer service desks are not a booking route
+        assert!(is_non_pitch_email("custcare@club.com"));
+        assert!(is_non_pitch_email("customer.service@club.com"));
+        // a media or agency site is never crawled as the venue's
+        assert!(is_foreign_venue_site("https://djmag.com"));
+        assert!(is_foreign_venue_site("https://www.facebook.com/club"));
+        assert!(!is_foreign_venue_site("https://fabriclondon.com"));
     }
 
     #[test]
