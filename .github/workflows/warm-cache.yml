@@ -1,0 +1,59 @@
+name: Warm Rust cache
+
+# Pré-compile les dépendances Rust sur main pour que le workflow Release (lancé
+# sur un tag) les retrouve en cache. GitHub n'autorise un tag à lire que le
+# cache de la branche par défaut, et efface un cache inutilisé depuis 7 jours :
+# d'où le déclenchement sur push (quand les dépendances changent) et deux fois
+# par semaine. Aucune publication ici : build sans bundle ni signature.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src-tauri/Cargo.toml"
+      - "src-tauri/Cargo.lock"
+      - ".github/workflows/warm-cache.yml"
+  schedule:
+    - cron: "0 4 * * 1,4"
+  workflow_dispatch:
+
+concurrency:
+  group: warm-cache
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install Rust (both macOS targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      # Same shared key as release.yml, so the tag build restores this cache.
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: macos-universal-release
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Exactly the release compilation (same targets, features and env as
+      # tauri-action), minus bundling and updater signing.
+      - name: Build (no bundle)
+        run: pnpm tauri build --target universal-apple-darwin --no-bundle

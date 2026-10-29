@@ -80,8 +80,19 @@ export interface Contact {
   notes?: string | null;
   website?: string | null;
   tags?: string | null;
+  organisation_id?: number | null;
+  /// Read-only, joined by the backend.
+  organisation_name?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+}
+
+export interface Organisation {
+  id?: number;
+  name: string;
+  email_domain?: string | null;
+  notes?: string | null;
+  contact_count?: number;
 }
 
 export interface Template {
@@ -105,6 +116,21 @@ export interface Campaign {
   updated_at?: string | null;
   sent_count: number;
   opened_count: number;
+  reached_count?: number;
+  replied_count?: number;
+  /// Audience (campaign_contacts): still to mail, and all recipients.
+  planned_count?: number;
+  audience_count?: number;
+}
+
+export const AUDIENCE_STATES = ["planned", "sent", "replied", "bounced"] as const;
+export type AudienceState = (typeof AUDIENCE_STATES)[number];
+
+/// A campaign recipient: the contact plus its state in that campaign.
+export interface AudienceRow extends Contact {
+  state: AudienceState;
+  added_at: string;
+  suppressed: boolean;
 }
 
 export const CAMPAIGN_STATUSES = ["active", "scheduled", "done", "archived"] as const;
@@ -139,6 +165,7 @@ export interface Followup {
   days_since: number;
   email_count: number;
   opened: boolean;
+  due?: string;
 }
 
 export interface EmailLog {
@@ -154,6 +181,55 @@ export interface EmailLog {
   opened_at?: string | null;
   open_count: number;
   sent_at?: string | null;
+  message_id?: string | null;
+  replied_at?: string | null;
+}
+
+export interface EmailFilter {
+  campaign_id?: number | null;
+  status?: "sent" | "failed" | null;
+  opened?: boolean | null;
+  replied?: boolean | null;
+  search?: string | null;
+}
+
+export interface EmailPage {
+  rows: EmailLog[];
+  total: number;
+}
+
+export const SUPPRESSION_REASONS = ["bounce", "unsubscribe", "manual", "refused"] as const;
+
+export interface Suppression {
+  id: number;
+  address: string;
+  reason: string;
+  note?: string | null;
+  created_at: string;
+}
+
+export interface SendQuota {
+  cap: number;
+  sent_today: number;
+  remaining: number;
+}
+
+export interface ReplySyncResult {
+  scanned: number;
+  replies: number;
+  bounces: number;
+  unsubscribes: number;
+  no_answer: number;
+  /// Another sync was already running.
+  skipped?: boolean;
+}
+
+export interface ReplySyncStatus {
+  host: string;
+  derived: boolean;
+  last_sync?: string | null;
+  last_error?: string | null;
+  last_result?: ReplySyncResult | null;
 }
 
 export interface BudgetItem {
@@ -166,6 +242,8 @@ export interface BudgetItem {
   kind: "expense" | "revenue";
   notes?: string | null;
   sort: number;
+  /// Revenue line generated for a confirmed Agenda gig (read-only amount).
+  event_id?: number | null;
 }
 
 export interface Task {
@@ -254,6 +332,8 @@ export interface ViVenueRow {
   crm_contact_id?: number | null;
   contacted: boolean;
   played: boolean;
+  /** City is one of the targeted artist's audience cities (sorted first server-side). */
+  is_target: boolean;
 }
 
 export interface CountryCount {
@@ -272,6 +352,8 @@ export interface ViVenueStats {
   contacted: number;
   played: number;
   countries: number;
+  promotable: number;
+  stale_contacts: number;
   top_countries: CountryCount[];
 }
 
@@ -315,6 +397,8 @@ export interface ViVenueFiche {
   nb_events_periode: number;
   notes?: string | null;
   enriched_at?: string | null;
+  instagram?: string | null;
+  excluded: boolean;
   contacts: ViContactRow[];
   evidence: ViEvidenceRow[];
   promoters: ViPromoterRow[];
@@ -353,6 +437,9 @@ export interface ViRunProgress {
   venues: number;
   evidence: number;
   message?: string | null;
+  /** Stable progress code, translated via `vi_progress.<code>` (see lib/backendMessages). */
+  code?: string | null;
+  args?: Record<string, unknown> | null;
 }
 
 export interface SheetPreview {
@@ -371,12 +458,15 @@ export interface FilePreview {
 export interface ImportResult {
   inserted: number;
   skipped: number;
+  duplicates: number;
 }
 
 export interface SendResult {
   ok: boolean;
   error?: string | null;
   tracked: boolean;
+  /// "suppressed" | "quota" | "bounced" when the guardrails stopped the send.
+  code?: string | null;
 }
 
 export interface BulkProgress {
@@ -393,6 +483,13 @@ export interface BulkResult {
   failed: number;
   skipped: number;
   errors: string[];
+  /// Skipped: on the suppression list.
+  suppressed: string[];
+  /// Hard SMTP rejection during this send (now suppressed).
+  bounced: string[];
+  /// Left unsent: daily cap reached.
+  deferred: number;
+  cap: number;
 }
 
 export interface VisaCountry {
@@ -424,8 +521,18 @@ export interface VisaDossier {
   status: string;
   checklist?: string | null;
   notes?: string | null;
+  event_id?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
+}
+
+export interface EventVisa {
+  event_id: number;
+  country_code?: string | null;
+  country_name?: string | null;
+  dossier_id?: number | null;
+  dossier_status?: string | null;
+  needs_visa: boolean;
 }
 
 export const VISA_STATUSES = [
@@ -441,12 +548,21 @@ export interface DashboardStats {
   by_category: Record<string, number>;
   total_contacts: number;
   emails_sent: number;
+  emails_opened: number;
   budget_min: number;
   budget_max: number;
   budget_actual: number;
+  /// Includes the gig fees (Agenda-linked revenue lines).
   revenue_actual: number;
+  /// Part of revenue_actual from Agenda gigs: never add it on top.
+  gig_fees: number;
+  /// Meta Ads spend (Audience), not part of budget_actual.
+  ad_spend: number;
+  /// revenue_actual - budget_actual - ad_spend.
+  net: number;
   tasks_done: number;
   tasks_total: number;
+  tasks_overdue: number;
 }
 
 // ---- Pulse (Spotify snapshots + Meta spend) ----
@@ -491,6 +607,7 @@ export interface TrackedTrack {
   release_date?: string | null;
   is_active: boolean;
   latest_popularity?: number | null;
+  artist_id?: number | null;
 }
 
 export interface WatchRow {
@@ -521,6 +638,12 @@ export interface CuratorRow {
   official: boolean;
   enriched: boolean;
   in_pipeline: boolean;
+  /** playlist | label | channel */
+  kind: string;
+  rejected: boolean;
+  /** contacts.status of the promoted contact */
+  contact_status?: string | null;
+  emailed: boolean;
 }
 
 export interface RadarStats {
@@ -528,4 +651,10 @@ export interface RadarStats {
   with_email: number;
   official: number;
   in_pipeline: number;
+  addressable: number;
+  stale_contacts: number;
+  rejected: number;
+  playlists: number;
+  labels: number;
+  channels: number;
 }

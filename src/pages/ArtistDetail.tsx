@@ -18,22 +18,28 @@ import {
   Instagram,
   ExternalLink,
   ImagePlus,
+  Plane,
 } from "lucide-react";
 import {
   deleteArtist,
   deleteKpi,
   getArtist,
   imageToDataUrl,
+  countContacts,
+  listCampaigns,
   listContacts,
+  listDossiers,
+  listEvents,
   listKpis,
   saveArtist,
   saveKpi,
 } from "../lib/api";
 import type { Artist, Kpi } from "../lib/types";
 import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
-import { Loader, ErrorState } from "../components/Layout";
+import { Loader, ErrorState, EmptyState } from "../components/Layout";
 import { ComposeModal } from "../components/ComposeModal";
 import { StatusBadge } from "../components/StatusBadge";
+import { formatDate, today } from "../lib/format";
 
 // `label` is a brand name, or an i18n key when `i18n` is set.
 const LINK_FIELDS: { key: keyof Artist; label: string; i18n?: boolean }[] = [
@@ -90,11 +96,45 @@ export function ArtistDetail() {
     queryFn: () => listKpis(artistId),
     enabled: !!artistId,
   });
+  // The whole pipeline belongs to the artist in a one-artist roster: show the
+  // most advanced bookings first and link to the filtered Pipeline for the rest.
   const { data: bookings = [] } = useQuery({
     queryKey: ["contacts", "artist", artistId],
-    queryFn: () => listContacts({ artist_id: artistId }),
+    queryFn: async () => {
+      const [confirmed, discussing, recent] = await Promise.all([
+        listContacts({ artist_id: artistId, status: "confirmed", sort: "name", limit: 10 }),
+        listContacts({ artist_id: artistId, status: "in_discussion", sort: "name", limit: 10 }),
+        listContacts({ artist_id: artistId, sort: "recent", limit: 10 }),
+      ]);
+      const seen = new Set<number>();
+      return [...confirmed, ...discussing, ...recent]
+        .filter((c) => c.id != null && !seen.has(c.id) && !!seen.add(c.id))
+        .slice(0, 12);
+    },
     enabled: !!artistId,
   });
+  const { data: bookingTotal = 0 } = useQuery({
+    queryKey: ["contacts", "count", "artist", artistId],
+    queryFn: () => countContacts({ artist_id: artistId }),
+    enabled: !!artistId,
+  });
+  // Visa dossiers still in progress for this artist.
+  const { data: allDossiers = [] } = useQuery({ queryKey: ["dossiers"], queryFn: listDossiers });
+  const openDossiers = allDossiers.filter(
+    (d) => d.artist_id === artistId && d.status !== "approved" && d.status !== "rejected"
+  );
+  // Upcoming dates (Agenda events carry artist_id) and campaigns run for this artist.
+  const day = today();
+  const { data: upcoming = [] } = useQuery({
+    queryKey: ["events", "artist", artistId, day],
+    queryFn: () => listEvents({ from: day, artist_id: artistId }),
+    enabled: !!artistId,
+  });
+  const { data: allCampaigns = [] } = useQuery({
+    queryKey: ["campaigns"],
+    queryFn: listCampaigns,
+  });
+  const campaigns = allCampaigns.filter((c) => c.artist_id === artistId);
 
   const [editing, setEditing] = useState(false);
   const [composing, setComposing] = useState(false);
@@ -103,8 +143,10 @@ export function ArtistDetail() {
   const delArtist = useMutation({
     mutationFn: () => deleteArtist(artistId),
     onSuccess: () => {
-      // Events and KPIs cascade-delete; linked contacts lose their artist.
-      for (const key of ["artists", "events", "kpis", "contacts", "dashboard"])
+      // Events and KPIs cascade-delete; linked contacts, campaigns and visa
+      // dossiers lose their artist (ON DELETE SET NULL).
+      qc.removeQueries({ queryKey: ["artist", artistId] });
+      for (const key of ["artists", "events", "kpis", "contacts", "campaigns", "dossiers", "dashboard"])
         qc.invalidateQueries({ queryKey: [key] });
       navigate("/artists");
     },
@@ -117,14 +159,30 @@ export function ArtistDetail() {
 
   if (artistLoading) return <div className="p-8"><Loader /></div>;
   if (artistError) return <div className="p-8"><ErrorState onRetry={() => refetchArtist()} /></div>;
-  if (!artist) return null;
+  if (!artist)
+    return (
+      <div className="p-8">
+        <div className="card">
+          <EmptyState
+            icon={Music2}
+            title={t("artists.not_found")}
+            action={
+              <button className="btn-outline" onClick={() => navigate("/artists")}>
+                <ArrowLeft size={15} />
+                {t("artists.title")}
+              </button>
+            }
+          />
+        </div>
+      </div>
+    );
 
   const links = LINK_FIELDS.filter((l) => artist[l.key]);
   const bookingContact = artist.booking_email || artist.email;
 
   return (
     <div>
-      <div className="flex items-center gap-3 px-8 pb-2 pt-3">
+      <div className="flex items-center gap-3 px-page pb-2 pt-3">
         <button className="btn-ghost px-2 py-1.5" onClick={() => navigate("/artists")}>
           <ArrowLeft size={18} />
         </button>
@@ -147,7 +205,7 @@ export function ArtistDetail() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 px-8 pb-10 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 px-page pb-10 lg:grid-cols-3">
         {/* EPK — printable one-pager */}
         <div className="lg:col-span-2">
           <div id="epk-print" className="epk card overflow-hidden">
@@ -261,10 +319,10 @@ export function ArtistDetail() {
                   </p>
                 </Section>
               )}
-              {(bookingContact || artist.fee_range) && (
+              {(bookingContact || artist.phone || artist.fee_range) && (
                 <Section title={t("artists.contact_booking")}>
                   <div className="text-sm">
-                    {artist.booking_email && <div>{artist.booking_email}</div>}
+                    {bookingContact && <div>{bookingContact}</div>}
                     {artist.phone && <div className="text-fg-subtle">{artist.phone}</div>}
                     {artist.fee_range && (
                       <div className="mt-1 text-fg-subtle">
@@ -295,7 +353,12 @@ export function ArtistDetail() {
               </button>
             </div>
             {kpis.length === 0 ? (
-              <p className="text-xs text-fg-subtle">{t("common.empty")}</p>
+              <p className="text-xs text-fg-subtle">
+                {t("artists.no_kpis")}{" "}
+                <button className="text-accent hover:underline" onClick={() => navigate("/?tab=goals")}>
+                  {t("artists.see_goals")}
+                </button>
+              </p>
             ) : (
               <div className="space-y-2">
                 {kpis.map((k) => (
@@ -340,9 +403,120 @@ export function ArtistDetail() {
           </div>
 
           <div className="card p-5">
-            <h3 className="mb-3 text-sm font-semibold">{t("artists.bookings")}</h3>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">{t("artists.upcoming")}</h3>
+              <button className="btn-ghost px-2 py-1" onClick={() => navigate("/agenda")}>
+                <ExternalLink size={13} />
+              </button>
+            </div>
+            {upcoming.length === 0 ? (
+              <p className="text-xs text-fg-subtle">{t("artists.no_upcoming")}</p>
+            ) : (
+              <div className="space-y-2">
+                {upcoming.slice(0, 8).map((ev) => (
+                  <div
+                    key={ev.id}
+                    className="flex items-center justify-between rounded-lg border border-border px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium">{ev.title}</div>
+                      <div className="truncate text-[11px] text-fg-subtle">
+                        {[formatDate(ev.date), ev.venue, ev.city].filter(Boolean).join(" · ")}
+                      </div>
+                    </div>
+                    <span className="shrink-0 text-[11px] text-fg-subtle">
+                      {t(`agenda.st_${ev.status}`, ev.status)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card p-5">
+            <h3 className="mb-3 text-sm font-semibold">{t("artists.campaigns")}</h3>
+            {campaigns.length === 0 ? (
+              <p className="text-xs text-fg-subtle">{t("artists.no_campaigns")}</p>
+            ) : (
+              <div className="space-y-2">
+                {campaigns.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => navigate("/campaigns")}
+                    className="flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left hover:bg-muted"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium">{c.name}</div>
+                      {c.target_date && (
+                        <div className="text-[11px] text-fg-subtle">{formatDate(c.target_date)}</div>
+                      )}
+                    </div>
+                    <span className="shrink-0 text-[11px] text-fg-subtle tabular">
+                      {t("artists.campaign_stats", { sent: c.sent_count, opened: c.opened_count })}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">{t("artists.visa_dossiers")}</h3>
+              <button className="btn-ghost px-2 py-1" onClick={() => navigate("/visa")}>
+                <ExternalLink size={13} />
+              </button>
+            </div>
+            {openDossiers.length === 0 ? (
+              <p className="text-xs text-fg-subtle">{t("artists.no_visa_dossiers")}</p>
+            ) : (
+              <div className="space-y-2">
+                {openDossiers.map((d) => (
+                  <button
+                    key={d.id}
+                    onClick={() => navigate(`/visa?dossier=${d.id}`)}
+                    className="flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left hover:bg-muted"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 truncate text-xs font-medium">
+                        <Plane size={12} className="shrink-0 text-fg-subtle" />
+                        {d.title}
+                      </div>
+                      <div className="truncate text-[11px] text-fg-subtle">
+                        {[d.country_name, d.event_date && formatDate(d.event_date)]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </div>
+                    </div>
+                    <span className="shrink-0 text-[11px] text-fg-subtle">
+                      {t(`visa.st_${d.status}`, d.status)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">
+                {t("artists.bookings")}
+                {bookingTotal > 0 && (
+                  <span className="ml-1.5 font-normal text-fg-subtle tabular">({bookingTotal})</span>
+                )}
+              </h3>
+              {bookingTotal > 0 && (
+                <button
+                  className="btn-ghost px-2 py-1 text-xs"
+                  onClick={() => navigate(`/contacts?artist=${artistId}`)}
+                >
+                  {t("artists.view_pipeline")}
+                  <ExternalLink size={13} />
+                </button>
+              )}
+            </div>
             {bookings.length === 0 ? (
-              <p className="text-xs text-fg-subtle">{t("common.empty")}</p>
+              <p className="text-xs text-fg-subtle">{t("artists.no_bookings")}</p>
             ) : (
               <div className="space-y-2">
                 {bookings.map((c) => (
@@ -353,7 +527,7 @@ export function ArtistDetail() {
                     <div className="min-w-0">
                       <div className="truncate text-xs font-medium">{c.name}</div>
                       {c.date && (
-                        <div className="text-[11px] text-fg-subtle">{c.date}</div>
+                        <div className="text-[11px] text-fg-subtle">{formatDate(c.date)}</div>
                       )}
                     </div>
                     <StatusBadge status={c.status} />

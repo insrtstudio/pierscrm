@@ -31,6 +31,11 @@ pub struct Contact {
     pub website: Option<String>,
     pub tags: Option<String>,
     #[serde(default)]
+    pub organisation_id: Option<i64>,
+    /// Read-only, joined from `organisations` by the list/get queries.
+    #[serde(default)]
+    pub organisation_name: Option<String>,
+    #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
@@ -69,6 +74,9 @@ impl Contact {
             notes: row.get("notes")?,
             website: row.get("website")?,
             tags: row.get("tags")?,
+            // Tolerant: queries that do not select these columns still map.
+            organisation_id: row.get("organisation_id").ok().flatten(),
+            organisation_name: row.get("organisation_name").ok().flatten(),
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
         })
@@ -101,6 +109,12 @@ pub struct EmailLog {
     #[serde(default)]
     pub open_count: i64,
     pub sent_at: Option<String>,
+    /// Message-ID header set at send time (matches IMAP replies).
+    #[serde(default)]
+    pub message_id: Option<String>,
+    /// First detected reply to this email.
+    #[serde(default)]
+    pub replied_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -124,6 +138,17 @@ pub struct Campaign {
     pub sent_count: i64,
     #[serde(default)]
     pub opened_count: i64,
+    /// Distinct contacts mailed in the campaign.
+    #[serde(default)]
+    pub reached_count: i64,
+    /// Of those, how many moved to in discussion / confirmed / declined (a reply).
+    #[serde(default)]
+    pub replied_count: i64,
+    /// Audience (campaign_contacts): recipients still to mail, and all of them.
+    #[serde(default)]
+    pub planned_count: i64,
+    #[serde(default)]
+    pub audience_count: i64,
 }
 
 fn default_campaign_status() -> String {
@@ -145,6 +170,10 @@ impl Campaign {
             updated_at: row.get("updated_at")?,
             sent_count: row.get("sent_count").unwrap_or(0),
             opened_count: row.get("opened_count").unwrap_or(0),
+            reached_count: row.get("reached_count").unwrap_or(0),
+            replied_count: row.get("replied_count").unwrap_or(0),
+            planned_count: row.get("planned_count").unwrap_or(0),
+            audience_count: row.get("audience_count").unwrap_or(0),
         })
     }
 }
@@ -212,6 +241,9 @@ pub struct BudgetItem {
     pub notes: Option<String>,
     #[serde(default)]
     pub sort: i64,
+    /// Set on the revenue line generated for a confirmed Agenda gig (read-only).
+    #[serde(default)]
+    pub event_id: Option<i64>,
 }
 
 fn default_kind() -> String {
@@ -369,6 +401,9 @@ pub struct VisaDossier {
     /// JSON array of { label, done }
     pub checklist: Option<String>,
     pub notes: Option<String>,
+    /// Agenda gig this dossier is for.
+    #[serde(default)]
+    pub event_id: Option<i64>,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
@@ -393,6 +428,7 @@ impl VisaDossier {
             status: row.get("status")?,
             checklist: row.get("checklist")?,
             notes: row.get("notes")?,
+            event_id: row.get("event_id").ok().flatten(),
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
         })

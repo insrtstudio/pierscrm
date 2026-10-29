@@ -6,6 +6,7 @@ import clsx from "clsx";
 import { deleteTask, listTasks, saveTask } from "../lib/api";
 import type { Task } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
+import { daysUntil, formatDate } from "../lib/format";
 import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 
 export function Timeline() {
@@ -58,7 +59,7 @@ export function Timeline() {
           </button>
         }
       />
-      <div className="space-y-6 px-8 pb-10 pt-6">
+      <div className="space-y-6 px-page pb-10 pt-6">
         {groups.length === 0 && (
           <div className="card">
             <EmptyState icon={ListChecks} title={t("common.empty")} />
@@ -95,7 +96,17 @@ export function Timeline() {
                     </div>
                     {(task.owner || task.due_date) && (
                       <div className="text-xs text-fg-subtle">
-                        {[task.owner, task.due_date].filter(Boolean).join(" · ")}
+                        {task.owner}
+                        {task.owner && task.due_date && " · "}
+                        {task.due_date && (
+                          <span
+                            className={clsx(
+                              !task.done && (daysUntil(task.due_date) ?? 1) < 0 && "font-semibold text-danger"
+                            )}
+                          >
+                            {formatDate(task.due_date)}
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
@@ -181,9 +192,10 @@ function TaskModal({
           </Field>
           <Field label={t("timeline.due")}>
             <input
+              type="date"
               className="input"
               value={form.due_date ?? ""}
-              onChange={(e) => setForm({ ...form, due_date: e.target.value })}
+              onChange={(e) => setForm({ ...form, due_date: e.target.value || null })}
             />
           </Field>
         </div>

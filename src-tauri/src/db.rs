@@ -597,8 +597,73 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
         "CREATE INDEX IF NOT EXISTS idx_vi_evidence_va   ON vi_evidence(venue_id, artiste)",
         // Same shape of correlated EXISTS on the Radar page.
         "CREATE INDEX IF NOT EXISTS idx_radar_contacts_ct ON radar_contacts(curator_id, type)",
+        // Radar's "address shared by several curators" check looks addresses up by value.
+        "CREATE INDEX IF NOT EXISTS idx_radar_contacts_val ON radar_contacts(valeur, curator_id)",
         // Contacts list filters on these two before ordering.
         "CREATE INDEX IF NOT EXISTS idx_contacts_cat_status ON contacts(category, status)",
+    ] {
+        let _ = conn.execute(stmt, []);
+    }
+
+    // ---- Outbox: sending guardrails, reply detection, campaign audience ----
+    //
+    // `message_id` is the Message-ID header set at send time, which is what an
+    // IMAP reply's In-Reply-To / References point back to. `replied_at` is the
+    // first detected reply to that email. `suppressions` holds addresses that
+    // must never be mailed again (hard bounce, unsubscribe, refusal, by hand),
+    // stored trimmed + lowercased so the UNIQUE constraint dedupes them.
+    // `email_replies` keeps one row per inbound reply (deduped on its own
+    // Message-ID, so re-scanning the inbox is harmless). `campaign_contacts` is a
+    // campaign's planned audience, with the state of each recipient. All of it is
+    // additive and idempotent: safe to run on every launch.
+    for stmt in [
+        "ALTER TABLE emails ADD COLUMN message_id TEXT",
+        "ALTER TABLE emails ADD COLUMN replied_at TEXT",
+        "CREATE TABLE IF NOT EXISTS suppressions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            address    TEXT NOT NULL UNIQUE,
+            reason     TEXT NOT NULL DEFAULT 'manual',
+            note       TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+        "CREATE TABLE IF NOT EXISTS email_replies (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_id    INTEGER REFERENCES emails(id) ON DELETE SET NULL,
+            contact_id  INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+            from_addr   TEXT NOT NULL,
+            subject     TEXT,
+            message_id  TEXT UNIQUE,
+            kind        TEXT NOT NULL DEFAULT 'reply',
+            matched_by  TEXT,
+            received_at TEXT,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+        "CREATE TABLE IF NOT EXISTS campaign_contacts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+            contact_id  INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+            state       TEXT NOT NULL DEFAULT 'planned',
+            added_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE (campaign_id, contact_id)
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id)",
+        "CREATE INDEX IF NOT EXISTS idx_emails_sent_at    ON emails(sent_at)",
+        // Address matching (follow-ups, replies, quota) compares normalised
+        // addresses on both sides.
+        "CREATE INDEX IF NOT EXISTS idx_emails_to_lc      ON emails(lower(trim(to_addr)))",
+        "CREATE INDEX IF NOT EXISTS idx_contacts_email_lc ON contacts(lower(trim(email)))",
+        "CREATE INDEX IF NOT EXISTS idx_email_replies_email ON email_replies(email_id)",
+        "CREATE INDEX IF NOT EXISTS idx_campaign_contacts_contact ON campaign_contacts(contact_id)",
+        // Campaigns sent before the audience table existed: their recipients
+        // become 'sent' rows, so the card counts are right from day one.
+        "INSERT OR IGNORE INTO campaign_contacts (campaign_id, contact_id, state, added_at)
+         SELECT e.campaign_id, e.contact_id, 'sent', MIN(e.sent_at)
+         FROM emails e
+         JOIN campaigns c ON c.id = e.campaign_id
+         JOIN contacts k ON k.id = e.contact_id
+         WHERE e.status = 'sent'
+         GROUP BY e.campaign_id, e.contact_id",
     ] {
         let _ = conn.execute(stmt, []);
     }
@@ -653,6 +718,36 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
             );
         }
     }
+
+    // The initial planning sheet was ingested with its header row as data:
+    // a budget line "Item / Notes", a KPI "Goal / Core KPI" and a task
+    // "Period / Actions" showed as real entries. Exact-match only, so nothing a
+    // user typed can be caught.
+    let _ = conn.execute(
+        "DELETE FROM budget_items WHERE item='Item' AND notes='Notes'
+           AND COALESCE(min_cost,0)=0 AND COALESCE(max_cost,0)=0 AND actual IS NULL",
+        [],
+    );
+    let _ = conn.execute(
+        "DELETE FROM kpis WHERE goal='Goal' AND kpi='Core KPI'
+           AND target='Realistic target' AND actual='Actual'",
+        [],
+    );
+    let _ = conn.execute(
+        "DELETE FROM tasks WHERE period='Period' AND title='Actions' AND owner='Owner'",
+        [],
+    );
+
+    // ---- Module links (audit 2026-10-29 items 5, 7, 9, 10, 15) ----
+    // Organisations, contacts -> artist, budget lines -> events, visa dossiers
+    // -> events, free-text dates -> ISO. Idempotent, see crm_links.rs.
+    crate::crm_links::migrate(conn);
+
+    // ---- Venue Intelligence / Radar data quality (audit 2026-10-29 items 1, 12, 14, 18) ----
+    // vi_venue_events (idempotent event counts), vi_venues.ville_norm (accent-
+    // folded city for artist targeting), YouTube curators as kind 'channel',
+    // one-shot cleanup of scraping-artefact addresses. See commands/vi.rs.
+    crate::commands::vi::migrate_quality(conn);
 
     Ok(())
 }

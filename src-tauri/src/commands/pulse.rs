@@ -1,7 +1,8 @@
 //! Pulse module: daily Spotify snapshots (artist/track popularity, playlist
 //! followers) + read-only Meta Ads daily spend, so campaign impact is visible
 //! as an overlay. Desktop adaptation of the "intellijend" concept: instead of
-//! server crons, a snapshot runs at app launch (if none exists for today, UTC)
+//! server crons, a snapshot runs at app launch (if none exists for today, local
+//! time)
 //! plus a manual button. All upserts are idempotent (ON CONFLICT DO UPDATE).
 
 use crate::commands::meta;
@@ -12,12 +13,33 @@ use rusqlite::params;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+/// The id snapshots are stored under. Artist profiles hold whatever was pasted
+/// (here a full `open.spotify.com/intl-fr/artist/...?si=...` URL); the snapshot
+/// writer reduced it to the bare id but the readers compared the raw string, so
+/// the KPIs and the chart could never find a single row.
+fn artist_key(raw: &str) -> String {
+    parse_spotify_id(raw).map(|(_, id)| id).unwrap_or_else(|| raw.trim().to_string())
+}
+
+/// Today in the user's time zone. A UTC date filed an evening snapshot in Paris
+/// under the next day (and skipped the launch snapshot the morning after).
+fn local_today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+/// Spotify half configured (client id + secret).
+fn spotify_configured(conn: &rusqlite::Connection) -> bool {
+    setting(conn, "spotify_client_id").is_some() && setting(conn, "spotify_client_secret").is_some()
+}
+
+/// Meta half configured (token + ad account).
+fn meta_configured(conn: &rusqlite::Connection) -> bool {
+    setting(conn, "meta_access_token").is_some() && setting(conn, "meta_ad_account_id").is_some()
+}
+
 fn setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
-    conn.query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| {
-        r.get::<_, String>(0)
-    })
-    .ok()
-    .filter(|s| !s.trim().is_empty())
+    // Routed through the Keychain for secret keys (see crate::secrets).
+    crate::secrets::read_setting(conn, key).filter(|s| !s.trim().is_empty())
 }
 
 // ---------------- Snapshot run ----------------
@@ -34,7 +56,8 @@ pub struct PulseReport {
 
 async fn run_snapshot(pool: &DbPool) -> PulseReport {
     let mut report = PulseReport { ran: true, ..Default::default() };
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = local_today();
+    let meta_ready = pool.get().map(|c| meta_configured(&c)).unwrap_or(false);
 
     // ---- Spotify half ----
     let creds = {
@@ -57,9 +80,15 @@ async fn run_snapshot(pool: &DbPool) -> PulseReport {
             })
             .flatten()
             .unwrap_or_default();
+        // Two profiles pasting the same artist in different forms (URL vs id)
+        // are one artist: fetch it once.
+        let mut seen = std::collections::HashSet::new();
         for raw in &artist_ids {
             // Accept a pasted artist URL or URI as well as the bare id.
-            let aid: String = parse_spotify_id(raw).map(|(_, id)| id).unwrap_or_else(|| raw.trim().into());
+            let aid: String = artist_key(raw);
+            if !seen.insert(aid.clone()) {
+                continue;
+            }
             let aid = &aid;
             match sp.artist(aid).await {
                 Ok(a) => {
@@ -166,7 +195,8 @@ async fn run_snapshot(pool: &DbPool) -> PulseReport {
             }
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
-    } else {
+    } else if !meta_ready {
+        // A Meta-only setup is valid: only complain when nothing is configured.
         report
             .errors
             .push("Spotify non configuré (client id/secret dans Réglages).".into());
@@ -208,7 +238,11 @@ async fn run_snapshot(pool: &DbPool) -> PulseReport {
         }
     }
 
-    if let Ok(conn) = pool.get() {
+    // Only a snapshot that stored something counts: recording the date of a run
+    // that failed outright (no Spotify keys) showed "last snapshot" as if data
+    // existed and stopped the launch snapshot from retrying that day.
+    let stored = report.artists + report.tracks + report.playlists + report.spend_rows > 0;
+    if let (true, Ok(conn)) = (stored, pool.get()) {
         let _ = conn.execute(
             "INSERT INTO settings (key, value) VALUES ('pulse_last_snapshot', ?1)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -224,14 +258,15 @@ pub async fn pulse_snapshot(state: State<'_, AppState>) -> Result<PulseReport, S
     Ok(run_snapshot(&state.pool).await)
 }
 
-/// Auto snapshot at app launch: runs only if none was taken today (UTC).
-/// Spawned from setup; emits `pulse:snapshot-done` when it actually ran.
+/// Auto snapshot at app launch: runs only if none was taken today (local time).
+/// Runs for Spotify, Meta, or both. Spawned from setup; emits
+/// `pulse:snapshot-done` when it actually ran.
 pub fn auto_snapshot_on_launch(pool: DbPool, app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let today = local_today();
         let (configured, last) = match pool.get() {
             Ok(c) => (
-                setting(&c, "spotify_client_id").is_some(),
+                spotify_configured(&c) || meta_configured(&c),
                 setting(&c, "pulse_last_snapshot"),
             ),
             Err(_) => (false, None),
@@ -263,7 +298,11 @@ pub struct PulseKpis {
 }
 
 #[tauri::command(async)]
-pub fn pulse_kpis(state: State<'_, AppState>, artist_spotify_id: Option<String>) -> Result<PulseKpis, String> {
+pub fn pulse_kpis(
+    state: State<'_, AppState>,
+    artist_spotify_id: Option<String>,
+    artist_id: Option<i64>,
+) -> Result<PulseKpis, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let aid = artist_spotify_id
         .filter(|s| !s.trim().is_empty())
@@ -276,6 +315,7 @@ pub fn pulse_kpis(state: State<'_, AppState>, artist_spotify_id: Option<String>)
             .ok()
         })
         .unwrap_or_default();
+    let aid = artist_key(&aid);
 
     let latest = |sql: &str, p: &[&dyn rusqlite::ToSql]| -> Option<i64> {
         conn.query_row(sql, p, |r| r.get::<_, Option<i64>>(0)).ok().flatten()
@@ -285,7 +325,7 @@ pub fn pulse_kpis(state: State<'_, AppState>, artist_spotify_id: Option<String>)
         &[&aid],
     );
     let artist_pop_7 = latest(
-        "SELECT popularity FROM pulse_artist_snapshots WHERE artist_spotify_id=?1 AND snapshot_date <= date('now','-7 day') ORDER BY snapshot_date DESC LIMIT 1",
+        "SELECT popularity FROM pulse_artist_snapshots WHERE artist_spotify_id=?1 AND snapshot_date <= date('now','localtime','-7 day') ORDER BY snapshot_date DESC LIMIT 1",
         &[&aid],
     );
     let artist_followers = latest(
@@ -293,21 +333,27 @@ pub fn pulse_kpis(state: State<'_, AppState>, artist_spotify_id: Option<String>)
         &[&aid],
     );
 
-    // Best track by latest popularity.
+    // Best active tracked track, each judged on its own latest snapshot. Taking
+    // only the globally latest date let an archived track win, and dropped every
+    // track that happened to be missing from that one day's snapshot.
     let best: Option<(String, String, i64)> = conn
         .query_row(
-            "SELECT s.track_spotify_id, COALESCE(s.track_name, s.track_spotify_id), s.popularity
-             FROM pulse_track_snapshots s
-             WHERE s.snapshot_date = (SELECT MAX(snapshot_date) FROM pulse_track_snapshots)
+            "SELECT s.track_spotify_id, COALESCE(t.name, s.track_name, s.track_spotify_id), s.popularity
+             FROM pulse_tracked_tracks t
+             JOIN pulse_track_snapshots s ON s.track_spotify_id=t.track_spotify_id
+             WHERE t.is_active=1 AND s.popularity IS NOT NULL
+               AND (?1 IS NULL OR t.artist_id IS NULL OR t.artist_id=?1)
+               AND s.snapshot_date = (SELECT MAX(snapshot_date) FROM pulse_track_snapshots z
+                                      WHERE z.track_spotify_id=t.track_spotify_id)
              ORDER BY s.popularity DESC LIMIT 1",
-            [],
+            params![artist_id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .ok();
     let (best_track_name, best_track_popularity, best_track_delta7) = match best {
         Some((tid, name, pop)) => {
             let old = latest(
-                "SELECT popularity FROM pulse_track_snapshots WHERE track_spotify_id=?1 AND snapshot_date <= date('now','-7 day') ORDER BY snapshot_date DESC LIMIT 1",
+                "SELECT popularity FROM pulse_track_snapshots WHERE track_spotify_id=?1 AND snapshot_date <= date('now','localtime','-7 day') ORDER BY snapshot_date DESC LIMIT 1",
                 &[&tid],
             );
             (Some(name), Some(pop), old.map(|o| pop - o))
@@ -317,7 +363,7 @@ pub fn pulse_kpis(state: State<'_, AppState>, artist_spotify_id: Option<String>)
 
     let spend_30d: f64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(spend),0) FROM pulse_meta_spend WHERE spend_date >= date('now','-30 day')",
+            "SELECT COALESCE(SUM(spend),0) FROM pulse_meta_spend WHERE spend_date >= date('now','localtime','-30 day')",
             [],
             |r| r.get(0),
         )
@@ -325,7 +371,7 @@ pub fn pulse_kpis(state: State<'_, AppState>, artist_spotify_id: Option<String>)
     let cpr = |days: i64| -> Option<f64> {
         conn.query_row(
             &format!(
-                "SELECT SUM(spend), SUM(results) FROM pulse_meta_spend WHERE spend_date >= date('now','-{} day') AND results IS NOT NULL",
+                "SELECT SUM(spend), SUM(results) FROM pulse_meta_spend WHERE spend_date >= date('now','localtime','-{} day') AND results IS NOT NULL",
                 days
             ),
             [],
@@ -375,17 +421,18 @@ pub fn pulse_series(
     artist_spotify_id: Option<String>,
     track_spotify_id: Option<String>,
     days: Option<i64>,
+    artist_id: Option<i64>,
 ) -> Result<PulseSeries, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let days = days.unwrap_or(90).clamp(7, 365);
-    let aid = artist_spotify_id.unwrap_or_default();
+    let aid = artist_key(&artist_spotify_id.unwrap_or_default());
     let tid = track_spotify_id.unwrap_or_default();
 
     let mut points: Vec<PulsePoint> = Vec::new();
     let mut stmt = conn
         .prepare(&format!(
             "WITH RECURSIVE dates(d) AS (
-                SELECT date('now','-{} day') UNION ALL SELECT date(d,'+1 day') FROM dates WHERE d < date('now')
+                SELECT date('now','localtime','-{} day') UNION ALL SELECT date(d,'+1 day') FROM dates WHERE d < date('now','localtime')
              )
              SELECT d,
                 (SELECT popularity FROM pulse_artist_snapshots a WHERE a.artist_spotify_id=?1 AND a.snapshot_date=d),
@@ -413,11 +460,12 @@ pub fn pulse_series(
     let mut stmt = conn
         .prepare(
             "SELECT release_date, COALESCE(name, track_spotify_id) FROM pulse_tracked_tracks
-             WHERE release_date IS NOT NULL AND release_date >= date('now', ?1)",
+             WHERE release_date IS NOT NULL AND release_date >= date('now', 'localtime', ?1)
+               AND (?2 IS NULL OR artist_id IS NULL OR artist_id=?2)",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![format!("-{} day", days)], |r| {
+        .query_map(params![format!("-{} day", days), artist_id], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })
         .map_err(|e| e.to_string())?;
@@ -438,20 +486,26 @@ pub struct TrackedTrack {
     pub release_date: Option<String>,
     pub is_active: bool,
     pub latest_popularity: Option<i64>,
+    pub artist_id: Option<i64>,
 }
 
 #[tauri::command(async)]
-pub fn pulse_tracked_list(state: State<'_, AppState>) -> Result<Vec<TrackedTrack>, String> {
+/// Tracks of one artist (plus the unassigned ones added before tracks had an
+/// artist), or all of them when `artist_id` is None.
+pub fn pulse_tracked_list(state: State<'_, AppState>, artist_id: Option<i64>) -> Result<Vec<TrackedTrack>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
             "SELECT t.id, t.track_spotify_id, t.name, t.release_date, t.is_active,
-                    (SELECT popularity FROM pulse_track_snapshots s WHERE s.track_spotify_id=t.track_spotify_id ORDER BY snapshot_date DESC LIMIT 1)
-             FROM pulse_tracked_tracks t ORDER BY t.is_active DESC, t.release_date DESC",
+                    (SELECT popularity FROM pulse_track_snapshots s WHERE s.track_spotify_id=t.track_spotify_id ORDER BY snapshot_date DESC LIMIT 1),
+                    t.artist_id
+             FROM pulse_tracked_tracks t
+             WHERE (?1 IS NULL OR t.artist_id IS NULL OR t.artist_id=?1)
+             ORDER BY t.is_active DESC, t.release_date DESC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], |r| {
+        .query_map(params![artist_id], |r| {
             Ok(TrackedTrack {
                 id: r.get(0)?,
                 track_spotify_id: r.get(1)?,
@@ -459,6 +513,7 @@ pub fn pulse_tracked_list(state: State<'_, AppState>) -> Result<Vec<TrackedTrack
                 release_date: r.get(3)?,
                 is_active: r.get::<_, i64>(4)? != 0,
                 latest_popularity: r.get(5)?,
+                artist_id: r.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -496,7 +551,8 @@ pub async fn pulse_tracked_add(
     conn.execute(
         "INSERT INTO pulse_tracked_tracks (artist_id, track_spotify_id, name, release_date)
          VALUES (?1,?2,?3,?4)
-         ON CONFLICT(track_spotify_id) DO UPDATE SET is_active=1, name=COALESCE(excluded.name, name)",
+         ON CONFLICT(track_spotify_id) DO UPDATE SET is_active=1, name=COALESCE(excluded.name, name),
+            artist_id=COALESCE(excluded.artist_id, artist_id)",
         params![artist_id, id, name, release],
     )
     .map_err(|e| e.to_string())?;
@@ -538,8 +594,8 @@ pub fn pulse_watchlist(state: State<'_, AppState>) -> Result<Vec<WatchRow>, Stri
         .prepare(
             "SELECT w.id, w.playlist_spotify_id, w.name, w.owner_name, w.notes, w.is_active,
                 (SELECT followers FROM pulse_playlist_snapshots s WHERE s.playlist_id=w.id ORDER BY snapshot_date DESC LIMIT 1),
-                (SELECT followers FROM pulse_playlist_snapshots s WHERE s.playlist_id=w.id AND snapshot_date <= date('now','-7 day') ORDER BY snapshot_date DESC LIMIT 1),
-                (SELECT followers FROM pulse_playlist_snapshots s WHERE s.playlist_id=w.id AND snapshot_date <= date('now','-30 day') ORDER BY snapshot_date DESC LIMIT 1),
+                (SELECT followers FROM pulse_playlist_snapshots s WHERE s.playlist_id=w.id AND snapshot_date <= date('now','localtime','-7 day') ORDER BY snapshot_date DESC LIMIT 1),
+                (SELECT followers FROM pulse_playlist_snapshots s WHERE s.playlist_id=w.id AND snapshot_date <= date('now','localtime','-30 day') ORDER BY snapshot_date DESC LIMIT 1),
                 COALESCE((SELECT contains_our_track FROM pulse_playlist_snapshots s WHERE s.playlist_id=w.id ORDER BY snapshot_date DESC LIMIT 1), 0)
              FROM pulse_playlist_watchlist w
              ORDER BY w.is_active DESC, w.created_at DESC",

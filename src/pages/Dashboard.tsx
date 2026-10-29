@@ -6,11 +6,12 @@ import {
   dashboardStats,
   listArtists,
   listCampaigns,
-  listEmails,
   listEvents,
+  listTasks,
 } from "../lib/api";
 import { PageHeader, EmptyState } from "../components/Layout";
-import { euro, parseDay, today as todayDay } from "../lib/format";
+import { AudienceTile } from "../components/AudienceTile";
+import { daysUntil, euro, formatDate, parseDay, today as todayDay } from "../lib/format";
 import { emitIntent } from "../lib/hooks";
 import { STATUS_DOT } from "../lib/constants";
 import { STATUSES, type Status } from "../lib/types";
@@ -22,7 +23,6 @@ export function Dashboard() {
   const { data: stats } = useQuery({ queryKey: ["dashboard"], queryFn: dashboardStats });
   const { data: artists = [] } = useQuery({ queryKey: ["artists"], queryFn: listArtists });
   const { data: campaigns = [] } = useQuery({ queryKey: ["campaigns"], queryFn: listCampaigns });
-  const { data: emails = [] } = useQuery({ queryKey: ["emails"], queryFn: () => listEmails() });
   const today = todayDay();
   const { data: upcomingAll = [] } = useQuery({
     queryKey: ["events", "upcoming", today],
@@ -31,8 +31,10 @@ export function Dashboard() {
   // Cancelled gigs are not "upcoming".
   const upcoming = upcomingAll.filter((e) => e.status !== "cancelled");
 
-  const sent = emails.filter((e) => e.status === "sent").length;
-  const opened = emails.filter((e) => e.opened_at).length;
+  // Counted in SQL: the email log endpoint is capped at 300 rows, so the rate
+  // drifted once more mail went out, and it counted opens on failed sends.
+  const sent = stats?.emails_sent ?? 0;
+  const opened = stats?.emails_opened ?? 0;
   const openRate = sent ? Math.round((opened / sent) * 100) : 0;
   const activeCampaigns = campaigns.filter((c) => c.status === "active").length;
 
@@ -54,7 +56,19 @@ export function Dashboard() {
   };
 
   const months = t("agenda.months").split("_");
-  const net = (stats?.revenue_actual ?? 0) - (stats?.budget_actual ?? 0);
+  // Gig fees are budget revenue lines linked to their event (counted once,
+  // server side); the net also takes the Meta Ads spend into account.
+  const revenue = stats?.revenue_actual ?? 0;
+  const net = stats?.net ?? 0;
+
+  // Tasks: progress, plus the next open ones with a due date.
+  const { data: tasks = [] } = useQuery({ queryKey: ["tasks"], queryFn: listTasks });
+  const tasksTotal = stats?.tasks_total ?? 0;
+  const tasksDone = stats?.tasks_done ?? 0;
+  const nextTasks = tasks
+    .filter((tk) => !tk.done && tk.due_date)
+    .sort((a, b) => (a.due_date! < b.due_date! ? -1 : 1))
+    .slice(0, 4);
 
   const stat = [
     { label: t("dashboard.artists"), value: artists.length },
@@ -117,7 +131,7 @@ export function Dashboard() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px]">
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] 2xl:grid-cols-[1fr_460px]">
         {/* Left: pipeline + upcoming */}
         <div className="border-b border-border p-8 lg:border-b-0 lg:border-r">
           <div className="mb-5 flex items-baseline justify-between">
@@ -200,7 +214,9 @@ export function Dashboard() {
                 {cats.map(([k, v]) => (
                   <div key={k} className="flex items-center gap-2.5 text-sm">
                     <span className="h-2.5 w-2.5" style={{ background: CAT_COLOR[k] ?? "#a9a49b" }} />
-                    <span className="text-fg-subtle">{t(`category.${k}`, k)}</span>
+                    <Link to={`/contacts?category=${k}`} className="text-fg-subtle hover:text-accent">
+                      {t(`category.${k}`, k)}
+                    </Link>
                     <span className="ml-auto font-bold tabular">{v}</span>
                   </div>
                 ))}
@@ -227,11 +243,67 @@ export function Dashboard() {
                 </div>
                 <div>
                   {t("dashboard.revenue")}:{" "}
-                  <span className="font-bold text-fg">{euro(stats?.revenue_actual ?? 0)}</span>
+                  <span className="font-bold text-fg">{euro(revenue)}</span>
                 </div>
+                {(stats?.ad_spend ?? 0) > 0 && (
+                  <div>
+                    {t("budget.ad_spend")}:{" "}
+                    <span className="font-bold text-fg">{euro(stats?.ad_spend ?? 0)}</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
+
+          {/* Tasks */}
+          <div className="mt-8 border-t border-border pt-6">
+            <div className="mb-4 flex items-baseline justify-between">
+              <div className="kicker">{t("dashboard.tasks")}</div>
+              <Link to="/agenda?tab=planning" className="kicker hover:text-accent">
+                {t("dashboard.view_planning")} →
+              </Link>
+            </div>
+            {tasksTotal === 0 ? (
+              <p className="text-sm text-fg-subtle">{t("dashboard.no_tasks")}</p>
+            ) : (
+              <>
+                <div className="flex items-baseline justify-between text-sm">
+                  <span className="font-condensed text-[32px] leading-none tabular">
+                    {tasksDone}
+                    <span className="text-[18px] text-fg-subtle">/{tasksTotal}</span>
+                  </span>
+                  {(stats?.tasks_overdue ?? 0) > 0 && (
+                    <span className="eyebrow text-[10.5px] text-danger">
+                      {t("dashboard.tasks_overdue", { count: stats?.tasks_overdue ?? 0 })}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-2 h-2 bg-muted">
+                  <div
+                    className="h-full bg-accent"
+                    style={{ width: `${(tasksDone / Math.max(1, tasksTotal)) * 100}%` }}
+                  />
+                </div>
+                {nextTasks.length > 0 && (
+                  <ul className="mt-3 space-y-1.5 text-xs">
+                    {nextTasks.map((tk) => (
+                      <li key={tk.id} className="flex items-baseline gap-2">
+                        <span
+                          className={`shrink-0 tabular ${
+                            (daysUntil(tk.due_date) ?? 1) < 0 ? "text-danger" : "text-fg-subtle"
+                          }`}
+                        >
+                          {formatDate(tk.due_date)}
+                        </span>
+                        <span className="truncate">{tk.title.split("\n")[0]}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+          </div>
+          <AudienceTile />
         </div>
       </div>
     </div>
@@ -252,7 +324,12 @@ function PipelineRow({
   const color = STATUS_DOT[statusKey];
   return (
     <>
-      <div className="truncate eyebrow text-[10.5px]">{label}</div>
+      <Link
+        to={`/contacts?status=${statusKey}`}
+        className="truncate eyebrow text-[10.5px] hover:text-accent"
+      >
+        {label}
+      </Link>
       <div className="h-2.5 bg-muted">
         <div
           className="h-full"

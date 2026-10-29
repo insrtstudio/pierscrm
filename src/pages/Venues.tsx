@@ -23,7 +23,6 @@ import {
   Mail,
   Phone,
   Globe,
-  X,
   Copy,
   CalendarDays,
   Users,
@@ -33,6 +32,11 @@ import {
   CheckCheck,
   Disc3,
   UserPlus,
+  ShieldCheck,
+  Ban,
+  RotateCcw,
+  Instagram,
+  Target,
 } from "lucide-react";
 import clsx from "clsx";
 import {
@@ -41,6 +45,8 @@ import {
   viListRuns,
   viListVenues,
   viVenueStats,
+  viCountVenues,
+  viRepairContacts,
   viResolveAllAreas,
   viResolveArea,
   viResumeRun,
@@ -54,8 +60,12 @@ import {
   viVenueDetail,
   viPromoteVenue,
   viPromoteVenuesBulk,
+  viExcludeVenue,
+  viRestoreVenue,
+  viExcludeEmail,
   listArtists,
 } from "../lib/api";
+import { backendError, progressText, translateCode } from "../lib/backendMessages";
 import type {
   ViArea,
   ViReferenceArtist,
@@ -65,7 +75,7 @@ import type {
   ViVenueFiche,
 } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
-import { Field, useToast, useConfirm } from "../components/ui";
+import { Field, Modal, useToast, useConfirm } from "../components/ui";
 import { useDebounced } from "../lib/hooks";
 
 type Tab = "venues" | "runs" | "areas" | "artists";
@@ -117,7 +127,9 @@ function VenuesTab() {
   const { t } = useTranslation();
   const toast = useToast();
   const qc = useQueryClient();
-  const [statut, setStatut] = useState("qualifie");
+  // Default to every venue still in play: "qualified" alone hid all the venues
+  // already validated, i.e. every one with an email.
+  const [statut, setStatut] = useState("actif");
   const [pays, setPays] = useState("all");
   const [search, setSearch] = useState("");
   const [hasEmail, setHasEmail] = useState(false);
@@ -133,6 +145,22 @@ function VenuesTab() {
   const [targetArtist, setTargetArtist] = useState<number | "">("");
   // Typing must not fire a query per keystroke.
   const dSearch = useDebounced(search, 250);
+  const [targetOnly, setTargetOnly] = useState(false);
+  const { data: artists = [] } = useQuery({ queryKey: ["artists"], queryFn: listArtists });
+  // Artist targeting: the audience cities go to the server, which sorts venues
+  // in those cities first across every page (the old client-side sort only
+  // reordered the rows already loaded) and folds accents on both sides.
+  const targetCities = useMemo(() => {
+    const a = artists.find((x) => x.id === targetArtist);
+    const list = (a?.audience_cities ?? "")
+      .split(",")
+      .map((c) => c.trim())
+      .filter(Boolean);
+    return list.length ? list : undefined;
+  }, [artists, targetArtist]);
+  useEffect(() => {
+    if (!targetCities) setTargetOnly(false);
+  }, [targetCities]);
   const {
     data: pages,
     fetchNextPage,
@@ -149,6 +177,8 @@ function VenuesTab() {
       hasWebsite,
       contactedF,
       playedF,
+      targetCities,
+      targetOnly,
     ],
     queryFn: ({ pageParam }) =>
       viListVenues({
@@ -160,6 +190,8 @@ function VenuesTab() {
         has_website: hasWebsite || undefined,
         contacted: contactedF || undefined,
         played: playedF || undefined,
+        target_cities: targetCities,
+        target_only: (targetOnly && !!targetCities) || undefined,
         limit: PAGE_SIZE,
         offset: pageParam,
       }),
@@ -174,37 +206,56 @@ function VenuesTab() {
     refetchInterval: enriching ? 5000 : false,
   });
   const venues = useMemo(() => pages?.pages.flat() ?? [], [pages]);
-  // Rows are paged in on scroll: until the last page is in, the number shown is
-  // what is loaded, not the size of the result set.
-  const countLabel = hasNextPage
-    ? t("venues.count_loaded", { count: venues.length })
-    : t("venues.count_venues", { count: venues.length });
+  const filterArgs = {
+    statut,
+    pays,
+    search: dSearch,
+    has_email: hasEmail || undefined,
+    has_phone: hasPhone || undefined,
+    has_website: hasWebsite || undefined,
+    contacted: contactedF || undefined,
+    played: playedF || undefined,
+    target_cities: targetCities,
+    target_only: (targetOnly && !!targetCities) || undefined,
+  };
+  // Rows are paged in on scroll, so the real size of the result set comes from
+  // its own count query rather than from what happens to be loaded.
+  const { data: total } = useQuery({
+    queryKey: ["vi_venues", "count", filterArgs],
+    queryFn: () => viCountVenues(filterArgs),
+    placeholderData: keepPreviousData,
+    refetchInterval: enriching ? 5000 : false,
+  });
+  const countLabel =
+    total != null && total > venues.length
+      ? t("venues.count_partial", { shown: venues.length, count: total })
+      : t("venues.count_total", { count: total ?? venues.length });
+  const anyChip = hasEmail || hasPhone || hasWebsite || contactedF || playedF;
+  const filtered = anyChip || statut !== "actif" || pays !== "all" || dSearch.trim() !== "";
+  const resetFilters = () => {
+    setStatut("actif");
+    setPays("all");
+    setSearch("");
+    setHasEmail(false);
+    setHasPhone(false);
+    setHasWebsite(false);
+    setContactedF(false);
+    setPlayedF(false);
+  };
   const { data: stats } = useQuery({
     queryKey: ["vi_venue_stats"],
     queryFn: viVenueStats,
     refetchInterval: enriching ? 4000 : false,
   });
-  const { data: artists = [] } = useQuery({ queryKey: ["artists"], queryFn: listArtists });
-
-  // City targeting: float venues in the chosen artist's audience cities to the top.
-  const cityNorm = (s: string) =>
-    s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
-  const targetCities = useMemo(() => {
-    const a = artists.find((x) => x.id === targetArtist);
-    const raw = a?.audience_cities;
-    if (!raw) return null;
-    const list = raw.split(",").map(cityNorm).filter(Boolean);
-    return list.length ? list : null;
-  }, [artists, targetArtist]);
-  const isTarget = (ville?: string | null) =>
-    !!targetCities &&
-    !!ville &&
-    targetCities.some((c) => cityNorm(ville).includes(c) || c.includes(cityNorm(ville)));
-  const displayVenues = useMemo(() => {
-    if (!targetCities) return venues;
-    return [...venues].sort((a, b) => (isTarget(b.ville) ? 1 : 0) - (isTarget(a.ville) ? 1 : 0));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [venues, targetCities]);
+  // "N venues in the target cities", with the other filters applied.
+  const { data: targetCount } = useQuery({
+    queryKey: ["vi_venues", "count_target", { ...filterArgs, target_only: true }],
+    queryFn: () => viCountVenues({ ...filterArgs, target_only: true }),
+    enabled: !!targetCities,
+    placeholderData: keepPreviousData,
+  });
+  const targetArtistSet = targetArtist !== "";
+  const displayVenues = venues;
 
   // Render only the rows in view. Mounting 500 rows meant ~15 000 DOM nodes and
   // 3 000 inline SVG icons on every filter change; windowing makes that cost
@@ -242,7 +293,19 @@ function VenuesTab() {
   const resetScroll = useCallback(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }, []);
-  useEffect(resetScroll, [statut, pays, dSearch, hasEmail, hasPhone, hasWebsite, contactedF, playedF, resetScroll]);
+  useEffect(resetScroll, [
+    statut,
+    pays,
+    dSearch,
+    hasEmail,
+    hasPhone,
+    hasWebsite,
+    contactedF,
+    playedF,
+    targetCities,
+    targetOnly,
+    resetScroll,
+  ]);
 
   useEffect(() => {
     let alive = true;
@@ -274,15 +337,16 @@ function VenuesTab() {
     };
   }, [qc]);
 
-  const enrich = async () => {
+  // `retry`: second pass over enriched venues still without an address of
+  // their own (deeper page list, Instagram bio, RA promoter site).
+  const enrich = async (retry = false) => {
     setEnrichRunId(-1);
     try {
-      setEnrichRunId(await viStartEnrich());
-      toast(t("venues.enrich_started"), "ok");
+      setEnrichRunId(await viStartEnrich(false, retry));
+      toast(t(retry ? "venues.enrich_retry_started" : "venues.enrich_started"), "ok");
     } catch (e: any) {
       setEnrichRunId(null);
-      const msg = e?.toString?.() ?? "error";
-      toast(msg.includes("enrichir") ? t("venues.enrich_none") : msg, "error");
+      toast(backendError(e), "error");
     }
   };
 
@@ -292,9 +356,10 @@ function VenuesTab() {
       qc.invalidateQueries({ queryKey: ["vi_venues"] });
       qc.invalidateQueries({ queryKey: ["vi_venue_stats"] });
       qc.invalidateQueries({ queryKey: ["contacts"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
       toast(t("venues.promoted"), "ok");
     },
-    onError: (e: any) => toast(e?.toString?.() ?? "error", "error"),
+    onError: (e: any) => toast(backendError(e), "error"),
   });
   const promoteBulk = useMutation({
     mutationFn: () => viPromoteVenuesBulk(true),
@@ -302,17 +367,52 @@ function VenuesTab() {
       qc.invalidateQueries({ queryKey: ["vi_venues"] });
       qc.invalidateQueries({ queryKey: ["vi_venue_stats"] });
       qc.invalidateQueries({ queryKey: ["contacts"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
       toast(t("venues.promoted_bulk", { count: n }), "ok");
     },
-    onError: (e: any) => toast(e?.toString?.() ?? "error", "error"),
+    onError: (e: any) => toast(backendError(e), "error"),
+  });
+
+  const repair = useMutation({
+    mutationFn: () => viRepairContacts(),
+    onSuccess: (n) => {
+      qc.invalidateQueries({ queryKey: ["vi_venues"] });
+      qc.invalidateQueries({ queryKey: ["vi_venue_stats"] });
+      qc.invalidateQueries({ queryKey: ["contacts"] });
+      toast(t("venues.repaired", { count: n }), "ok");
+    },
+    onError: (e: any) => toast(backendError(e), "error"),
   });
 
   const statChips: { key: string; label: string; value: number; tone?: string; active?: boolean; onClick?: () => void }[] =
     stats
       ? [
-          { key: "total", label: t("venues.s_total"), value: stats.total, tone: "text-fg" },
-          { key: "qualifie", label: t("venues.st_qualifie"), value: stats.qualifie, tone: "text-accent" },
-          { key: "valide", label: t("venues.st_valide"), value: stats.valide, tone: "text-ok" },
+          // The status tiles drive the status select, so a tile and the list
+          // below it can no longer disagree.
+          {
+            key: "total",
+            label: t("venues.s_total"),
+            value: stats.total,
+            tone: "text-fg",
+            active: statut === "all",
+            onClick: () => setStatut((s) => (s === "all" ? "actif" : "all")),
+          },
+          {
+            key: "qualifie",
+            label: t("venues.st_qualifie"),
+            value: stats.qualifie,
+            tone: "text-accent",
+            active: statut === "qualifie",
+            onClick: () => setStatut((s) => (s === "qualifie" ? "actif" : "qualifie")),
+          },
+          {
+            key: "valide",
+            label: t("venues.st_valide"),
+            value: stats.valide,
+            tone: "text-ok",
+            active: statut === "valide",
+            onClick: () => setStatut((s) => (s === "valide" ? "actif" : "valide")),
+          },
           { key: "enriched", label: t("venues.s_enriched"), value: stats.enriched },
           {
             key: "email",
@@ -366,6 +466,20 @@ function VenuesTab() {
         </div>
       )}
 
+      {(stats?.stale_contacts ?? 0) > 0 && (
+        <div className="card flex flex-wrap items-center gap-3 border-accent/40 p-4">
+          <AlertTriangle size={16} className="shrink-0 text-accent" />
+          <div className="min-w-0 flex-1 text-xs">
+            <div className="font-semibold">{t("venues.stale_n", { count: stats!.stale_contacts })}</div>
+            <div className="text-2xs text-fg-subtle">{t("venues.stale_hint")}</div>
+          </div>
+          <button className="btn-outline" onClick={() => repair.mutate()} disabled={repair.isPending}>
+            <ShieldCheck size={14} />
+            {t("venues.repair")}
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         <input
           className="input max-w-xs flex-1"
@@ -374,12 +488,14 @@ function VenuesTab() {
           onChange={(e) => setSearch(e.target.value)}
         />
         <select className="input w-auto" value={statut} onChange={(e) => setStatut(e.target.value)}>
+          <option value="actif">{t("venues.st_actif")}</option>
           <option value="all">{t("common.all")}</option>
           {["qualifie", "valide", "candidat", "rejete"].map((s) => (
             <option key={s} value={s}>
               {t(`venues.st_${s}`)}
             </option>
           ))}
+          <option value="archive">{t("venues.st_archive_filter")}</option>
         </select>
         <select className="input w-auto" value={pays} onChange={(e) => setPays(e.target.value)}>
           <option value="all">{t("venues.all_countries")}</option>
@@ -405,13 +521,25 @@ function VenuesTab() {
         <button
           className="btn-outline ml-auto"
           onClick={() => promoteBulk.mutate()}
-          disabled={promoteBulk.isPending}
+          // Nothing left to add: every venue with an email is already in the
+          // pipeline, so the button would only toast "0 added".
+          disabled={promoteBulk.isPending || !stats?.promotable}
           title={t("venues.promote_bulk_hint")}
         >
           <UserPlus size={15} />
           {t("venues.promote_bulk")}
+          {!!stats?.promotable && <span className="tabular">({stats.promotable})</span>}
         </button>
-        <button className="btn-primary" onClick={enrich} disabled={enriching} title={t("venues.enrich_hint")}>
+        <button
+          className="btn-outline"
+          onClick={() => enrich(true)}
+          disabled={enriching}
+          title={t("venues.enrich_retry_hint")}
+        >
+          <RotateCcw size={15} />
+          {t("venues.enrich_retry")}
+        </button>
+        <button className="btn-primary" onClick={() => enrich(false)} disabled={enriching} title={t("venues.enrich_hint")}>
           <Sparkles size={15} className={enriching ? "animate-pulse" : ""} />
           {t("venues.enrich")}
         </button>
@@ -445,16 +573,10 @@ function VenuesTab() {
             </button>
           );
         })}
-        {(hasEmail || hasPhone || hasWebsite || contactedF || playedF) && (
+        {filtered && (
           <button
             className="text-2xs uppercase tracking-wide text-accent hover:underline"
-            onClick={() => {
-              setHasEmail(false);
-              setHasPhone(false);
-              setHasWebsite(false);
-              setContactedF(false);
-              setPlayedF(false);
-            }}
+            onClick={resetFilters}
           >
             {t("venues.clear_filters")}
           </button>
@@ -464,9 +586,41 @@ function VenuesTab() {
         </span>
       </div>
 
+      {targetArtistSet && (
+        <div className="flex flex-wrap items-center gap-2 text-2xs text-fg-subtle">
+          <Target size={12} className="text-accent" />
+          {targetCities ? (
+            <>
+              <span className="tabular">{t("venues.target_count", { count: targetCount ?? 0 })}</span>
+              <span className="text-fg-faint">({targetCities.join(", ")})</span>
+              <button
+                className="uppercase tracking-wide text-accent hover:underline"
+                onClick={() => setTargetOnly((v) => !v)}
+              >
+                {targetOnly ? t("venues.target_show_all") : t("venues.target_only")}
+              </button>
+            </>
+          ) : (
+            <span>{t("venues.target_no_cities")}</span>
+          )}
+        </div>
+      )}
+
       {venues.length === 0 ? (
         <div className="card">
-          <EmptyState icon={Radio} title={t("venues.no_venues")} />
+          {filtered && (stats?.total ?? 0) > 0 ? (
+            <EmptyState
+              icon={Radio}
+              title={t("venues.no_match")}
+              action={
+                <button className="btn-outline" onClick={resetFilters}>
+                  {t("venues.reset_filters")}
+                </button>
+              }
+            />
+          ) : (
+            <EmptyState icon={Radio} title={t("venues.no_venues")} />
+          )}
         </div>
       ) : (
         <div ref={scrollRef} className="card max-h-[calc(100vh-360px)] overflow-auto">
@@ -528,7 +682,7 @@ function VenuesTab() {
                           <CheckCheck size={11} /> {t("venues.contacted_badge")}
                         </span>
                       )}
-                      {isTarget(v.ville) && (
+                      {v.is_target && (
                         <span className="badge shrink-0 bg-accent text-accent-fg">
                           {t("venues.target_match")}
                         </span>
@@ -605,10 +759,11 @@ function VenuesTab() {
           </table>
         </div>
       )}
-      <div className="flex items-center gap-2 text-2xs text-fg-subtle">
-        <span>{countLabel}</span>
-        {isFetchingNextPage && <RefreshCw size={11} className="animate-spin text-accent" />}
-      </div>
+      {isFetchingNextPage && (
+        <div className="flex items-center gap-2 text-2xs text-fg-subtle">
+          <RefreshCw size={11} className="animate-spin text-accent" />
+        </div>
+      )}
 
       {openId != null && <VenueFicheModal id={openId} onClose={() => setOpenId(null)} />}
     </div>
@@ -629,6 +784,8 @@ const ROLE_STYLE: Record<string, string> = {
 function VenueFicheModal({ id, onClose }: { id: number; onClose: () => void }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const confirm = useConfirm();
+  const qc = useQueryClient();
   const { data: fiche } = useQuery<ViVenueFiche>({
     queryKey: ["vi_venue_detail", id],
     queryFn: () => viVenueDetail(id),
@@ -641,116 +798,176 @@ function VenueFicheModal({ id, onClose }: { id: number; onClose: () => void }) {
     );
   };
 
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["vi_venue_detail", id] });
+    qc.invalidateQueries({ queryKey: ["vi_venues"] });
+    qc.invalidateQueries({ queryKey: ["vi_venue_stats"] });
+  };
+  // Exclusion lands in vi_exclusions: the venue is archived and harvests skip it.
+  const exclude = useMutation({
+    mutationFn: () => viExcludeVenue(id),
+    onSuccess: () => {
+      refresh();
+      toast(t("venues.excluded_toast"), "ok");
+    },
+    onError: (e: any) => toast(backendError(e), "error"),
+  });
+  const restore = useMutation({
+    mutationFn: () => viRestoreVenue(id),
+    onSuccess: () => {
+      refresh();
+      toast(t("venues.restored"), "ok");
+    },
+    onError: (e: any) => toast(backendError(e), "error"),
+  });
+  const eraseEmail = useMutation({
+    mutationFn: (email: string) => viExcludeEmail(email),
+    onSuccess: () => {
+      refresh();
+      toast(t("venues.email_excluded"), "ok");
+    },
+    onError: (e: any) => toast(backendError(e), "error"),
+  });
+
+  const title = fiche ? (
+    <span className="flex items-center gap-2">
+      <span>{t("venues.fiche")}</span>
+      <span className={clsx("badge", VENUE_STATUS_STYLE[fiche.statut])}>
+        {t(`venues.st_${fiche.statut}`, fiche.statut)}
+      </span>
+      {fiche.excluded && <span className="badge bg-muted text-fg-faint">{t("venues.excluded_badge")}</span>}
+      <span className="font-condensed text-lg tabular text-accent-2">{fiche.score_qualif}</span>
+    </span>
+  ) : (
+    t("venues.fiche")
+  );
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
-      <div
-        className="card max-h-[85vh] w-full max-w-2xl overflow-auto p-0"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {!fiche ? (
-          <div className="p-8 text-center text-fg-subtle">
-            <RefreshCw size={18} className="mx-auto animate-spin" />
+    <Modal open onClose={onClose} title={title} width="max-w-2xl">
+      {!fiche ? (
+        <div className="p-8 text-center text-fg-subtle">
+          <RefreshCw size={18} className="mx-auto animate-spin" />
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold">{fiche.nom}</h2>
+              <div className="mt-0.5 text-xs text-fg-subtle">
+                {[fiche.ville, fiche.pays].filter(Boolean).join(", ")}
+                {fiche.capacite_est ? ` · ${t("venues.fiche_capacity")} ${fiche.capacite_est}` : ""}
+              </div>
+            </div>
+            {fiche.excluded || fiche.statut === "archive" ? (
+              <button className="btn-outline py-1.5" onClick={() => restore.mutate()} disabled={restore.isPending}>
+                <RotateCcw size={13} />
+                {t("venues.restore")}
+              </button>
+            ) : (
+              <button
+                className="btn-ghost py-1.5 text-fg-subtle hover:text-accent"
+                onClick={() => confirm(t("venues.exclude_confirm")) && exclude.mutate()}
+                disabled={exclude.isPending}
+              >
+                <Ban size={13} />
+                {t("venues.exclude")}
+              </button>
+            )}
           </div>
-        ) : (
-          <>
-            <div className="sticky top-0 z-10 flex items-start justify-between border-b border-border bg-bg px-6 py-4">
-              <div>
-                <div className="kicker">{t("venues.fiche")}</div>
-                <h2 className="text-xl font-semibold">{fiche.nom}</h2>
-                <div className="mt-0.5 text-xs text-fg-subtle">
-                  {[fiche.ville, fiche.pays].filter(Boolean).join(", ")}
-                  {fiche.capacite_est ? ` · ${t("venues.fiche_capacity")} ${fiche.capacite_est}` : ""}
-                </div>
+
+          {/* Coordinates */}
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <FicheLine icon={Globe} label={t("venues.fiche_website")} value={fiche.site_web} onOpen={fiche.site_web ? () => openUrl(fiche.site_web!).catch(() => {}) : undefined} />
+            <FicheLine icon={Phone} label={t("venues.fiche_phone")} value={fiche.telephone} onCopy={fiche.telephone ? () => copy(fiche.telephone!) : undefined} />
+            <FicheLine icon={MapPin} label={t("venues.fiche_address")} value={fiche.adresse} />
+            <FicheLine icon={ExternalLink} label="RA" value={fiche.ra_url} onOpen={fiche.ra_url ? () => openUrl(fiche.ra_url!).catch(() => {}) : undefined} />
+            {fiche.instagram && (
+              <FicheLine
+                icon={Instagram}
+                label={t("venues.fiche_instagram")}
+                value={`@${fiche.instagram}`}
+                onOpen={() => openUrl(`https://www.instagram.com/${fiche.instagram}/`).catch(() => {})}
+              />
+            )}
+          </div>
+
+          {/* Emails found */}
+          <div>
+            <div className="kicker mb-2 flex items-center gap-2">
+              <Mail size={13} /> {t("venues.fiche_contacts")}
+            </div>
+            {fiche.contacts.filter((c) => c.type_ === "email").length === 0 ? (
+              <p className="text-xs text-fg-subtle">{t("venues.fiche_no_contacts")}</p>
+            ) : (
+              <div className="space-y-1.5">
+                {fiche.contacts
+                  .filter((c) => c.type_ === "email")
+                  .map((c) => (
+                    <div key={c.id} className="flex items-center gap-2 border border-border px-3 py-2">
+                      <span className={clsx("badge", ROLE_STYLE[c.role_devine || "autre"])}>
+                        {t(`venues.role_${c.role_devine || "autre"}`, c.role_devine || "")}
+                      </span>
+                      <a href={`mailto:${c.valeur}`} className="min-w-0 truncate font-mono text-xs text-fg hover:text-accent">
+                        {c.valeur}
+                      </a>
+                      <span className="ml-auto shrink-0 text-2xs tabular text-fg-faint">
+                        {c.source_method === "mailto" || c.source_method === "regex" ? (c.source_method === "mailto" ? "mailto" : "html") : c.source_method} · {c.score}
+                      </span>
+                      <button className="btn-ghost px-1.5 py-1" title={t("venues.copy")} aria-label={t("venues.copy")} onClick={() => copy(c.valeur)}>
+                        <Copy size={13} />
+                      </button>
+                      <button
+                        className="btn-ghost px-1.5 py-1 text-fg-faint hover:text-accent"
+                        title={t("venues.exclude_email")}
+                        aria-label={t("venues.exclude_email")}
+                        onClick={() =>
+                          confirm(t("venues.exclude_email_confirm", { email: c.valeur })) && eraseEmail.mutate(c.valeur)
+                        }
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
               </div>
-              <div className="flex items-center gap-2">
-                <span className={clsx("badge", VENUE_STATUS_STYLE[fiche.statut])}>
-                  {t(`venues.st_${fiche.statut}`, fiche.statut)}
-                </span>
-                <span className="font-condensed text-lg tabular text-accent-2">{fiche.score_qualif}</span>
-                <button className="btn-ghost px-2 py-1.5" onClick={onClose}>
-                  <X size={16} />
-                </button>
+            )}
+          </div>
+
+          {/* Evidence */}
+          {fiche.evidence.length > 0 && (
+            <div>
+              <div className="kicker mb-2 flex items-center gap-2">
+                <CalendarDays size={13} /> {t("venues.fiche_evidence")}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {fiche.evidence.map((ev, i) => (
+                  <span key={i} className="inline-flex items-center gap-1.5 border border-border px-2 py-1 text-2xs">
+                    <span className="font-semibold">{ev.artiste}</span>
+                    <span className="text-fg-faint">{ev.date_event}</span>
+                  </span>
+                ))}
               </div>
             </div>
+          )}
 
-            <div className="space-y-6 p-6">
-              {/* Coordinates */}
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <FicheLine icon={Globe} label={t("venues.fiche_website")} value={fiche.site_web} onOpen={fiche.site_web ? () => openUrl(fiche.site_web!).catch(() => {}) : undefined} />
-                <FicheLine icon={Phone} label={t("venues.fiche_phone")} value={fiche.telephone} onCopy={fiche.telephone ? () => copy(fiche.telephone!) : undefined} />
-                <FicheLine icon={MapPin} label={t("venues.fiche_address")} value={fiche.adresse} />
-                <FicheLine icon={ExternalLink} label="RA" value={fiche.ra_url} onOpen={fiche.ra_url ? () => openUrl(fiche.ra_url!).catch(() => {}) : undefined} />
+          {/* Promoters */}
+          {fiche.promoters.length > 0 && (
+            <div>
+              <div className="kicker mb-2 flex items-center gap-2">
+                <Users size={13} /> {t("venues.fiche_promoters")}
               </div>
-
-              {/* Emails found */}
-              <div>
-                <div className="kicker mb-2 flex items-center gap-2">
-                  <Mail size={13} /> {t("venues.fiche_contacts")}
-                </div>
-                {fiche.contacts.filter((c) => c.type_ === "email").length === 0 ? (
-                  <p className="text-xs text-fg-subtle">{t("venues.fiche_no_contacts")}</p>
-                ) : (
-                  <div className="space-y-1.5">
-                    {fiche.contacts
-                      .filter((c) => c.type_ === "email")
-                      .map((c) => (
-                        <div key={c.id} className="flex items-center gap-2 border border-border px-3 py-2">
-                          <span className={clsx("badge", ROLE_STYLE[c.role_devine || "autre"])}>
-                            {t(`venues.role_${c.role_devine || "autre"}`, c.role_devine || "")}
-                          </span>
-                          <a href={`mailto:${c.valeur}`} className="font-mono text-xs text-fg hover:text-accent">
-                            {c.valeur}
-                          </a>
-                          <span className="ml-auto text-2xs tabular text-fg-faint">
-                            {c.source_method === "mailto" ? "mailto" : "html"} · {c.score}
-                          </span>
-                          <button className="btn-ghost px-1.5 py-1" title={t("venues.copy")} onClick={() => copy(c.valeur)}>
-                            <Copy size={13} />
-                          </button>
-                        </div>
-                      ))}
-                  </div>
-                )}
+              <div className="flex flex-wrap gap-1.5">
+                {fiche.promoters.map((p, i) => (
+                  <span key={i} className="inline-flex items-center gap-1.5 border border-border px-2 py-1 text-2xs">
+                    <span className="font-semibold">{p.nom}</span>
+                    <span className="text-fg-faint tabular">{p.nb_events}</span>
+                  </span>
+                ))}
               </div>
-
-              {/* Evidence */}
-              {fiche.evidence.length > 0 && (
-                <div>
-                  <div className="kicker mb-2 flex items-center gap-2">
-                    <CalendarDays size={13} /> {t("venues.fiche_evidence")}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {fiche.evidence.map((ev, i) => (
-                      <span key={i} className="inline-flex items-center gap-1.5 border border-border px-2 py-1 text-2xs">
-                        <span className="font-semibold">{ev.artiste}</span>
-                        <span className="text-fg-faint">{ev.date_event}</span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Promoters */}
-              {fiche.promoters.length > 0 && (
-                <div>
-                  <div className="kicker mb-2 flex items-center gap-2">
-                    <Users size={13} /> {t("venues.fiche_promoters")}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {fiche.promoters.map((p, i) => (
-                      <span key={i} className="inline-flex items-center gap-1.5 border border-border px-2 py-1 text-2xs">
-                        <span className="font-semibold">{p.nom}</span>
-                        <span className="text-fg-faint tabular">{p.nb_events}</span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
-          </>
-        )}
-      </div>
-    </div>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -824,6 +1041,7 @@ function RunsTab() {
       if (done) {
         qc.invalidateQueries({ queryKey: ["vi_runs"] });
         qc.invalidateQueries({ queryKey: ["vi_venues"] });
+        qc.invalidateQueries({ queryKey: ["vi_venue_stats"] });
       }
       // The final emit carries a message ("Terminé"/"Arrêté"): notify once.
       if (done && e.payload.message) {
@@ -848,7 +1066,7 @@ function RunsTab() {
       qc.invalidateQueries({ queryKey: ["vi_runs"] });
       toast(t("venues.stopping"), "ok");
     } catch (e: any) {
-      toast(e?.toString?.() ?? "error", "error");
+      toast(backendError(e), "error");
     }
   };
 
@@ -861,7 +1079,7 @@ function RunsTab() {
       qc.invalidateQueries({ queryKey: ["vi_runs"] });
       toast(t("venues.launch"), "ok");
     } catch (e: any) {
-      toast(e?.toString?.() ?? "error", "error");
+      toast(backendError(e), "error");
     } finally {
       setLaunching(false);
     }
@@ -872,7 +1090,7 @@ function RunsTab() {
       await viResumeRun(id);
       qc.invalidateQueries({ queryKey: ["vi_runs"] });
     } catch (e: any) {
-      toast(e?.toString?.() ?? "error", "error");
+      toast(backendError(e), "error");
     }
   };
 
@@ -992,6 +1210,7 @@ function RunCard({
   const active = statut === "en_cours";
   const canResume = statut !== "termine" && !active;
   const isEnrich = run.type_ === "enrich";
+  const isRetry = isEnrich && !!run.params && run.params.includes('"retry":true');
 
   const stats: ViRunStats | null = run.stats ? safeParse(run.stats) : null;
   const { data: failed = [] } = useQuery({
@@ -1027,6 +1246,7 @@ function RunCard({
           <span className="badge bg-muted text-fg-subtle">
             {isEnrich ? t("venues.enrich") : t("venues.tab_runs")}
           </span>
+          {isRetry && <span className="badge bg-muted text-fg-subtle">{t("venues.enrich_retry_badge")}</span>}
           <span
             className={clsx(
               "badge",
@@ -1077,7 +1297,7 @@ function RunCard({
       {active && live?.message && (
         <div className="mt-2 flex items-center gap-2 text-2xs text-fg-subtle">
           <RefreshCw size={11} className="animate-spin text-accent-2 shrink-0" />
-          <span className="truncate font-mono">{live.message}</span>
+          <span className="truncate font-mono">{progressText(live)}</span>
         </div>
       )}
 
@@ -1109,7 +1329,9 @@ function RunCard({
               {failed.map((tk) => (
                 <div key={tk.id} className="border border-border bg-surface-2 px-3 py-2 text-2xs">
                   <div className="font-mono text-fg-subtle">{taskLabel(tk.payload)}</div>
-                  <div className="mt-0.5 text-accent">{tk.erreur || t("venues.unknown_error")}</div>
+                  <div className="mt-0.5 text-accent">
+                    {translateCode(tk.erreur) ?? (tk.erreur || t("venues.unknown_error"))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1159,7 +1381,7 @@ function AreasTab() {
       qc.invalidateQueries({ queryKey: ["vi_areas"] });
       toast(t("venues.resolved_n", { count: n }), "ok");
     } catch (e: any) {
-      toast(e?.toString?.() ?? "error", "error");
+      toast(backendError(e), "error");
     } finally {
       setResolvingAll(false);
     }

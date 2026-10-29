@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore, type FocusEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw, Info, PenLine, Search, Activity } from "lucide-react";
@@ -42,6 +42,11 @@ const EMPTY_SIG: SignatureFields = {
 };
 
 const SETTINGS_TABS = ["general", "email", "integrations"] as const;
+
+/// Secret fields (password, API keys) come back from the backend as a masked
+/// placeholder, never the real value; saving the untouched mask keeps the
+/// stored secret. Focusing selects it so typing replaces it whole.
+const selectOnFocus = { onFocus: (e: FocusEvent<HTMLInputElement>) => e.currentTarget.select() };
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 export function Settings() {
@@ -128,6 +133,7 @@ export function Settings() {
     autoComplete: "off",
     value: pulseCfg[k] ?? "",
     onChange: (e: any) => setPulseCfg((c) => ({ ...c, [k]: e.target.value })),
+    ...(type === "password" ? selectOnFocus : {}),
   });
   const [savePulse, savePulseBusy] = useSubmit(async () => {
     for (const k of PULSE_KEYS) await setSetting(k, (pulseCfg[k] ?? "").trim());
@@ -317,7 +323,8 @@ export function Settings() {
           ))}
         </div>
       </PageHeader>
-      <div className="max-w-3xl space-y-6 px-8 pb-10 pt-6">
+      {/* Cards flow into columns on a wide window instead of one 768px strip. */}
+      <div className="grid items-start gap-6 px-page pb-10 pt-6 xl:grid-cols-2">
         {tab === "general" && (
         <>
         {/* Appearance */}
@@ -406,7 +413,7 @@ export function Settings() {
               <input {...cinp("username")} />
             </Field>
             <Field label={t("settings.password")}>
-              <input type="password" {...cinp("password")} />
+              <input type="password" autoComplete="off" {...cinp("password")} {...selectOnFocus} />
             </Field>
             <Field label={t("settings.from_name")}>
               <input {...cinp("from_name")} placeholder="Piers | Insrt" />
@@ -415,6 +422,7 @@ export function Settings() {
               <input {...cinp("from_email")} placeholder="piers@insrt.fr" />
             </Field>
           </div>
+          <p className="mt-3 text-2xs text-fg-faint">{t("settings.secrets_note")}</p>
           <div className="mt-5 flex justify-end gap-2">
             <button className="btn-outline" onClick={runTest} disabled={testing || saveSmtpBusy}>
               <Plug size={15} />
@@ -545,6 +553,7 @@ export function Settings() {
                 onChange={(e) => setSerperVal(e.target.value)}
                 placeholder="serper.dev API key"
                 autoComplete="off"
+                {...selectOnFocus}
               />
             </Field>
             <button className="btn-primary" onClick={saveSerper} disabled={saveSerperBusy}>
@@ -602,6 +611,7 @@ export function Settings() {
                 onChange={(e) => setYtVal(e.target.value)}
                 placeholder="YouTube Data API v3 key"
                 autoComplete="off"
+                {...selectOnFocus}
               />
             </Field>
             <button className="btn-primary" onClick={saveYt} disabled={saveYtBusy}>
@@ -639,6 +649,7 @@ export function Settings() {
             </Field>
           </div>
           <p className="mt-3 text-2xs text-fg-faint">{t("settings.pulse_hint")}</p>
+          <p className="mt-1 text-2xs text-fg-faint">{t("settings.secrets_note")}</p>
           <div className="mt-4 flex justify-end">
             <button className="btn-primary" onClick={savePulse} disabled={savePulseBusy}>
               {t("common.save")}

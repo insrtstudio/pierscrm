@@ -5,7 +5,26 @@ import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import clsx from "clsx";
-import { Sun, Moon, RefreshCw, AlertTriangle, type LucideIcon } from "lucide-react";
+import {
+  Sun,
+  Moon,
+  RefreshCw,
+  AlertTriangle,
+  Home as HomeIcon,
+  CalendarDays,
+  Mic2,
+  Activity,
+  Users,
+  Radar as RadarIcon,
+  Megaphone,
+  Send,
+  Wallet,
+  Stamp,
+  Settings as SettingsIcon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  type LucideIcon,
+} from "lucide-react";
 import { listArtists, listEvents } from "../lib/api";
 import { getTheme, toggleTheme, type Theme } from "../lib/theme";
 import { UpdateBanner } from "./UpdateBanner";
@@ -14,7 +33,7 @@ import { parseDay, today } from "../lib/format";
 import logoBlack from "../assets/brand/insrt-logo-black.png";
 import logoWhite from "../assets/brand/insrt-logo-white.png";
 
-type NavItem = { to: string; key: string; end?: boolean };
+type NavItem = { to: string; key: string; icon: LucideIcon; end?: boolean };
 type NavGroup = { key: string; tone: string; items: NavItem[] };
 
 // Grouped like the insrt.studio back office (AdminNav): a mono eyebrow with a
@@ -25,43 +44,79 @@ export const NAV_GROUPS: NavGroup[] = [
     key: "steer",
     tone: "bg-accent",
     items: [
-      { to: "/", key: "home", end: true },
-      { to: "/agenda", key: "agenda" },
+      { to: "/", key: "home", icon: HomeIcon, end: true },
+      { to: "/agenda", key: "agenda", icon: CalendarDays },
     ],
   },
   {
     key: "roster",
     tone: "bg-fg",
     items: [
-      { to: "/artists", key: "artists" },
-      { to: "/audience", key: "audience" },
+      { to: "/artists", key: "artists", icon: Mic2 },
+      { to: "/audience", key: "audience", icon: Activity },
     ],
   },
   {
     key: "prospect",
     tone: "bg-chrome-dark",
     items: [
-      { to: "/contacts", key: "pipeline" },
-      { to: "/discovery", key: "discovery" },
+      { to: "/contacts", key: "pipeline", icon: Users },
+      { to: "/discovery", key: "discovery", icon: RadarIcon },
     ],
   },
   {
     key: "campaigns",
     tone: "bg-warn",
     items: [
-      { to: "/campaigns", key: "campaigns" },
-      { to: "/outbox", key: "outbox" },
+      { to: "/campaigns", key: "campaigns", icon: Megaphone },
+      { to: "/outbox", key: "outbox", icon: Send },
     ],
   },
   {
     key: "ops",
     tone: "bg-fg-faint",
     items: [
-      { to: "/budget", key: "budget" },
-      { to: "/visa", key: "visa" },
+      { to: "/budget", key: "budget", icon: Wallet },
+      { to: "/visa", key: "visa", icon: Stamp },
     ],
   },
 ];
+
+const NAV_PREF_KEY = "nav_collapsed";
+// Below this width the sidebar always folds to an icon rail: content first.
+const NARROW_QUERY = "(max-width: 1179px)";
+
+/// Sidebar state: the user's explicit choice when there is one, otherwise
+/// folded on narrow windows and open on wide ones.
+function useNavCollapsed(): [boolean, boolean, () => void] {
+  const read = () => {
+    try {
+      const v = localStorage.getItem(NAV_PREF_KEY);
+      return v == null ? null : v === "1";
+    } catch {
+      return null;
+    }
+  };
+  const [pref, setPref] = useState<boolean | null>(read);
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(NARROW_QUERY);
+    const h = (e: MediaQueryListEvent) => setNarrow(e.matches);
+    mq.addEventListener("change", h);
+    return () => mq.removeEventListener("change", h);
+  }, []);
+  const collapsed = narrow || (pref ?? false);
+  const toggle = () => {
+    const next = !collapsed;
+    setPref(next);
+    try {
+      localStorage.setItem(NAV_PREF_KEY, next ? "1" : "0");
+    } catch {
+      // Private window: the choice just won't survive a restart.
+    }
+  };
+  return [collapsed, narrow, toggle];
+}
 
 function useMenuActions() {
   const navigate = useNavigate();
@@ -130,7 +185,14 @@ function TopBar() {
       data-tauri-drag-region
       className="relative flex h-9 shrink-0 items-center border-b border-border bg-bg pl-[88px]"
     >
-      <div className="pointer-events-none relative min-w-0 flex-1 overflow-hidden [mask-image:linear-gradient(90deg,transparent,#000_6%,#000_94%,transparent)]">
+      {/* The edge fade is for the scrolling ticker only: on the static empty
+          message it ate the first letters. */}
+      <div
+        className={clsx(
+          "pointer-events-none relative min-w-0 flex-1 overflow-hidden",
+          parts.length > 0 && "[mask-image:linear-gradient(90deg,transparent,#000_6%,#000_94%,transparent)]"
+        )}
+      >
         {parts.length > 0 ? (
           <div className="flex w-max animate-ticker whitespace-nowrap">
             {[0, 1].map((k) => (
@@ -163,10 +225,13 @@ export function Layout() {
     return () => window.removeEventListener("app:theme", h);
   }, []);
 
+  const [collapsed, narrow, toggleNav] = useNavCollapsed();
+
   const item = (isActive: boolean) =>
     clsx(
-      "block rounded px-3 py-1.5 text-[13.5px] transition-colors outline-none",
+      "flex items-center rounded py-1.5 text-[13.5px] transition-colors outline-none",
       "focus-visible:ring-2 focus-visible:ring-accent",
+      collapsed ? "justify-center px-0 py-2" : "gap-2.5 px-3",
       isActive ? "bg-surface-2 font-medium text-fg" : "text-fg-subtle hover:bg-surface-2 hover:text-fg"
     );
 
@@ -174,29 +239,52 @@ export function Layout() {
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg text-fg">
       <TopBar />
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-[220px] shrink-0 flex-col border-r border-border bg-bg">
-          <NavLink to="/" className="block px-6 pb-6 pt-5" aria-label="Insrt">
+        <aside
+          className={clsx(
+            "flex shrink-0 flex-col border-r border-border bg-bg transition-[width] duration-200",
+            collapsed ? "w-[60px]" : "w-[220px]"
+          )}
+        >
+          <NavLink
+            to="/"
+            className={clsx("block", collapsed ? "px-2.5 pb-5 pt-4" : "px-6 pb-6 pt-5")}
+            aria-label="Insrt"
+          >
             <img
               src={theme === "dark" ? logoWhite : logoBlack}
               alt="Insrt"
-              className="h-7 w-auto"
+              className={clsx("w-auto", collapsed ? "mx-auto h-4" : "h-7")}
               draggable={false}
             />
-            <div className="eyebrow mt-2 text-[10px]">{t("layout.tagline")}</div>
+            {!collapsed && <div className="eyebrow mt-2 text-[10px]">{t("layout.tagline")}</div>}
           </NavLink>
 
-          <nav className="flex-1 space-y-6 overflow-y-auto px-3 pb-6">
+          <nav className={clsx("flex-1 overflow-y-auto pb-6", collapsed ? "space-y-3 px-2" : "space-y-6 px-3")}>
             {NAV_GROUPS.map((g) => (
               <div key={g.key}>
-                <p className="eyebrow mb-1.5 flex items-center gap-2 px-3 text-[10.5px]">
-                  <span className={clsx("h-2 w-2 rounded-full", g.tone)} />
-                  {t(`nav_group.${g.key}`)}
-                </p>
+                {collapsed ? (
+                  // The group survives folding as its coloured dot.
+                  <div className="mb-1 flex justify-center" title={t(`nav_group.${g.key}`)}>
+                    <span className={clsx("h-1.5 w-1.5 rounded-full", g.tone)} />
+                  </div>
+                ) : (
+                  <p className="eyebrow mb-1.5 flex items-center gap-2 px-3 text-[10.5px]">
+                    <span className={clsx("h-2 w-2 rounded-full", g.tone)} />
+                    {t(`nav_group.${g.key}`)}
+                  </p>
+                )}
                 <ul className="space-y-0.5">
-                  {g.items.map(({ to, key, end }) => (
+                  {g.items.map(({ to, key, end, icon: Icon }) => (
                     <li key={to}>
-                      <NavLink to={to} end={end} className={({ isActive }) => item(isActive)}>
-                        {t(`nav.${key}`)}
+                      <NavLink
+                        to={to}
+                        end={end}
+                        className={({ isActive }) => item(isActive)}
+                        title={collapsed ? t(`nav.${key}`) : undefined}
+                        aria-label={t(`nav.${key}`)}
+                      >
+                        <Icon size={collapsed ? 17 : 15} strokeWidth={1.75} className="shrink-0" />
+                        {!collapsed && t(`nav.${key}`)}
                       </NavLink>
                     </li>
                   ))}
@@ -205,9 +293,20 @@ export function Layout() {
             ))}
           </nav>
 
-          <div className="flex items-center gap-1 border-t border-border p-3">
-            <NavLink to="/settings" className={({ isActive }) => clsx(item(isActive), "flex-1")}>
-              {t("nav.settings")}
+          <div
+            className={clsx(
+              "flex border-t border-border p-3",
+              collapsed ? "flex-col items-center gap-1 px-2" : "items-center gap-1"
+            )}
+          >
+            <NavLink
+              to="/settings"
+              className={({ isActive }) => clsx(item(isActive), !collapsed && "flex-1", collapsed && "w-full")}
+              title={collapsed ? t("nav.settings") : undefined}
+              aria-label={t("nav.settings")}
+            >
+              <SettingsIcon size={collapsed ? 17 : 15} strokeWidth={1.75} className="shrink-0" />
+              {!collapsed && t("nav.settings")}
             </NavLink>
             <button
               onClick={toggleTheme}
@@ -217,6 +316,17 @@ export function Layout() {
             >
               {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
             </button>
+            {/* On a narrow window the rail is forced: no toggle to offer. */}
+            {!narrow && (
+              <button
+                onClick={toggleNav}
+                title={collapsed ? t("layout.expand") : t("layout.collapse")}
+                aria-label={collapsed ? t("layout.expand") : t("layout.collapse")}
+                className="btn-icon"
+              >
+                {collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+              </button>
+            )}
           </div>
         </aside>
 
@@ -253,11 +363,11 @@ export function PageHeader({
   const slot = useContext(EmbeddedCtx);
   if (slot !== false) return slot && actions ? createPortal(actions, slot) : null;
   return (
-    <div className="border-b border-border px-8 pt-7">
-      <div className="flex items-end justify-between gap-4 pb-5">
+    <div className="border-b border-border px-page pt-7">
+      <div className="flex flex-wrap items-end justify-between gap-4 pb-5">
         <div className="min-w-0">
           {kicker && <div className="kicker mb-3">{kicker}</div>}
-          <h1 className="font-display text-[38px]">{title}</h1>
+          <h1 className="font-display text-[30px] xl:text-[38px]">{title}</h1>
           {subtitle && <p className="mt-2.5 max-w-2xl text-sm text-fg-subtle">{subtitle}</p>}
         </div>
         {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 pb-1">{actions}</div>}
@@ -289,8 +399,8 @@ export function TabbedPage({
   return (
     <div>
       <PageHeader title={title} subtitle={subtitle} kicker={kicker}>
-        <div className="flex items-end justify-between gap-4">
-        <div role="tablist" className="-mb-px flex gap-6">
+        <div className="flex flex-wrap items-end justify-between gap-x-4">
+        <div role="tablist" className="-mb-px flex gap-6 overflow-x-auto">
           {tabs.map((tb) => (
             <button
               key={tb.key}

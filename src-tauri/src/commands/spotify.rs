@@ -14,6 +14,12 @@ const API: &str = "https://api.spotify.com/v1";
 
 static TOKEN_CACHE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 
+/// Drop the cached token (called when the Spotify credentials change in Settings,
+/// otherwise the old app's token kept being used until it expired).
+pub fn invalidate_token_cache() {
+    *TOKEN_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 pub struct Spotify {
     http: reqwest::Client,
     client_id: String,
@@ -146,7 +152,7 @@ impl Spotify {
             .map_err(|e| SpotifyError(format!("token: {}", e)))?;
         if !resp.status().is_success() {
             return Err(SpotifyError(format!(
-                "token HTTP {} (client id/secret invalides ?)",
+                "token HTTP {} (invalid client id/secret?)",
                 resp.status().as_u16()
             )));
         }

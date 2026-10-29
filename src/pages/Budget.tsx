@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Plus, Pencil, Trash2, TrendingDown, TrendingUp } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Plus, Pencil, Trash2, TrendingDown, TrendingUp, CalendarDays, Megaphone } from "lucide-react";
 import {
+  dashboardStats,
   deleteBudgetItem,
   listBudget,
   saveBudgetItem,
@@ -20,6 +22,11 @@ export function Budget() {
     queryKey: ["budget"],
     queryFn: listBudget,
   });
+  // A confirmed Agenda gig with a fee owns one revenue line here (event_id
+  // set, kept in step by the backend), so each fee is counted exactly once.
+  // Meta Ads spend recorded by Audience is shown as a read-only expense.
+  const { data: stats } = useQuery({ queryKey: ["dashboard"], queryFn: dashboardStats });
+  const adSpend = stats?.ad_spend ?? 0;
   const [editing, setEditing] = useState<BudgetItem | null>(null);
 
   const delMut = useMutation({
@@ -36,10 +43,10 @@ export function Budget() {
   const totals = useMemo(() => {
     const min = expenses.reduce((a, i) => a + (i.min_cost || 0), 0);
     const max = expenses.reduce((a, i) => a + (i.max_cost || 0), 0);
-    const spent = expenses.reduce((a, i) => a + (i.actual || 0), 0);
+    const spent = expenses.reduce((a, i) => a + (i.actual || 0), 0) + adSpend;
     const rev = revenues.reduce((a, i) => a + (i.actual || 0), 0);
     return { min, max, spent, rev, net: rev - spent };
-  }, [items]);
+  }, [items, adSpend]);
 
   return (
     <div>
@@ -64,7 +71,7 @@ export function Budget() {
           </button>
         }
       />
-      <div className="space-y-6 px-8 pb-10 pt-6">
+      <div className="space-y-6 px-page pb-10 pt-6">
         {/* Summary */}
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <Summary
@@ -98,6 +105,28 @@ export function Budget() {
           rows={expenses}
           onEdit={setEditing}
           onDelete={(id) => confirm(t("common.confirm_delete")) && delMut.mutate(id)}
+          extra={
+            adSpend > 0 ? (
+              <tr className="border-b border-border/60">
+                <td className="px-5 py-2.5">
+                  <div className="flex items-center gap-2 font-medium">
+                    <Megaphone size={13} className="text-fg-subtle" />
+                    {t("budget.ad_spend")}
+                  </div>
+                  <div className="text-xs text-fg-subtle">{t("budget.ad_spend_hint")}</div>
+                </td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-fg-subtle">·</td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-fg-subtle">·</td>
+                <td className="px-3 py-2.5 text-right tabular-nums font-medium">{euro(adSpend)}</td>
+                <td className="px-5 py-2.5 text-xs">
+                  <Link to="/audience" className="text-fg-subtle hover:text-accent">
+                    {t("budget.from_audience")} →
+                  </Link>
+                </td>
+                <td />
+              </tr>
+            ) : null
+          }
         />
         <BudgetTable
           title={t("budget.revenue")}
@@ -151,15 +180,18 @@ function BudgetTable({
   onEdit,
   onDelete,
   revenue,
+  extra,
 }: {
   title: string;
   rows: BudgetItem[];
   onEdit: (i: BudgetItem) => void;
   onDelete: (id: number) => void;
   revenue?: boolean;
+  /// Read-only row appended to the table (ad spend).
+  extra?: React.ReactNode;
 }) {
   const { t } = useTranslation();
-  if (rows.length === 0) return null;
+  if (rows.length === 0 && !extra) return null;
   return (
     <div className="card overflow-hidden">
       <div className="eyebrow border-b border-border px-5 py-3 text-fg">
@@ -181,7 +213,19 @@ function BudgetTable({
           {rows.map((i) => (
             <tr key={i.id} className="group border-b border-border/60 hover:bg-muted/40">
               <td className="px-5 py-2.5">
-                <div className="font-medium">{i.item}</div>
+                <div className="flex items-center gap-2 font-medium">
+                  {i.event_id != null && <CalendarDays size={13} className="text-fg-subtle" />}
+                  {i.item}
+                  {i.event_id != null && (
+                    <Link
+                      to="/agenda"
+                      className="badge border border-border py-0 text-fg-subtle hover:text-accent"
+                      title={t("budget.linked_event_hint")}
+                    >
+                      {t("budget.linked_event")}
+                    </Link>
+                  )}
+                </div>
                 {i.category && (
                   <div className="text-xs text-fg-subtle">{i.category}</div>
                 )}
@@ -207,16 +251,19 @@ function BudgetTable({
                   <button className="btn-ghost px-2 py-1.5" onClick={() => onEdit(i)}>
                     <Pencil size={14} />
                   </button>
-                  <button
-                    className="btn-ghost px-2 py-1.5 text-danger"
-                    onClick={() => onDelete(i.id!)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  {i.event_id == null && (
+                    <button
+                      className="btn-ghost px-2 py-1.5 text-danger"
+                      onClick={() => onDelete(i.id!)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
                 </div>
               </td>
             </tr>
           ))}
+          {extra}
         </tbody>
       </table>
       </div>
@@ -236,6 +283,8 @@ function BudgetModal({
   const { t } = useTranslation();
   const toast = useToast();
   const [form, setForm] = useState<BudgetItem>({ ...item });
+  // A gig's line follows its Agenda event: kind and amount are not editable here.
+  const linked = item.event_id != null;
   const num = (v: string) => (v === "" ? 0 : parseFloat(v));
   const [save, busy] = useSubmit(async () => {
     if (!form.item.trim()) return;
@@ -257,6 +306,7 @@ function BudgetModal({
           <select
             className="input"
             value={form.kind}
+            disabled={linked}
             onChange={(e) =>
               setForm({ ...form, kind: e.target.value as "expense" | "revenue" })
             }
@@ -297,6 +347,7 @@ function BudgetModal({
             type="number"
             className="input"
             value={form.actual ?? ""}
+            disabled={linked}
             onChange={(e) =>
               setForm({
                 ...form,
@@ -305,6 +356,9 @@ function BudgetModal({
             }
           />
         </Field>
+        {linked && (
+          <p className="col-span-2 text-xs text-fg-subtle">{t("budget.linked_event_hint")}</p>
+        )}
         <Field label={t("budget.notes")} className="col-span-2">
           <textarea
             className="input min-h-[70px]"

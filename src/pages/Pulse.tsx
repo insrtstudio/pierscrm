@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
   Camera,
@@ -34,12 +35,26 @@ type Tab = "overview" | "playlists" | "planner";
 
 export function Pulse() {
   const { t } = useTranslation();
+  const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>("overview");
   const tabs: Tab[] = ["overview", "playlists", "planner"];
+  // The launch snapshot runs in the background a few seconds after startup;
+  // without this the page kept showing the pre-snapshot KPIs until reopened.
+  useEffect(() => {
+    const un = listen("pulse:snapshot-done", () => {
+      qc.invalidateQueries({ queryKey: ["pulse_kpis"] });
+      qc.invalidateQueries({ queryKey: ["pulse_series"] });
+      qc.invalidateQueries({ queryKey: ["pulse_tracked"] });
+      qc.invalidateQueries({ queryKey: ["pulse_watchlist"] });
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, [qc]);
   return (
     <div>
       <PageHeader title={t("pulse.title")} subtitle={t("pulse.subtitle")} />
-      <div className="px-8 py-6">
+      <div className="px-page py-6">
         <div className="segmented mb-6">
           {tabs.map((tb) => (
             <button key={tb} data-active={tab === tb} className="segmented-item" onClick={() => setTab(tb)}>
@@ -65,19 +80,29 @@ function OverviewTab() {
   const spotifyArtists = artists.filter((a) => a.spotify_artist_id?.trim());
   const [artistSid, setArtistSid] = useState<string>("");
   const effectiveArtist = artistSid || spotifyArtists[0]?.spotify_artist_id || "";
+  // Tracks, releases and the best-track tile follow the selected artist.
+  const artistId = spotifyArtists.find((a) => a.spotify_artist_id === effectiveArtist)?.id;
 
   const { data: kpis, isLoading: kpisLoading } = useQuery({
-    queryKey: ["pulse_kpis", effectiveArtist],
-    queryFn: () => pulseKpis(effectiveArtist || undefined),
+    queryKey: ["pulse_kpis", effectiveArtist, artistId],
+    queryFn: () => pulseKpis(effectiveArtist || undefined, artistId),
   });
-  const { data: tracked = [] } = useQuery({ queryKey: ["pulse_tracked"], queryFn: pulseTrackedList });
+  const { data: tracked = [] } = useQuery({
+    queryKey: ["pulse_tracked", artistId],
+    queryFn: () => pulseTrackedList(artistId),
+  });
   const [trackSid, setTrackSid] = useState<string>("");
-  const effectiveTrack = trackSid || tracked.find((x) => x.is_active)?.track_spotify_id || "";
+  // An archived track stays selected no more: fall back to the first active one.
+  const activeTracks = tracked.filter((x) => x.is_active);
+  const effectiveTrack =
+    (activeTracks.some((x) => x.track_spotify_id === trackSid) ? trackSid : "") ||
+    activeTracks[0]?.track_spotify_id ||
+    "";
   const [days, setDays] = useState(90);
 
   const { data: series } = useQuery({
-    queryKey: ["pulse_series", effectiveArtist, effectiveTrack, days],
-    queryFn: () => pulseSeries({ artist: effectiveArtist, track: effectiveTrack, days }),
+    queryKey: ["pulse_series", effectiveArtist, artistId, effectiveTrack, days],
+    queryFn: () => pulseSeries({ artist: effectiveArtist, artistId, track: effectiveTrack, days }),
   });
 
   const [snapping, setSnapping] = useState(false);
@@ -104,17 +129,23 @@ function OverviewTab() {
 
   const [newTrack, setNewTrack] = useState("");
   const addTrack = useMutation({
-    mutationFn: () => pulseTrackedAdd(newTrack.trim()),
+    mutationFn: () => pulseTrackedAdd(newTrack.trim(), artistId),
     onSuccess: () => {
       setNewTrack("");
       qc.invalidateQueries({ queryKey: ["pulse_tracked"] });
+      qc.invalidateQueries({ queryKey: ["pulse_kpis"] });
+      qc.invalidateQueries({ queryKey: ["pulse_series"] });
       toast(t("common.save"), "ok");
     },
     onError: (e: any) => toast(e?.toString?.() ?? "error", "error"),
   });
   const toggleTrack = useMutation({
     mutationFn: (p: { id: number; active: boolean }) => pulseTrackedToggle(p.id, p.active),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["pulse_tracked"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pulse_tracked"] });
+      // The best-track tile only considers active tracks.
+      qc.invalidateQueries({ queryKey: ["pulse_kpis"] });
+    },
   });
 
   const delta = (d?: number | null) =>
@@ -137,22 +168,22 @@ function OverviewTab() {
     <div className="space-y-5">
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-2">
-        <select className="input w-auto" value={artistSid} onChange={(e) => setArtistSid(e.target.value)}>
+        <select className="input w-auto" value={effectiveArtist} onChange={(e) => setArtistSid(e.target.value)}>
           {spotifyArtists.map((a) => (
             <option key={a.id} value={a.spotify_artist_id!}>
               {a.name}
             </option>
           ))}
         </select>
-        <select className="input w-auto" value={trackSid} onChange={(e) => setTrackSid(e.target.value)}>
-          <option value="">{t("pulse.pick_track")}</option>
-          {tracked
-            .filter((x) => x.is_active)
-            .map((x) => (
-              <option key={x.id} value={x.track_spotify_id}>
-                {x.name || x.track_spotify_id}
-              </option>
-            ))}
+        {/* Shows the track the chart actually plots: with value={trackSid} the
+            select read "pick a track" while the first track was already drawn. */}
+        <select className="input w-auto" value={effectiveTrack} onChange={(e) => setTrackSid(e.target.value)}>
+          {activeTracks.length === 0 && <option value="">{t("pulse.pick_track")}</option>}
+          {activeTracks.map((x) => (
+            <option key={x.id} value={x.track_spotify_id}>
+              {x.name || x.track_spotify_id}
+            </option>
+          ))}
         </select>
         <div className="segmented">
           {[30, 90, 180].map((d) => (

@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FileSpreadsheet, Upload, ArrowRight, Check } from "lucide-react";
-import { importFile, previewFile } from "../lib/api";
+import { importFile, listArtists, previewFile } from "../lib/api";
 import type { FilePreview } from "../lib/types";
 import { CATEGORIES, IMPORT_FIELDS } from "../lib/constants";
 import { PageHeader } from "../components/Layout";
@@ -12,6 +12,19 @@ import { Field, useToast } from "../components/ui";
 /** Guess a field for a given header label. */
 function guessField(header: string): string {
   const h = header.toLowerCase().trim();
+  // Exact labels first: substring rules alone sent "Event date" to name and
+  // "Venue type" to venue, leaving date / type unmapped.
+  const exact: Record<string, string> = {
+    "venue type": "type",
+    "event date": "date",
+    "first contact": "first_contact",
+    "email status": "email_status",
+    "follow up": "follow_up",
+    "follow-up": "follow_up",
+    "contact channel": "contact_channel",
+  };
+  if (exact[h]) return exact[h];
+  for (const f of IMPORT_FIELDS) if (h === f || h === f.replace("_", " ")) return f;
   const rules: [string, string][] = [
     ["name", "name"],
     ["event", "name"],
@@ -58,6 +71,12 @@ export function Import() {
   const [category, setCategory] = useState("venue");
   const [mapping, setMapping] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState(false);
+  // Artist the imported rows belong to: the only artist by default, so a
+  // one-artist roster never gets contacts without an artist again.
+  const { data: artists = [] } = useQuery({ queryKey: ["artists"], queryFn: listArtists });
+  const [artistChoice, setArtistChoice] = useState<string | null>(null);
+  const artistValue =
+    artistChoice ?? (artists.length === 1 && artists[0].id != null ? String(artists[0].id) : "");
 
   const sheet = preview?.sheets[sheetIdx];
 
@@ -85,9 +104,15 @@ export function Import() {
   const applyGuess = (p: FilePreview, idx: number) => {
     const s = p.sheets[idx];
     const m: Record<number, string> = {};
+    // One column per field: a second "...name" column stays unmapped instead
+    // of showing as mapped while the import silently uses only the first.
+    const taken = new Set<string>();
     s?.headers.forEach((h, i) => {
       const f = guessField(h);
-      if (f) m[i] = f;
+      if (f && !taken.has(f)) {
+        m[i] = f;
+        taken.add(f);
+      }
     });
     setMapping(m);
   };
@@ -120,13 +145,20 @@ export function Import() {
         category,
         mapping: fieldMap,
         skip_rows: sheet.header_row + 1,
+        artist_id: artistValue ? Number(artistValue) : null,
       });
       toast(
-        t("import.done", { inserted: res.inserted, skipped: res.skipped }),
+        t("import.done", {
+          inserted: res.inserted,
+          skipped: res.skipped,
+          duplicates: res.duplicates ?? 0,
+        }),
         "ok"
       );
       qc.invalidateQueries({ queryKey: ["contacts"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["vi_venues"] });
+      qc.invalidateQueries({ queryKey: ["artist"] });
       // reset
       setPath(null);
       setPreview(null);
@@ -141,7 +173,7 @@ export function Import() {
   return (
     <div>
       <PageHeader title={t("import.title")} subtitle={t("import.subtitle")} />
-      <div className="px-8 pb-10 pt-6">
+      <div className="px-page pb-10 pt-6">
         {!preview ? (
           <button
             onClick={pickFile}
@@ -201,6 +233,22 @@ export function Import() {
                   ))}
                 </select>
               </Field>
+              {artists.length > 0 && (
+                <Field label={t("import.artist")}>
+                  <select
+                    className="input"
+                    value={artistValue}
+                    onChange={(e) => setArtistChoice(e.target.value)}
+                  >
+                    {artists.map((a) => (
+                      <option key={a.id} value={String(a.id)}>
+                        {a.name}
+                      </option>
+                    ))}
+                    <option value="">{t("contacts.no_artist")}</option>
+                  </select>
+                </Field>
+              )}
             </div>
 
             {/* Mapping */}

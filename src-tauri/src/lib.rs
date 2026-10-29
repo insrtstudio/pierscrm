@@ -1,7 +1,9 @@
 mod commands;
+mod crm_links;
 mod db;
 mod menu;
 mod models;
+mod secrets;
 
 use db::DbPool;
 use std::collections::HashSet;
@@ -66,6 +68,11 @@ pub fn run() {
             fs::create_dir_all(&dir).ok();
             let db_path = dir.join("pierscrm.db");
             let pool = db::init_pool(&db_path).expect("failed to init database");
+            // Move secrets still in clear in `settings` to the Keychain (verified
+            // before the DB copy is blanked; on failure the DB copy is kept).
+            if let Ok(conn) = pool.get() {
+                secrets::migrate(&conn);
+            }
             let pool_for_pulse = pool.clone();
             app.manage(AppState {
                 pool,
@@ -79,6 +86,7 @@ pub fn run() {
             // artists
             commands::artists::list_artists,
             commands::artists::get_artist,
+            commands::artists::get_artist_avatar,
             commands::artists::save_artist,
             commands::artists::delete_artist,
             commands::artists::image_to_data_url,
@@ -90,6 +98,14 @@ pub fn run() {
             commands::contacts::update_contact_status,
             commands::contacts::delete_contact,
             commands::contacts::delete_contacts,
+            // module links (audit items 5, 9, 10, 16, 17)
+            commands::contacts::count_contacts,
+            commands::contacts::update_contacts_status,
+            commands::contacts::assign_contacts_artist,
+            commands::contacts::list_organisations,
+            commands::contacts::save_organisation,
+            commands::contacts::delete_organisation,
+            commands::visa::list_event_visas,
             commands::contacts::list_followups,
             commands::contacts::dismiss_followup,
             // import
@@ -107,6 +123,18 @@ pub fn run() {
             commands::campaigns::list_campaigns,
             commands::campaigns::save_campaign,
             commands::campaigns::delete_campaign,
+            commands::campaigns::list_campaign_recipients,
+            commands::campaigns::add_to_campaign,
+            commands::campaigns::remove_from_campaign,
+            commands::campaigns::list_campaign_audience,
+            // outbox guardrails + reply detection
+            commands::outbox::list_suppressions,
+            commands::outbox::add_suppression,
+            commands::outbox::remove_suppression,
+            commands::outbox::send_quota,
+            commands::outbox::list_emails_page,
+            commands::outbox::sync_replies,
+            commands::outbox::reply_sync_status,
             // events
             commands::events::list_events,
             commands::events::save_event,
@@ -125,6 +153,9 @@ pub fn run() {
             commands::vi::vi_list_areas,
             commands::vi::vi_save_area,
             commands::vi::vi_overview,
+            commands::vi::vi_exclude_venue,
+            commands::vi::vi_restore_venue,
+            commands::vi::vi_exclude_email,
             // venue intelligence (J2, harvest)
             commands::harvest::vi_resolve_area,
             commands::harvest::vi_resolve_all_areas,
@@ -132,6 +163,8 @@ pub fn run() {
             commands::harvest::vi_resume_run,
             commands::harvest::vi_list_runs,
             commands::harvest::vi_list_venues,
+            commands::harvest::vi_count_venues,
+            commands::harvest::vi_repair_contacts,
             commands::harvest::vi_venue_stats,
             commands::harvest::vi_promote_venue,
             commands::harvest::vi_promote_venues_bulk,
@@ -154,6 +187,10 @@ pub fn run() {
             commands::radar::radar_stats,
             commands::radar::radar_promote,
             commands::radar::radar_promote_bulk,
+            commands::radar::radar_repair_contacts,
+            commands::radar::radar_reject,
+            commands::radar::radar_restore,
+            commands::radar::radar_unpromote,
             // venue intelligence (J5, enrichment)
             commands::enrich::vi_start_enrich,
             commands::enrich::vi_venue_detail,
@@ -177,6 +214,7 @@ pub fn run() {
             commands::data::get_setting,
             commands::data::set_setting,
             commands::data::print_page,
+            menu::set_menu_lang,
             commands::data::dashboard_stats,
         ])
         .run(tauri::generate_context!())

@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Artist,
+  AudienceRow,
+  EmailFilter,
+  EmailPage,
+  ReplySyncResult,
+  ReplySyncStatus,
+  SendQuota,
+  Suppression,
   BudgetItem,
   BulkResult,
   Campaign,
@@ -8,6 +15,8 @@ import type {
   DashboardStats,
   EmailLog,
   Event,
+  EventVisa,
+  Organisation,
   FilePreview,
   Followup,
   ImportResult,
@@ -23,24 +32,59 @@ import type {
 // ---- Artists ----
 export const listArtists = () => invoke<Artist[]>("list_artists");
 export const getArtist = (id: number) => invoke<Artist | null>("get_artist", { id });
+/** The base64 avatar, kept out of `listArtists` (see useArtistAvatar). */
+export const getArtistAvatar = (id: number) => invoke<string | null>("get_artist_avatar", { id });
 export const saveArtist = (artist: Artist) => invoke<number>("save_artist", { artist });
 export const deleteArtist = (id: number) => invoke<void>("delete_artist", { id });
 export const imageToDataUrl = (path: string) =>
   invoke<string>("image_to_data_url", { path });
 
 // ---- Contacts ----
+// List rows are light (no notes / reason): load the full row with getContact
+// before editing. Without `limit` the whole result comes back.
 export const listContacts = (p: {
   category?: string;
   status?: string;
   search?: string;
   artist_id?: number | null;
+  organisation_id?: number | null;
+  sort?: string;
+  limit?: number;
+  offset?: number;
 }) =>
   invoke<Contact[]>("list_contacts", {
     category: p.category,
     status: p.status,
     search: p.search,
     artistId: p.artist_id ?? null,
+    organisationId: p.organisation_id ?? null,
+    sort: p.sort ?? null,
+    limit: p.limit ?? null,
+    offset: p.offset ?? null,
   });
+// Same filters as listContacts: the size of that list.
+export const countContacts = (p: {
+  category?: string;
+  status?: string;
+  search?: string;
+  artist_id?: number | null;
+  organisation_id?: number | null;
+}) =>
+  invoke<number>("count_contacts", {
+    category: p.category,
+    status: p.status,
+    search: p.search,
+    artistId: p.artist_id ?? null,
+    organisationId: p.organisation_id ?? null,
+  });
+export const updateContactsStatus = (ids: number[], status: string) =>
+  invoke<number>("update_contacts_status", { ids, status });
+export const assignContactsArtist = (ids: number[], artistId: number | null) =>
+  invoke<number>("assign_contacts_artist", { ids, artistId });
+export const listOrganisations = () => invoke<Organisation[]>("list_organisations");
+export const saveOrganisation = (organisation: Organisation) =>
+  invoke<number>("save_organisation", { organisation });
+export const deleteOrganisation = (id: number) => invoke<void>("delete_organisation", { id });
 export const getContact = (id: number) => invoke<Contact | null>("get_contact", { id });
 export const createContact = (contact: Contact) => invoke<number>("create_contact", { contact });
 export const updateContact = (contact: Contact) => invoke<void>("update_contact", { contact });
@@ -57,6 +101,8 @@ export const importFile = (req: {
   category: string;
   mapping: Record<string, number>;
   skip_rows: number;
+  /// null = no artist; omitted = the only artist, if there is one.
+  artist_id?: number | null;
 }) => invoke<ImportResult>("import_file", { req });
 
 // ---- Email ----
@@ -99,6 +145,28 @@ export const sendBulk = (p: {
 export const applyOpens = (
   opens: { token: string; opened_at?: string; count?: number }[]
 ) => invoke<number>("apply_opens", { opens });
+// Paged history. Filter fields stay snake_case: they are a struct, not args.
+export const listEmailsPage = (p: EmailFilter & { limit?: number; offset?: number }) =>
+  invoke<EmailPage>("list_emails_page", {
+    filter: {
+      campaign_id: p.campaign_id ?? null,
+      status: p.status ?? null,
+      opened: p.opened ?? null,
+      replied: p.replied ?? null,
+      search: p.search ?? null,
+    },
+    limit: p.limit ?? null,
+    offset: p.offset ?? null,
+  });
+// Sending guardrails
+export const listSuppressions = () => invoke<Suppression[]>("list_suppressions");
+export const addSuppression = (address: string, reason: string, note?: string) =>
+  invoke<number>("add_suppression", { address, reason, note: note ?? null });
+export const removeSuppression = (id: number) => invoke<void>("remove_suppression", { id });
+export const sendQuota = () => invoke<SendQuota>("send_quota");
+// Reply detection (read-only IMAP scan)
+export const syncReplies = () => invoke<ReplySyncResult>("sync_replies");
+export const replySyncStatus = () => invoke<ReplySyncStatus>("reply_sync_status");
 
 // ---- Visa ----
 export const listVisaCountries = () =>
@@ -111,12 +179,24 @@ export const listDossiers = () => invoke<VisaDossier[]>("list_dossiers");
 export const saveDossier = (dossier: VisaDossier) =>
   invoke<number>("save_dossier", { dossier });
 export const deleteDossier = (id: number) => invoke<void>("delete_dossier", { id });
+export const listEventVisas = (p: { from?: string; to?: string }) =>
+  invoke<EventVisa[]>("list_event_visas", { from: p.from ?? null, to: p.to ?? null });
 
 // ---- Campaigns ----
 export const listCampaigns = () => invoke<Campaign[]>("list_campaigns");
 export const saveCampaign = (campaign: Campaign) =>
   invoke<number>("save_campaign", { campaign });
 export const deleteCampaign = (id: number) => invoke<void>("delete_campaign", { id });
+export const listCampaignRecipients = (campaignId: number) =>
+  invoke<number[]>("list_campaign_recipients", { campaignId });
+// Campaign audience (campaign_contacts): planned recipients and their state.
+// Returns how many contacts were newly added (already present ones are kept).
+export const addToCampaign = (campaignId: number, contactIds: number[]) =>
+  invoke<number>("add_to_campaign", { campaignId, contactIds });
+export const removeFromCampaign = (campaignId: number, contactIds: number[]) =>
+  invoke<number>("remove_from_campaign", { campaignId, contactIds });
+export const listCampaignAudience = (campaignId: number) =>
+  invoke<AudienceRow[]>("list_campaign_audience", { campaignId });
 
 // ---- Events ----
 export const listEvents = (p: {
@@ -204,6 +284,10 @@ export const viListVenues = (p: {
   has_website?: boolean;
   contacted?: boolean;
   played?: boolean;
+  /** Audience cities of the targeted artist: venues there sort first (in SQL). */
+  target_cities?: string[];
+  /** Only venues in target_cities. */
+  target_only?: boolean;
   limit?: number;
   offset?: number;
 }) =>
@@ -218,15 +302,37 @@ export const viListVenues = (p: {
     hasWebsite: p.has_website,
     contacted: p.contacted,
     played: p.played,
+    targetCities: p.target_cities,
+    targetOnly: p.target_only,
     limit: p.limit,
     offset: p.offset,
   });
+// Same filters as viListVenues, so the count is the size of that list.
+export const viCountVenues = (p: Omit<Parameters<typeof viListVenues>[0], "limit" | "offset">) =>
+  invoke<number>("vi_count_venues", {
+    statut: p.statut,
+    pays: p.pays,
+    search: p.search,
+    hasEmail: p.has_email,
+    hasPhone: p.has_phone,
+    hasWebsite: p.has_website,
+    contacted: p.contacted,
+    played: p.played,
+    targetCities: p.target_cities,
+    targetOnly: p.target_only,
+  });
 export const viVenueStats = () => invoke<ViVenueStats>("vi_venue_stats");
+export const viRepairContacts = () => invoke<number>("vi_repair_contacts");
 export const viPromoteVenue = (id: number) => invoke<number>("vi_promote_venue", { id });
 export const viPromoteVenuesBulk = (withEmailOnly = true) =>
   invoke<number>("vi_promote_venues_bulk", { withEmailOnly });
-export const viStartEnrich = (force?: boolean) =>
-  invoke<number>("vi_start_enrich", { force: force ?? false });
+export const viStartEnrich = (force?: boolean, onlyMissingEmail?: boolean) =>
+  invoke<number>("vi_start_enrich", { force: force ?? false, onlyMissingEmail: onlyMissingEmail ?? false });
+export const viExcludeVenue = (id: number, raison?: string) =>
+  invoke<void>("vi_exclude_venue", { id, raison: raison ?? null });
+export const viRestoreVenue = (id: number) => invoke<void>("vi_restore_venue", { id });
+export const viExcludeEmail = (email: string, raison?: string) =>
+  invoke<number>("vi_exclude_email", { email, raison: raison ?? null });
 export const viVenueDetail = (id: number) =>
   invoke<ViVenueFiche>("vi_venue_detail", { id });
 
@@ -234,15 +340,18 @@ export const viVenueDetail = (id: number) =>
 import type { PulseKpis, PulseReport, PulseSeries, TrackedTrack, WatchRow } from "./types";
 
 export const pulseSnapshot = () => invoke<PulseReport>("pulse_snapshot");
-export const pulseKpis = (artistSpotifyId?: string) =>
-  invoke<PulseKpis>("pulse_kpis", { artistSpotifyId: artistSpotifyId ?? null });
-export const pulseSeries = (p: { artist?: string; track?: string; days: number }) =>
+export const pulseKpis = (artistSpotifyId?: string, artistId?: number) =>
+  invoke<PulseKpis>("pulse_kpis", { artistSpotifyId: artistSpotifyId ?? null, artistId: artistId ?? null });
+export const pulseSeries = (p: { artist?: string; artistId?: number; track?: string; days: number }) =>
   invoke<PulseSeries>("pulse_series", {
     artistSpotifyId: p.artist ?? null,
+    artistId: p.artistId ?? null,
     trackSpotifyId: p.track ?? null,
     days: p.days,
   });
-export const pulseTrackedList = () => invoke<TrackedTrack[]>("pulse_tracked_list");
+/** Tracks of one artist plus the unassigned ones (all tracks when no artist). */
+export const pulseTrackedList = (artistId?: number) =>
+  invoke<TrackedTrack[]>("pulse_tracked_list", { artistId: artistId ?? null });
 export const pulseTrackedAdd = (input: string, artistId?: number) =>
   invoke<void>("pulse_tracked_add", { input, artistId: artistId ?? null });
 export const pulseTrackedToggle = (id: number, active: boolean) =>
@@ -260,12 +369,18 @@ export const radarHarvest = (genres: string[], sources: string[], limit?: number
 export const radarEnrich = (force?: boolean) =>
   invoke<number>("radar_enrich", { force: force ?? false });
 /// `filter` is "all", "email" (addressable) or "pipeline" (already promoted).
-export const radarList = (p: { filter?: string; search?: string; limit?: number }) =>
+export const radarList = (p: { filter?: string; kind?: string; search?: string; limit?: number }) =>
   invoke<CuratorRow[]>("radar_list", {
     filter: p.filter,
+    kind: p.kind,
     search: p.search,
     limit: p.limit,
   });
 export const radarStats = () => invoke<RadarStats>("radar_stats");
 export const radarPromote = (id: number) => invoke<number>("radar_promote", { id });
 export const radarPromoteBulk = () => invoke<number>("radar_promote_bulk");
+export const radarRepairContacts = () => invoke<number>("radar_repair_contacts");
+export const radarReject = (ids: number[]) => invoke<number>("radar_reject", { ids });
+export const radarRestore = (ids: number[]) => invoke<number>("radar_restore", { ids });
+/** Resolves true when the contact was deleted, false when it was only unlinked. */
+export const radarUnpromote = (id: number) => invoke<boolean>("radar_unpromote", { id });

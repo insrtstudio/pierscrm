@@ -26,6 +26,8 @@
    ------------------------------------------------------------------ */
 @layer base {
   :root {
+    /* Horizontal page gutter: tight on a small window, generous on a large one. */
+    --page-x: clamp(16px, 2.4vw, 48px);
     /* ---- PAPER ---- */
     --bg: 235 233 227;          /* #ebe9e3 */
     --surface: 242 241 237;     /* cards, inputs: a touch lighter than paper */

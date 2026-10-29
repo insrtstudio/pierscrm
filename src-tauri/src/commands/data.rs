@@ -68,7 +68,7 @@ pub fn delete_template(state: State<'_, AppState>, id: i64) -> Result<(), String
 pub fn list_budget(state: State<'_, AppState>) -> Result<Vec<BudgetItem>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, category, item, min_cost, max_cost, actual, kind, notes, sort FROM budget_items ORDER BY kind, sort, id")
+        .prepare("SELECT id, category, item, min_cost, max_cost, actual, kind, notes, sort, event_id FROM budget_items ORDER BY kind, sort, id")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
@@ -82,6 +82,7 @@ pub fn list_budget(state: State<'_, AppState>) -> Result<Vec<BudgetItem>, String
                 kind: r.get(6)?,
                 notes: r.get(7)?,
                 sort: r.get(8)?,
+                event_id: r.get(9)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -96,6 +97,17 @@ pub fn list_budget(state: State<'_, AppState>) -> Result<Vec<BudgetItem>, String
 pub fn save_budget_item(state: State<'_, AppState>, item: BudgetItem) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     match item.id {
+        // A gig's line belongs to its event: amount and kind stay what the
+        // Agenda says (only the label, category and notes are editable), and
+        // event_id is never written from here.
+        Some(id) if linked_event(&conn, id).is_some() => {
+            conn.execute(
+                "UPDATE budget_items SET category=?2, item=?3, notes=?4, sort=?5 WHERE id=?1",
+                params![id, item.category, item.item, item.notes, item.sort],
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(id)
+        }
         Some(id) => {
             conn.execute(
                 "UPDATE budget_items SET category=?2, item=?3, min_cost=?4, max_cost=?5, actual=?6, kind=?7, notes=?8, sort=?9 WHERE id=?1",
@@ -118,9 +130,95 @@ pub fn save_budget_item(state: State<'_, AppState>, item: BudgetItem) -> Result<
 #[tauri::command(async)]
 pub fn delete_budget_item(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
+    // Deleting a gig's line would only last until the next sync: the fee is
+    // removed by cancelling or editing the event in the Agenda.
+    if linked_event(&conn, id).is_some() {
+        return Err("This line follows an Agenda event: change the event instead.".into());
+    }
     conn.execute("DELETE FROM budget_items WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn linked_event(conn: &rusqlite::Connection, budget_id: i64) -> Option<i64> {
+    conn.query_row(
+        "SELECT event_id FROM budget_items WHERE id=?1",
+        params![budget_id],
+        |r| r.get::<_, Option<i64>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+/// Keep the revenue line of one Agenda event in step with it (audit item 7).
+///
+/// A confirmed gig with a fee owns exactly one `kind='revenue'` line carrying
+/// its `event_id`; any other state (hold, cancelled, no fee, event deleted)
+/// owns none. The fee therefore exists once, in budget_items, and every total
+/// (Budget page, dashboard net) reads it from there: there is no separate
+/// "gig fees" sum to add on top any more, so it cannot be counted twice.
+///
+/// Call it after any write to an event (save, delete, status change).
+pub(crate) fn sync_event_budget(conn: &rusqlite::Connection, event_id: i64) -> rusqlite::Result<()> {
+    use rusqlite::OptionalExtension;
+    let ev: Option<(String, String, Option<String>, Option<String>, String, Option<f64>)> = conn
+        .query_row(
+            "SELECT title, date, venue, city, status, fee FROM events WHERE id=?1",
+            params![event_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+        )
+        .optional()?;
+    match ev {
+        Some((title, date, venue, city, status, Some(fee))) if status == "confirmed" && fee > 0.0 => {
+            let updated = conn.execute(
+                "UPDATE budget_items SET actual=?2, kind='revenue', min_cost=0, max_cost=0,
+                    item=CASE WHEN trim(item)='' THEN ?3 ELSE item END
+                 WHERE event_id=?1",
+                params![event_id, fee, title],
+            )?;
+            if updated == 0 {
+                let notes = [Some(date), venue, city]
+                    .into_iter()
+                    .flatten()
+                    .filter(|s| !s.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                conn.execute(
+                    "INSERT INTO budget_items (category, item, min_cost, max_cost, actual, kind, notes, sort, event_id)
+                     VALUES (NULL, ?1, 0, 0, ?2, 'revenue', ?3,
+                             (SELECT COALESCE(MAX(sort), 0) + 1 FROM budget_items), ?4)",
+                    params![title, fee, notes, event_id],
+                )?;
+            }
+        }
+        _ => {
+            conn.execute("DELETE FROM budget_items WHERE event_id=?1", params![event_id])?;
+        }
+    }
+    Ok(())
+}
+
+/// `sync_event_budget` for every event, plus cleanup of lines whose event is
+/// gone. Run at startup so any path that changed an event is caught up.
+pub(crate) fn sync_all_event_budgets(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let ids: Vec<i64> = {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM events
+             UNION SELECT event_id FROM budget_items WHERE event_id IS NOT NULL",
+        )?;
+        let it = stmt.query_map([], |r| r.get(0))?;
+        it.collect::<rusqlite::Result<_>>()?
+    };
+    for id in ids {
+        sync_event_budget(conn, id)?;
+    }
+    Ok(())
+}
+
+/// Total Meta Ads spend recorded by Audience (read-only, shown as an expense).
+pub(crate) fn ad_spend_total(conn: &rusqlite::Connection) -> f64 {
+    conn.query_row("SELECT COALESCE(SUM(spend), 0) FROM pulse_meta_spend", [], |r| r.get(0))
+        .unwrap_or(0.0)
 }
 
 // ---------- Tasks ----------
@@ -258,21 +356,19 @@ pub fn delete_kpi(state: State<'_, AppState>, id: i64) -> Result<(), String> {
 #[tauri::command(async)]
 pub fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
-    let v: Option<String> = conn
-        .query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| r.get(0))
-        .ok();
-    Ok(v)
+    // Secrets come back masked (see crate::secrets), never in clear.
+    Ok(crate::secrets::ui_setting(&conn, &key))
 }
 
 #[tauri::command(async)]
 pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT INTO settings (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![key, value],
-    )
-    .map_err(|e| e.to_string())?;
+    // Secret keys go to the Keychain; an unchanged masked value is a no-op.
+    crate::secrets::write_setting(&conn, &key, &value)?;
+    // New Spotify credentials must not keep using a token minted for the old ones.
+    if key.starts_with("spotify_") {
+        crate::commands::spotify::invalidate_token_cache();
+    }
     Ok(())
 }
 
@@ -293,12 +389,26 @@ pub struct DashboardStats {
     pub by_category: HashMap<String, i64>,
     pub total_contacts: i64,
     pub emails_sent: i64,
+    /// Sent emails with at least one tracked open (open rate numerator).
+    pub emails_opened: i64,
     pub budget_min: f64,
     pub budget_max: f64,
     pub budget_actual: f64,
+    /// All revenue lines, gig fees included (they are budget lines linked to
+    /// their event, see `sync_event_budget`).
     pub revenue_actual: f64,
+    /// Part of `revenue_actual` coming from confirmed Agenda gigs. Informative
+    /// only: never add it to `revenue_actual`.
+    pub gig_fees: f64,
+    /// Meta Ads spend recorded by Audience. Not in `budget_actual`; `net`
+    /// accounts for it.
+    pub ad_spend: f64,
+    /// revenue_actual - budget_actual - ad_spend.
+    pub net: f64,
     pub tasks_done: i64,
     pub tasks_total: i64,
+    /// Open tasks whose due date is today or earlier.
+    pub tasks_overdue: i64,
 }
 
 #[tauri::command(async)]
@@ -340,6 +450,22 @@ pub fn dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStats, Str
         .query_row("SELECT COUNT(*) FROM emails WHERE status='sent'", [], |r| r.get(0))
         .unwrap_or(0);
 
+    let emails_opened: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM emails WHERE status='sent' AND opened_at IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let gig_fees: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(actual),0) FROM budget_items WHERE kind='revenue' AND event_id IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+    let ad_spend = ad_spend_total(&conn);
+
     let (budget_min, budget_max, budget_actual): (f64, f64, f64) = conn
         .query_row(
             "SELECT COALESCE(SUM(min_cost),0), COALESCE(SUM(max_cost),0), COALESCE(SUM(actual),0) FROM budget_items WHERE kind='expense'",
@@ -361,17 +487,30 @@ pub fn dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStats, Str
     let tasks_done: i64 = conn
         .query_row("SELECT COUNT(*) FROM tasks WHERE done=1", [], |r| r.get(0))
         .unwrap_or(0);
+    let tasks_overdue: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE done=0 AND due_date IS NOT NULL AND due_date <> ''
+               AND due_date <= date('now','localtime')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
 
     Ok(DashboardStats {
         by_status,
         by_category,
         total_contacts,
         emails_sent,
+        emails_opened,
         budget_min,
         budget_max,
         budget_actual,
         revenue_actual,
+        gig_fees,
+        ad_spend,
+        net: revenue_actual - budget_actual - ad_spend,
         tasks_done,
         tasks_total,
+        tasks_overdue,
     })
 }

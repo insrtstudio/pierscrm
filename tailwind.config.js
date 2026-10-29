@@ -4,6 +4,8 @@ export default {
   darkMode: "class",
   theme: {
     extend: {
+      // Page gutter that breathes with the window (see --page-x).
+      spacing: { page: "var(--page-x)" },
       colors: {
         bg: "rgb(var(--bg) / <alpha-value>)",
         surface: "rgb(var(--surface) / <alpha-value>)",

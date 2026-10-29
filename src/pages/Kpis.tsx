@@ -37,13 +37,13 @@ export function Kpis() {
           </button>
         }
       />
-      <div className="px-8 pb-10 pt-6">
+      <div className="px-page pb-10 pt-6">
         {kpis.length === 0 ? (
           <div className="card">
             <EmptyState icon={Target} title={t("common.empty")} />
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
             {kpis.map((k) => (
               <div key={k.id} className="card group p-5">
                 <div className="flex items-start justify-between">

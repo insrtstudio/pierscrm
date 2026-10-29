@@ -14,7 +14,7 @@
 use crate::commands::ra;
 use crate::db::{normalise, DbPool};
 use crate::{AppState, CancelSet};
-use chrono::{Datelike, Duration, NaiveDate, Utc};
+use chrono::{Duration, NaiveDate, Utc};
 use rusqlite::params;
 use serde::Serialize;
 use serde_json::json;
@@ -53,7 +53,26 @@ pub struct RunProgress {
     pub tasks_echec: i64,
     pub venues: i64,
     pub evidence: i64,
+    /// English fallback of `code`, for anything that does not translate.
     pub message: Option<String>,
+    /// Stable key the UI translates (`vi_progress.<code>` in the i18n files),
+    /// with its interpolation values in `args`. The worker used to send French
+    /// sentences only, so the English UI showed French progress lines.
+    pub code: Option<String>,
+    pub args: Option<serde_json::Value>,
+}
+
+/// One progress line: a translatable code, its values, and the English text.
+pub(crate) struct ProgressMsg {
+    pub code: &'static str,
+    pub args: serde_json::Value,
+    pub text: String,
+}
+
+impl ProgressMsg {
+    fn new(code: &'static str, args: serde_json::Value, text: String) -> Self {
+        Self { code, args, text }
+    }
 }
 
 fn run_stats(pool: &DbPool, run_id: i64) -> RunProgress {
@@ -82,12 +101,18 @@ fn run_stats(pool: &DbPool, run_id: i64) -> RunProgress {
         venues: one("SELECT COUNT(*) FROM vi_venues", &[]),
         evidence: one("SELECT COUNT(*) FROM vi_evidence", &[]),
         message: None,
+        code: None,
+        args: None,
     }
 }
 
-fn emit(app: &AppHandle, pool: &DbPool, run_id: i64, message: Option<String>) {
+fn emit(app: &AppHandle, pool: &DbPool, run_id: i64, msg: Option<ProgressMsg>) {
     let mut p = run_stats(pool, run_id);
-    p.message = message;
+    if let Some(m) = msg {
+        p.message = Some(m.text);
+        p.code = Some(m.code.to_string());
+        p.args = Some(m.args);
+    }
     let _ = app.emit("vi:run-progress", p);
 }
 
@@ -212,7 +237,7 @@ pub async fn vi_start_harvest(
         }
     }
     if areas.is_empty() {
-        return Err("Aucune zone résolue à moissonner. Résolvez d'abord les area ids.".into());
+        return Err("vi.no_resolved_areas".into());
     }
 
     let wins = windows(year_from, year_to);
@@ -254,7 +279,7 @@ pub async fn vi_resume_run(
     run_id: i64,
 ) -> Result<(), String> {
     if run_is_active(run_id) {
-        return Err("Cette collecte tourne encore, attends qu'elle soit arrêtée.".into());
+        return Err("vi.run_still_active".into());
     }
     // Clear any stale stop flag first, otherwise the resumed run would inherit the
     // cancel and immediately exit doing nothing.
@@ -333,13 +358,24 @@ fn run_final_stats(pool: &DbPool, run_id: i64) -> String {
 
 /// Human-readable "what am I doing right now" line for the current task, shown
 /// live in the UI (area + window for harvest, venue name for enrichment).
-fn describe_task(pool: &DbPool, task_type: &str, payload: &str) -> String {
+fn describe_task(pool: &DbPool, task_type: &str, payload: &str) -> ProgressMsg {
     let v: serde_json::Value = serde_json::from_str(payload).unwrap_or(serde_json::Value::Null);
     if task_type == "radar_harvest" {
-        return format!("Radar : {} sur {}", v["genre"].as_str().unwrap_or("?"), v["source"].as_str().unwrap_or("?"));
+        let (genre, source) = (v["genre"].as_str().unwrap_or("?"), v["source"].as_str().unwrap_or("?"));
+        return ProgressMsg::new(
+            "radar_harvest",
+            json!({ "genre": genre, "source": source }),
+            format!("Radar: {} on {}", genre, source),
+        );
     }
     if task_type == "radar_enrich" {
-        return format!("Radar enrichissement : curateur #{}", v["curator_id"].as_i64().unwrap_or(0));
+        let id = v["curator_id"].as_i64().unwrap_or(0);
+        let nom: Option<String> = pool.get().ok().and_then(|c| {
+            c.query_row("SELECT nom FROM radar_curators WHERE id=?1", params![id], |r| r.get(0))
+                .ok()
+        });
+        let name = nom.unwrap_or_else(|| format!("#{}", id));
+        return ProgressMsg::new("radar_enrich", json!({ "name": name }), format!("Email search: {}", name));
     }
     if task_type == "enrich_venue" {
         let vid = v["venue_id"].as_i64().unwrap_or(0);
@@ -347,12 +383,22 @@ fn describe_task(pool: &DbPool, task_type: &str, payload: &str) -> String {
             c.query_row("SELECT nom FROM vi_venues WHERE id=?1", params![vid], |r| r.get(0))
                 .ok()
         });
-        format!("Enrichissement : {}", nom.unwrap_or_else(|| format!("lieu #{}", vid)))
+        let name = nom.unwrap_or_else(|| format!("#{}", vid));
+        let retry = v["retry"].as_bool().unwrap_or(false);
+        ProgressMsg::new(
+            if retry { "enrich_retry" } else { "enrich" },
+            json!({ "name": name }),
+            format!("Enrichment: {}", name),
+        )
     } else {
         let area = v["area_name"].as_str().unwrap_or("?");
         let gte = v["gte"].as_str().unwrap_or("").get(0..7).unwrap_or("");
         let lte = v["lte"].as_str().unwrap_or("").get(0..7).unwrap_or("");
-        format!("Moissonnage : {} ({} → {})", area, gte, lte)
+        ProgressMsg::new(
+            "harvest",
+            json!({ "area": area, "from": gte, "to": lte }),
+            format!("Harvest: {} ({} → {})", area, gte, lte),
+        )
     }
 }
 
@@ -448,7 +494,7 @@ pub fn spawn_worker(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i6
     }
     tauri::async_runtime::spawn(async move {
         let _active = ActiveRunGuard(run_id);
-        emit(&app, &pool, run_id, Some("Démarrage".into()));
+        emit(&app, &pool, run_id, Some(ProgressMsg::new("starting", json!({}), "Starting".into())));
         let (workers, politeness) = match pool.get() {
             Ok(conn) => (
                 setting_i64(&conn, "vi_workers").unwrap_or(3).clamp(1, 6),
@@ -490,7 +536,12 @@ pub fn spawn_worker(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i6
         if is_radar_scan && !stopped() {
             let queued = crate::commands::radar::queue_enrich_tasks(&pool, run_id);
             if queued > 0 {
-                emit(&app, &pool, run_id, Some(format!("Recherche d'emails ({queued})")));
+                emit(
+                    &app,
+                    &pool,
+                    run_id,
+                    Some(ProgressMsg::new("email_hunt", json!({ "count": queued }), format!("Email search ({queued})"))),
+                );
                 for h in spawn_drains() {
                     let _ = h.await;
                 }
@@ -526,7 +577,11 @@ pub fn spawn_worker(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i6
             &app,
             &pool,
             run_id,
-            Some(if cancelled { "Arrêté".into() } else { "Terminé".into() }),
+            Some(if cancelled {
+                ProgressMsg::new("stopped", json!({}), "Stopped".into())
+            } else {
+                ProgressMsg::new("finished", json!({}), "Finished".into())
+            }),
         );
     });
 }
@@ -616,9 +671,16 @@ async fn process_harvest_task(
                     Ok(x) => x,
                     Err(_) => continue,
                 };
+                // Excluded from the fiche: never re-added, never re-counted.
+                if crate::commands::vi::is_excluded(&conn, &crate::commands::vi::venue_exclusion_key(ra_venue_id)) {
+                    continue;
+                }
                 let norm = normalise(&venue.name);
                 let slug = format!("{}-{}", norm, ra_venue_id);
                 let ville = venue.area.as_ref().and_then(|a| a.name.clone());
+                // Accent-folded copy of the city: SQLite has no unaccent, and the
+                // artist-targeting sort compares against it (see vi_list_venues).
+                let ville_norm = ville.as_deref().map(normalise);
                 let pays = venue
                     .area
                     .as_ref()
@@ -629,17 +691,21 @@ async fn process_harvest_task(
                     .as_ref()
                     .map(|u| format!("https://ra.co{}", u));
 
+                // No `nb_events_periode + 1` here any more: re-harvesting an
+                // overlapping window counted the same events again (most areas
+                // were harvested 2 to 4 times, see the v1 dedup migration). The
+                // count is derived from vi_venue_events below instead.
                 let _ = conn.execute(
-                    "INSERT INTO vi_venues (slug, nom, nom_normalise, ville, pays, region_cible, ra_venue_id, ra_url, nb_events_periode)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,1)
+                    "INSERT INTO vi_venues (slug, nom, nom_normalise, ville, ville_norm, pays, region_cible, ra_venue_id, ra_url, nb_events_periode)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,0)
                      ON CONFLICT(ra_venue_id) DO UPDATE SET
-                        nb_events_periode = nb_events_periode + 1,
                         ville = COALESCE(vi_venues.ville, excluded.ville),
+                        ville_norm = COALESCE(vi_venues.ville_norm, excluded.ville_norm),
                         pays = COALESCE(vi_venues.pays, excluded.pays),
                         region_cible = COALESCE(vi_venues.region_cible, excluded.region_cible),
                         ra_url = COALESCE(vi_venues.ra_url, excluded.ra_url),
                         updated_at = datetime('now')",
-                    params![slug, venue.name, norm, ville, pays, region, ra_venue_id, ra_url],
+                    params![slug, venue.name, norm, ville, ville_norm, pays, region, ra_venue_id, ra_url],
                 );
                 let venue_id: i64 = match conn.query_row(
                     "SELECT id FROM vi_venues WHERE ra_venue_id=?1",
@@ -651,6 +717,26 @@ async fn process_harvest_task(
                 };
 
                 let date_event = ev.date.as_deref().unwrap_or("").chars().take(10).collect::<String>();
+
+                // Each RA event is counted once, however many runs see it.
+                let new_event = match ev.id.parse::<i64>() {
+                    Ok(eid) => conn
+                        .execute(
+                            "INSERT OR IGNORE INTO vi_venue_events (ra_event_id, venue_id, date_event) VALUES (?1,?2,?3)",
+                            params![eid, venue_id, date_event],
+                        )
+                        .map(|n| n > 0)
+                        .unwrap_or(false),
+                    Err(_) => false,
+                };
+                if new_event {
+                    let _ = conn.execute(
+                        "UPDATE vi_venues SET nb_events_periode = MAX(nb_events_legacy,
+                            (SELECT COUNT(*) FROM vi_venue_events e WHERE e.venue_id = ?1))
+                         WHERE id = ?1",
+                        params![venue_id],
+                    );
+                }
                 let source_url = ev
                     .content_url
                     .as_ref()
@@ -682,16 +768,27 @@ async fn process_harvest_task(
                     }
                 }
 
-                // Promoters aggregated per venue.
+                // Promoters aggregated per venue, counted once per event like the
+                // venue itself. Their RA page is kept so the email retry can reach
+                // the promoter's own site.
                 for promo in &ev.promoters {
                     if promo.name.trim().is_empty() {
                         continue;
                     }
-                    let _ = conn.execute(
-                        "INSERT INTO vi_promoters (venue_id, nom, nb_events) VALUES (?1,?2,1)
-                         ON CONFLICT(venue_id, nom) DO UPDATE SET nb_events = nb_events + 1",
-                        params![venue_id, promo.name],
-                    );
+                    let purl = promo.id.as_deref().and_then(ra::promoter_url);
+                    if new_event {
+                        let _ = conn.execute(
+                            "INSERT INTO vi_promoters (venue_id, nom, nb_events, ra_url) VALUES (?1,?2,1,?3)
+                             ON CONFLICT(venue_id, nom) DO UPDATE SET nb_events = nb_events + 1,
+                                ra_url = COALESCE(vi_promoters.ra_url, excluded.ra_url)",
+                            params![venue_id, promo.name, purl],
+                        );
+                    } else if purl.is_some() {
+                        let _ = conn.execute(
+                            "UPDATE vi_promoters SET ra_url = COALESCE(ra_url, ?3) WHERE venue_id=?1 AND nom=?2",
+                            params![venue_id, promo.name, purl],
+                        );
+                    }
                 }
             }
         }
@@ -718,6 +815,10 @@ fn qualify(pool: &DbPool) {
             statut = CASE
                 WHEN EXISTS(SELECT 1 FROM vi_evidence e WHERE e.venue_id = vi_venues.id) THEN 'qualifie'
                 WHEN nb_events_periode >= 12 THEN 'qualifie'
+                -- Once qualified, never demoted automatically: the event-count
+                -- dedup lowered inflated counts and would otherwise reject ~600
+                -- venues on an estimate.
+                WHEN statut = 'qualifie' THEN 'qualifie'
                 ELSE 'rejete' END,
             updated_at = datetime('now')
          WHERE statut NOT IN ('valide','archive')",
@@ -780,11 +881,45 @@ pub fn vi_list_runs(state: State<'_, AppState>) -> Result<Vec<RunRow>, String> {
     Ok(out)
 }
 
-// A venue is "contacted" when it's linked to a CRM contact, or a matching
-// contact (by venue/name) has actually been engaged. "played" when one of our
+/// An address on this many distinct venues or more came off a ticketing or
+/// listing page (Skiddle, Xceed, Fever...), not off the venue's own site: in the
+/// real data custcare@skiddle.com sat on 136 venues. Four, not radar's three, so
+/// a promoter group sharing one booking inbox across a few rooms still counts.
+const VENUE_SHARED_EMAIL_MIN: i64 = 4;
+
+/// SQL boolean over `col`: true when the address plausibly belongs to the venue
+/// itself. Every place that reads a venue email (filter, list, counters,
+/// promotion, repair) goes through this, so they all agree.
+pub(crate) fn own_email_sql(col: &str) -> String {
+    use super::radar::{NON_PITCH_LOCALS, PLACEHOLDER_SQL};
+    // One IN lookup on the local part instead of one LIKE per mailbox name:
+    // this runs for every address of every venue the email filter walks, and
+    // the 20 LIKEs were a third of the filtered list's time.
+    let locals = NON_PITCH_LOCALS.iter().map(|l| format!("'{l}'")).collect::<Vec<_>>().join(",");
+    let mut parts: Vec<String> = vec![format!(
+        "substr(lower({col}), 1, instr({col}, '@') - 1) IN ({locals})"
+    )];
+    parts.extend(PLACEHOLDER_SQL.iter().map(|p| format!("lower({col}) LIKE {p}")));
+    // Scraping artefact: a JSON-escaped string left a trailing backslash.
+    parts.push(format!("{col} LIKE '%\\'"));
+    // Uncorrelated, so SQLite builds this set once per statement.
+    parts.push(format!(
+        "lower({col}) IN (SELECT lower(valeur) FROM vi_contacts WHERE type='email'
+           GROUP BY lower(valeur) HAVING COUNT(DISTINCT venue_id) >= {VENUE_SHARED_EMAIL_MIN})"
+    ));
+    format!("NOT ({})", parts.join(" OR "))
+}
+
+// A venue is "contacted" when its CRM contact (or a contact matching it by
+// venue/name) has actually been engaged: an email went out, a first contact is
+// dated, or the status moved past "to contact". Merely being promoted into the
+// pipeline is not contact; that is what crm_contact_id / "in pipeline" shows. "played" when one of our
 // events happened there, or a matching booking is confirmed. Name-matched
 // because RA venues aren't hard-linked to the pipeline yet (that is J6).
-const CONTACTED_SQL: &str = "(v.crm_contact_id IS NOT NULL OR EXISTS(
+const CONTACTED_SQL: &str = "(EXISTS(SELECT 1 FROM contacts c WHERE c.id=v.crm_contact_id
+      AND (c.first_contact IS NOT NULL OR c.status IN ('contacted','followed_up','in_discussion','confirmed','declined')))
+    OR EXISTS(SELECT 1 FROM emails m WHERE m.contact_id=v.crm_contact_id AND m.status='sent')
+    OR EXISTS(
     SELECT 1 FROM contacts c
     WHERE (lower(trim(c.venue))=lower(trim(v.nom)) OR lower(trim(c.name))=lower(trim(v.nom)))
       AND (c.first_contact IS NOT NULL OR c.status IN ('contacted','followed_up','in_discussion','confirmed','declined'))))";
@@ -815,11 +950,48 @@ pub struct VenueRow {
     pub crm_contact_id: Option<i64>,
     pub contacted: bool,
     pub played: bool,
+    /// The venue's city is one of the targeted artist's audience cities.
+    pub is_target: bool,
 }
 
-#[tauri::command(async)]
-pub fn vi_list_venues(
-    state: State<'_, AppState>,
+/// Normalised, de-duplicated audience cities (same folding as vi_venues.ville_norm).
+fn norm_cities(cities: Option<Vec<String>>) -> Vec<String> {
+    let mut out: Vec<String> = cities
+        .unwrap_or_default()
+        .iter()
+        .map(|c| normalise(c))
+        .filter(|c| c.len() >= 2)
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// SQL boolean "this venue is in one of `cities`" over the accent-folded
+/// vi_venues.ville_norm, plus its bind values. Containment both ways, as the
+/// page did client-side: "London" matches "Greater London" and the reverse.
+/// None when no city is targeted.
+fn target_sql(cities: &[String]) -> Option<(String, Vec<Box<dyn rusqlite::ToSql>>)> {
+    if cities.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    for c in cities {
+        parts.push("instr(v.ville_norm, ?) > 0 OR instr(?, v.ville_norm) > 0");
+        args.push(Box::new(c.clone()));
+        args.push(Box::new(c.clone()));
+    }
+    Some((
+        format!("(COALESCE(v.ville_norm,'') != '' AND ({}))", parts.join(" OR ")),
+        args,
+    ))
+}
+
+/// The WHERE clause shared by the venue list and its count, so the number shown
+/// is always the size of the list being filtered.
+#[allow(clippy::too_many_arguments)]
+fn venue_filters(
     statut: Option<String>,
     pays: Option<String>,
     search: Option<String>,
@@ -828,19 +1000,20 @@ pub fn vi_list_venues(
     has_website: Option<bool>,
     contacted: Option<bool>,
     played: Option<bool>,
-    limit: Option<i64>,
-    offset: Option<i64>,
-) -> Result<Vec<VenueRow>, String> {
-    let conn = state.pool.get().map_err(|e| e.to_string())?;
-
-    // Filters and paging first, decoration second. Selecting the page in an inner
-    // query means the six correlated subqueries below run for the rows actually
-    // returned, not for every row the paging walks past: at OFFSET 20 000 that is
-    // the difference between 0.46 s and 0.06 s. The ORDER BY matches
-    // idx_vi_venues_sort so the inner query neither sorts nor scans.
+    only_in: &[String],
+) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
     let mut filters = String::new();
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    if let Some(s) = statut.filter(|s| !s.is_empty() && s != "all") {
+    // Restrict to the targeted cities (the "N venues in target cities" count).
+    if let Some((cond, a)) = target_sql(only_in) {
+        filters.push_str(&format!(" AND {cond}"));
+        args.extend(a);
+    }
+    // "actif" = everything still in play (not rejected). An IN list keeps the
+    // statut index usable, unlike a != test.
+    if statut.as_deref() == Some("actif") {
+        filters.push_str(" AND v.statut IN ('candidat','qualifie','valide')");
+    } else if let Some(s) = statut.filter(|s| !s.is_empty() && s != "all") {
         filters.push_str(" AND v.statut=?");
         args.push(Box::new(s));
     }
@@ -856,7 +1029,10 @@ pub fn vi_list_venues(
         args.push(Box::new(like));
     }
     if has_email == Some(true) {
-        filters.push_str(" AND EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email')");
+        filters.push_str(&format!(
+            " AND EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email' AND {})",
+            own_email_sql("c.valeur")
+        ));
     }
     if has_phone == Some(true) {
         filters.push_str(
@@ -874,24 +1050,139 @@ pub fn vi_list_venues(
         filters.push_str(&format!(" AND {}", PLAYED_SQL));
     }
 
+    (filters, args)
+}
+
+#[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
+pub fn vi_count_venues(
+    state: State<'_, AppState>,
+    statut: Option<String>,
+    pays: Option<String>,
+    search: Option<String>,
+    has_email: Option<bool>,
+    has_phone: Option<bool>,
+    has_website: Option<bool>,
+    contacted: Option<bool>,
+    played: Option<bool>,
+    target_cities: Option<Vec<String>>,
+    target_only: Option<bool>,
+) -> Result<i64, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    count_venues(
+        &conn, statut, pays, search, has_email, has_phone, has_website, contacted, played,
+        target_cities, target_only,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn count_venues(
+    conn: &rusqlite::Connection,
+    statut: Option<String>,
+    pays: Option<String>,
+    search: Option<String>,
+    has_email: Option<bool>,
+    has_phone: Option<bool>,
+    has_website: Option<bool>,
+    contacted: Option<bool>,
+    played: Option<bool>,
+    target_cities: Option<Vec<String>>,
+    target_only: Option<bool>,
+) -> Result<i64, String> {
+    let only_in = if target_only == Some(true) { norm_cities(target_cities) } else { Vec::new() };
+    let (filters, args) = venue_filters(
+        statut, pays, search, has_email, has_phone, has_website, contacted, played, &only_in,
+    );
+    let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+    conn.query_row(
+        &format!("SELECT COUNT(*) FROM vi_venues v WHERE 1=1{}", filters),
+        refs.as_slice(),
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
+pub fn vi_list_venues(
+    state: State<'_, AppState>,
+    statut: Option<String>,
+    pays: Option<String>,
+    search: Option<String>,
+    has_email: Option<bool>,
+    has_phone: Option<bool>,
+    has_website: Option<bool>,
+    contacted: Option<bool>,
+    played: Option<bool>,
+    target_cities: Option<Vec<String>>,
+    target_only: Option<bool>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<VenueRow>, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    list_venues(
+        &conn, statut, pays, search, has_email, has_phone, has_website, contacted, played,
+        target_cities, target_only, limit, offset,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn list_venues(
+    conn: &rusqlite::Connection,
+    statut: Option<String>,
+    pays: Option<String>,
+    search: Option<String>,
+    has_email: Option<bool>,
+    has_phone: Option<bool>,
+    has_website: Option<bool>,
+    contacted: Option<bool>,
+    played: Option<bool>,
+    target_cities: Option<Vec<String>>,
+    target_only: Option<bool>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<VenueRow>, String> {
+    // Filters and paging first, decoration second. Selecting the page in an inner
+    // query means the six correlated subqueries below run for the rows actually
+    // returned, not for every row the paging walks past: at OFFSET 20 000 that is
+    // the difference between 0.46 s and 0.06 s. The ORDER BY matches
+    // idx_vi_venues_sort so the inner query neither sorts nor scans.
+    let cities = norm_cities(target_cities);
+    let only_in: &[String] = if target_only == Some(true) { &cities } else { &[] };
+    let (filters, filter_args) = venue_filters(
+        statut, pays, search, has_email, has_phone, has_website, contacted, played, only_in,
+    );
+    // Artist targeting sorts in SQL, so venues in the audience cities come first
+    // across every page, not just within the rows already loaded. Without a
+    // target the ORDER BY stays the index's and SQLite stops after one page.
+    let (target_expr, target_args) = target_sql(&cities).unwrap_or_else(|| ("0".into(), Vec::new()));
+    // Bind order follows the text: the target expression (select list) comes
+    // before the WHERE filters.
+    let mut args = target_args;
+    args.extend(filter_args);
+
     let sql = format!(
         "SELECT v.id, v.nom, v.ville, v.pays, v.region_cible, v.statut, v.priorite, v.score_qualif,
                 v.nb_events_periode,
                 (SELECT COUNT(*) FROM vi_evidence e WHERE e.venue_id=v.id),
                 (SELECT nom FROM vi_promoters p WHERE p.venue_id=v.id ORDER BY nb_events DESC LIMIT 1),
                 v.ra_url, v.site_web, v.telephone,
-                (SELECT valeur FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email' ORDER BY c.score DESC, c.id LIMIT 1),
-                (SELECT COUNT(*) FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email'),
+                (SELECT valeur FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email' AND {own} ORDER BY c.score DESC, c.id LIMIT 1),
+                (SELECT COUNT(*) FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email' AND {own}),
                 (v.enriched_at IS NOT NULL),
                 v.crm_contact_id,
                 {contacted} AS is_contacted,
-                {played} AS has_played
-         FROM (SELECT * FROM vi_venues v WHERE 1=1{filters}
-               ORDER BY v.score_qualif DESC, v.nb_events_periode DESC, v.nom COLLATE NOCASE
-               LIMIT {limit} OFFSET {offset}) v",
+                {played} AS has_played,
+                v.is_target
+         FROM (SELECT v.*, {target_expr} AS is_target FROM vi_venues v WHERE 1=1{filters}
+               ORDER BY {order}v.score_qualif DESC, v.nb_events_periode DESC, v.nom COLLATE NOCASE
+               LIMIT {limit} OFFSET {offset}) v
+         ORDER BY v.is_target DESC, v.score_qualif DESC, v.nb_events_periode DESC, v.nom COLLATE NOCASE",
         contacted = CONTACTED_SQL,
         played = PLAYED_SQL,
+        own = own_email_sql("c.valeur"),
         filters = filters,
+        order = if cities.is_empty() { "" } else { "is_target DESC, " },
         limit = limit.unwrap_or(200).clamp(1, 1000),
         offset = offset.unwrap_or(0).max(0),
     );
@@ -921,6 +1212,7 @@ pub fn vi_list_venues(
                 crm_contact_id: r.get(17)?,
                 contacted: r.get::<_, i64>(18)? != 0,
                 played: r.get::<_, i64>(19)? != 0,
+                is_target: r.get::<_, i64>(20)? != 0,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -958,15 +1250,26 @@ fn promote_venue_inner(conn: &rusqlite::Connection, id: i64) -> Result<i64, Stri
         .map_err(|e| e.to_string())?;
     let email: Option<String> = conn
         .query_row(
-            "SELECT valeur FROM vi_contacts WHERE venue_id=?1 AND type='email' ORDER BY score DESC LIMIT 1",
+            &format!(
+                "SELECT valeur FROM vi_contacts c WHERE c.venue_id=?1 AND c.type='email' AND {}
+                 ORDER BY c.score DESC, c.id LIMIT 1",
+                own_email_sql("c.valeur")
+            ),
             params![id],
             |r| r.get(0),
         )
         .ok();
     conn.execute(
-        "INSERT INTO contacts (category, name, venue, area, email, website, notes, contact_channel, status, reason)
-         VALUES ('venue', ?1, ?1, ?2, ?3, ?4, ?5, 'email', 'to_contact', 'Venue Intelligence')",
-        params![nom, ville, email, site, tel.map(|t| format!("Tel: {} · {}", t, pays.unwrap_or_default()))],
+        "INSERT INTO contacts (category, name, venue, area, email, website, notes, contact_channel, status, reason, artist_id)
+         VALUES ('venue', ?1, ?1, ?2, ?3, ?4, ?5, 'email', 'to_contact', 'Venue Intelligence', ?6)",
+        params![
+            nom,
+            ville,
+            email,
+            site,
+            tel.map(|t| format!("Tel: {} · {}", t, pays.unwrap_or_default())),
+            crate::commands::artists::default_artist_id(conn)
+        ],
     )
     .map_err(|e| e.to_string())?;
     let contact_id = conn.last_insert_rowid();
@@ -987,7 +1290,10 @@ pub fn vi_promote_venues_bulk(state: State<'_, AppState>, with_email_only: Optio
         "SELECT id FROM vi_venues WHERE statut IN ('qualifie','valide') AND crm_contact_id IS NULL",
     );
     if with_email_only != Some(false) {
-        sql.push_str(" AND EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=vi_venues.id AND c.type='email')");
+        sql.push_str(&format!(
+            " AND EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=vi_venues.id AND c.type='email' AND {})",
+            own_email_sql("c.valeur")
+        ));
     }
     let ids: Vec<i64> = {
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -1000,12 +1306,65 @@ pub fn vi_promote_venues_bulk(state: State<'_, AppState>, with_email_only: Optio
         }
         v
     };
+    // One transaction for the whole batch: thousands of autocommits took
+    // seconds and left a half-promoted list if the app closed midway.
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut n = 0;
     for id in ids {
-        if promote_venue_inner(&conn, id).is_ok() {
+        if promote_venue_inner(&tx, id).is_ok() {
             n += 1;
         }
     }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(n)
+}
+
+/// Promoted venue contacts still waiting for a first email whose address is not
+/// the venue's own (a ticketing desk, a tourism office...). Rows: (venue, contact).
+fn stale_venue_contacts_sql() -> String {
+    format!(
+        "SELECT v.id, ct.id FROM vi_venues v JOIN contacts ct ON ct.id=v.crm_contact_id
+         WHERE ct.status='to_contact' AND ct.first_contact IS NULL
+           AND ct.email IS NOT NULL AND trim(ct.email) != ''
+           AND NOT EXISTS(SELECT 1 FROM emails m WHERE m.contact_id=ct.id)
+           AND NOT ({})",
+        own_email_sql("ct.email")
+    )
+}
+
+/// Swap the borrowed address of each stale venue contact for the venue's best own
+/// address, or clear it when there is none, so a campaign can't write to the
+/// same ticketing desk a hundred times. Contacts already engaged are left alone.
+#[tauri::command(async)]
+pub fn vi_repair_contacts(state: State<'_, AppState>) -> Result<i64, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let pairs: Vec<(i64, i64)> = {
+        let mut stmt = conn.prepare(&stale_venue_contacts_sql()).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(|e| e.to_string())?;
+        rows.flatten().collect()
+    };
+    let best_sql = format!(
+        "SELECT valeur FROM vi_contacts c WHERE c.venue_id=?1 AND c.type='email' AND {}
+         ORDER BY c.score DESC, c.id LIMIT 1",
+        own_email_sql("c.valeur")
+    );
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut n = 0;
+    for (venue_id, contact_id) in pairs {
+        let best: Option<String> = tx.query_row(&best_sql, params![venue_id], |r| r.get(0)).ok();
+        if tx
+            .execute(
+                "UPDATE contacts SET email=?2, updated_at=datetime('now') WHERE id=?1",
+                params![contact_id, best],
+            )
+            .is_ok()
+        {
+            n += 1;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(n)
 }
 
@@ -1029,6 +1388,10 @@ pub struct VenueStats {
     pub contacted: i64,
     pub played: i64,
     pub countries: i64,
+    /// Venues the "add all to pipeline" button would promote right now.
+    pub promotable: i64,
+    /// Promoted venue contacts, never written to, whose email is not the venue's own.
+    pub stale_contacts: i64,
     pub top_countries: Vec<CountryCount>,
 }
 
@@ -1047,7 +1410,7 @@ pub fn vi_venue_stats(state: State<'_, AppState>) -> Result<VenueStats, String> 
 
     let mut top_countries = Vec::new();
     if let Ok(mut stmt) = conn.prepare(
-        "SELECT COALESCE(pays,'?') AS p, COUNT(*) n FROM vi_venues GROUP BY p ORDER BY n DESC LIMIT 8",
+        "SELECT COALESCE(pays,'?') AS p, COUNT(*) n FROM vi_venues GROUP BY p ORDER BY n DESC",
     ) {
         if let Ok(rows) = stmt.query_map([], |r| {
             Ok(CountryCount { pays: r.get(0)?, n: r.get(1)? })
@@ -1065,10 +1428,76 @@ pub fn vi_venue_stats(state: State<'_, AppState>) -> Result<VenueStats, String> 
         candidat: by_statut("candidat"),
         rejete: by_statut("rejete"),
         enriched: one("SELECT COUNT(*) FROM vi_venues WHERE enriched_at IS NOT NULL"),
-        with_email: one("SELECT COUNT(DISTINCT venue_id) FROM vi_contacts WHERE type='email'"),
+        with_email: one(&format!(
+            "SELECT COUNT(DISTINCT venue_id) FROM vi_contacts c WHERE c.type='email' AND {}",
+            own_email_sql("c.valeur")
+        )),
         contacted: one(&format!("SELECT COUNT(*) FROM vi_venues v WHERE {}", CONTACTED_SQL)),
         played: one(&format!("SELECT COUNT(*) FROM vi_venues v WHERE {}", PLAYED_SQL)),
         countries: one("SELECT COUNT(DISTINCT pays) FROM vi_venues WHERE pays IS NOT NULL"),
+        promotable: one(&format!(
+            "SELECT COUNT(*) FROM vi_venues v WHERE statut IN ('qualifie','valide') AND crm_contact_id IS NULL
+               AND EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email' AND {})",
+            own_email_sql("c.valeur")
+        )),
+        stale_contacts: one(&format!("SELECT COUNT(*) FROM ({})", stale_venue_contacts_sql())),
         top_countries,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_cities_fold_accents_and_match_both_ways() {
+        let cities = norm_cities(Some(vec!["Zürich".into(), " Paris ".into(), "".into(), "paris".into()]));
+        assert_eq!(cities, vec!["paris", "zurich"]);
+        let (cond, args) = target_sql(&cities).unwrap();
+        assert_eq!(args.len(), 4);
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE vi_venues (id INTEGER PRIMARY KEY, ville_norm TEXT);
+             INSERT INTO vi_venues VALUES (1,'zurich'),(2,'paris'),(3,'berlin'),(4,''),(5,NULL),(6,'greaterparis');",
+        )
+        .unwrap();
+        let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+        let mut st = conn
+            .prepare(&format!("SELECT id FROM vi_venues v WHERE {cond} ORDER BY id"))
+            .unwrap();
+        let ids: Vec<i64> = st.query_map(refs.as_slice(), |r| r.get(0)).unwrap().flatten().collect();
+        assert_eq!(ids, vec![1, 2, 6]);
+        assert!(target_sql(&[]).is_none());
+    }
+
+    /// Timing on a copy of the real database (never the live one):
+    /// VI_MIGRATION_DB=/path/copy.db cargo test --release venue_list_perf -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn venue_list_perf() {
+        let path = std::env::var("VI_MIGRATION_DB").expect("VI_MIGRATION_DB");
+        assert!(!path.contains("Application Support"));
+        let pool = crate::db::init_pool(std::path::Path::new(&path)).unwrap();
+        let conn = pool.get().unwrap();
+        let cities = || Some(vec!["Paris".to_string(), "Amsterdam".into(), "Berlin".into(), "Lyon".into()]);
+        let s = || Some("actif".to_string());
+        let time = |label: &str, f: &dyn Fn() -> usize| {
+            f(); // warm
+            let t = std::time::Instant::now();
+            let n = f();
+            println!("{label}: {n} rows in {:?}", t.elapsed());
+        };
+        time("list p1 no target", &|| list_venues(&conn, s(), None, None, None, None, None, None, None, None, None, Some(200), Some(0)).unwrap().len());
+        time("list p1 target", &|| list_venues(&conn, s(), None, None, None, None, None, None, None, cities(), None, Some(200), Some(0)).unwrap().len());
+        time("list p20 target", &|| list_venues(&conn, s(), None, None, None, None, None, None, None, cities(), None, Some(200), Some(4000)).unwrap().len());
+        time("list all statuts target", &|| list_venues(&conn, Some("all".into()), None, None, None, None, None, None, None, cities(), None, Some(200), Some(0)).unwrap().len());
+        time("list email no target", &|| list_venues(&conn, s(), None, None, Some(true), None, None, None, None, None, None, Some(200), Some(0)).unwrap().len());
+        time("list email target", &|| list_venues(&conn, s(), None, None, Some(true), None, None, None, None, cities(), None, Some(200), Some(0)).unwrap().len());
+        time("count target_only", &|| count_venues(&conn, s(), None, None, None, None, None, None, None, cities(), Some(true)).unwrap() as usize);
+        time("count no target", &|| count_venues(&conn, s(), None, None, None, None, None, None, None, None, None).unwrap() as usize);
+        let rows = list_venues(&conn, s(), None, None, None, None, None, None, None, cities(), None, Some(200), Some(0)).unwrap();
+        let first_non = rows.iter().position(|r| !r.is_target).unwrap_or(rows.len());
+        assert!(rows[first_non..].iter().all(|r| !r.is_target), "targets first");
+        println!("first page: {} targets then {}", first_non, rows.len() - first_non);
+    }
 }

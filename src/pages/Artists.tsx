@@ -7,7 +7,7 @@ import { listArtists } from "../lib/api";
 import type { Artist } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
 import { ArtistModal } from "./ArtistDetail";
-import { useAppIntent } from "../lib/hooks";
+import { useAppIntent, useArtistAvatar } from "../lib/hooks";
 
 export function Artists() {
   const { t } = useTranslation();
@@ -33,7 +33,7 @@ export function Artists() {
           </button>
         }
       />
-      <div className="px-8 pb-10 pt-6">
+      <div className="px-page pb-10 pt-6">
         {artists.length === 0 ? (
           <div className="card">
             <EmptyState
@@ -48,7 +48,7 @@ export function Artists() {
             />
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
             {artists.map((a) => (
               <button
                 key={a.id}
@@ -56,17 +56,7 @@ export function Artists() {
                 className="card group overflow-hidden text-left transition-transform hover:-translate-y-0.5 hover:shadow-card"
               >
                 <div className="relative aspect-[4/3] w-full overflow-hidden bg-gradient-to-br from-accent/20 to-surface-2">
-                  {a.avatar ? (
-                    <img
-                      src={a.avatar}
-                      alt={a.name}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-full items-center justify-center text-4xl font-bold text-accent/40">
-                      {a.name.charAt(0).toUpperCase()}
-                    </div>
-                  )}
+                  <ArtistCover artist={a} />
                 </div>
                 <div className="p-4">
                   <div className="text-sm font-semibold">{a.name}</div>
@@ -105,6 +95,18 @@ export function Artists() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/// Card cover: the avatar is fetched per artist (not shipped by listArtists).
+function ArtistCover({ artist }: { artist: Artist }) {
+  const avatar = useArtistAvatar(artist.id);
+  return avatar ? (
+    <img src={avatar} alt={artist.name} className="h-full w-full object-cover" />
+  ) : (
+    <div className="flex h-full items-center justify-center text-4xl font-bold text-accent/40">
+      {artist.name.charAt(0).toUpperCase()}
     </div>
   );
 }

@@ -9,24 +9,30 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, State};
 
+use super::{campaigns, outbox, status};
+
 static TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 fn setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
-    conn.query_row(
-        "SELECT value FROM settings WHERE key = ?1",
-        params![key],
-        |r| r.get::<_, String>(0),
-    )
-    .ok()
-    .filter(|s| !s.trim().is_empty())
+    // Routed through the Keychain for secret keys (see crate::secrets).
+    crate::secrets::read_setting(conn, key).filter(|s| !s.trim().is_empty())
 }
 
 fn load_smtp(state: &AppState) -> Result<SmtpConfig, String> {
-    let conn = state.pool.get().map_err(|e| e.to_string())?;
-    match setting(&conn, "smtp") {
-        Some(j) => serde_json::from_str(&j).map_err(|e| e.to_string()),
-        None => Ok(SmtpConfig::default()),
-    }
+    load_smtp_from(&state.pool)
+}
+
+/// Pool-based variant, for work that runs off the command thread (bulk send,
+/// reply sync) and so cannot hold a `State`.
+pub(crate) fn load_smtp_from(pool: &crate::db::DbPool) -> Result<SmtpConfig, String> {
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    let mut cfg: SmtpConfig = match setting(&conn, "smtp") {
+        Some(j) => serde_json::from_str(&j).map_err(|e| e.to_string())?,
+        None => SmtpConfig::default(),
+    };
+    // The password lives in the Keychain, not in the `smtp` JSON.
+    crate::secrets::smtp_fill(&mut cfg);
+    Ok(cfg)
 }
 
 /// Editable email signature, stored as JSON under the `email_signature` setting
@@ -338,6 +344,47 @@ fn sender_mailbox(cfg: &SmtpConfig) -> Result<Mailbox, String> {
     Ok(Mailbox::new(if name.is_empty() { None } else { Some(name.to_string()) }, addr))
 }
 
+/// Parse a recipient field that may hold several addresses or a note
+/// ("a@x.nl / b@x.nl", "info@x.com (secondary)"): the whole string first, then
+/// the first token that is a valid address. These used to fail as "invalid".
+fn parse_recipient(raw: &str) -> Option<Mailbox> {
+    if let Ok(m) = raw.trim().parse::<Mailbox>() {
+        return Some(m);
+    }
+    raw.split(|c: char| c == '/' || c == ',' || c == ';' || c.is_whitespace())
+        .map(|t| t.trim().trim_matches(|c| c == '<' || c == '>' || c == '(' || c == ')'))
+        .filter(|t| t.contains('@'))
+        .find_map(|t| t.parse::<Mailbox>().ok())
+}
+
+/// The contact a free-typed address belongs to (lowest id when several share it).
+fn contact_for_address(conn: &rusqlite::Connection, addr: &str) -> Option<i64> {
+    conn.query_row(
+        "SELECT id FROM contacts WHERE email IS NOT NULL AND lower(trim(email)) = lower(trim(?1))
+         ORDER BY id LIMIT 1",
+        params![addr],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+/// Artist name for {{artist}}: the campaign's, else the contact's, else the
+/// only artist in the roster (a one-artist CRM sending without a campaign used
+/// to mail a literal "{{artist}}").
+fn sole_artist(conn: &rusqlite::Connection) -> Option<String> {
+    let mut stmt = conn.prepare("SELECT name FROM artists LIMIT 2").ok()?;
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .ok()?
+        .filter_map(|r| r.ok())
+        .collect();
+    if names.len() == 1 {
+        names.into_iter().next()
+    } else {
+        None
+    }
+}
+
 /// Only one bulk send at a time: a second one (page left and re-opened mid-send)
 /// would mail the same recipients twice.
 static BULK_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -349,6 +396,9 @@ impl Drop for BulkGuard {
     }
 }
 
+/// One outgoing message. The Message-ID is ours (stored with the email, so a
+/// reply's In-Reply-To finds it), and every message carries List-Unsubscribe.
+#[allow(clippy::too_many_arguments)]
 fn build_message(
     from: &Mailbox,
     to: &Mailbox,
@@ -357,24 +407,44 @@ fn build_message(
     signature: &Option<SignatureData>,
     tracking_base: &Option<String>,
     token: &str,
+    message_id: &str,
 ) -> Result<Message, String> {
     Message::builder()
         .from(from.clone())
         .to(to.clone())
         .subject(subject.to_string())
-        .message_id(None)
+        .message_id(Some(message_id.to_string()))
+        .header(outbox::list_unsubscribe(&from.email.to_string()))
         .multipart(message_body(body, signature, tracking_base, token))
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
-pub fn get_smtp_config(state: State<'_, AppState>) -> Result<SmtpConfig, String> {
-    load_smtp(&state)
+/// Hand a message to SMTP: (status, error, hard_bounce). A permanent "no such
+/// mailbox" rejection is a hard bounce: the caller suppresses the address so it
+/// is never retried.
+fn deliver(transport: &SmtpTransport, msg: &Message) -> (&'static str, Option<String>, bool) {
+    match transport.send(msg) {
+        Ok(_) => ("sent", None, false),
+        Err(e) => {
+            let code = e.status().and_then(|c| c.to_string().parse::<u16>().ok());
+            let text = e.to_string();
+            let hard = e.is_permanent() && outbox::is_permanent_recipient_failure(code, &text);
+            ("failed", Some(text), hard)
+        }
+    }
 }
 
 #[tauri::command(async)]
-pub fn save_smtp_config(state: State<'_, AppState>, config: SmtpConfig) -> Result<(), String> {
+pub fn get_smtp_config(state: State<'_, AppState>) -> Result<SmtpConfig, String> {
+    // The UI gets a masked password, never the real one.
+    load_smtp(&state).map(crate::secrets::smtp_masked)
+}
+
+#[tauri::command(async)]
+pub fn save_smtp_config(state: State<'_, AppState>, mut config: SmtpConfig) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
+    // Password to the Keychain (an unchanged mask keeps the stored one).
+    crate::secrets::smtp_store(&mut config)?;
     let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO settings (key, value) VALUES ('smtp', ?1)
@@ -397,6 +467,10 @@ pub struct SendResult {
     pub ok: bool,
     pub error: Option<String>,
     pub tracked: bool,
+    /// Why nothing was sent, for the UI: "suppressed" (address on the
+    /// suppression list), "quota" (daily cap reached), "bounced" (hard SMTP
+    /// rejection, the address is now suppressed).
+    pub code: Option<String>,
 }
 
 #[tauri::command(async)]
@@ -414,59 +488,71 @@ pub fn send_email(
     }
 
     let from_mbox = sender_mailbox(&cfg)?;
-    let to_mbox: Mailbox = to
-        .trim()
-        .parse()
-        .map_err(|_| format!("Invalid recipient address: {}", to))?;
+    let to_mbox: Mailbox =
+        parse_recipient(&to).ok_or_else(|| format!("Invalid recipient address: {}", to))?;
+    let addr = to_mbox.email.to_string();
 
-    // Open-tracking: only if a public tracking base URL is configured.
-    let token = gen_token();
+    // Guardrails first: a suppressed address is never mailed, and the daily cap
+    // holds for single sends too.
     let (tracking_base, signature) = {
         let conn = state.pool.get().map_err(|e| e.to_string())?;
+        if let Some(reason) = outbox::suppression_reason(&conn, &addr) {
+            return Ok(SendResult {
+                ok: false,
+                error: Some(format!("{} : adresse en liste de suppression ({})", addr, reason)),
+                tracked: false,
+                code: Some("suppressed".into()),
+            });
+        }
+        let q = outbox::quota(&conn);
+        if q.remaining <= 0 {
+            return Ok(SendResult {
+                ok: false,
+                error: Some(format!("Quota journalier atteint ({}/{}).", q.sent_today, q.cap)),
+                tracked: false,
+                code: Some("quota".into()),
+            });
+        }
+        // Open-tracking: only if a public tracking base URL is configured.
         (setting(&conn, "tracking_base_url"), load_signature(&conn))
     };
+    let token = gen_token();
     let tracked = tracking_base.is_some();
+    let message_id = outbox::gen_message_id(&cfg.from_email);
 
-    let email = Message::builder()
-        .from(from_mbox)
-        .to(to_mbox)
-        .subject(subject.clone())
-        .message_id(None)
-        .multipart(message_body(&body, &signature, &tracking_base, &token))
-        .map_err(|e| e.to_string())?;
+    let email = build_message(
+        &from_mbox, &to_mbox, &subject, &body, &signature, &tracking_base, &token, &message_id,
+    )?;
 
     let transport = build_transport(&cfg)?;
-    let (status, error) = match transport.send(&email) {
-        Ok(_) => ("sent", None),
-        Err(e) => ("failed", Some(e.to_string())),
-    };
+    let (outcome, error, hard_bounce) = deliver(&transport, &email);
 
     let conn = state.pool.get().map_err(|e| e.to_string())?;
+    // A free-typed address (Compose tab) is tied to its contact, so the email
+    // shows in the contact's history, counts for follow-ups and moves the pipeline.
+    let contact_id = contact_id.or_else(|| contact_for_address(&conn, &addr));
     conn.execute(
-        "INSERT INTO emails (contact_id, campaign_id, to_addr, subject, body, status, error, track_token)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-        params![contact_id, campaign_id, to, subject, body, status, error, token],
+        "INSERT INTO emails (contact_id, campaign_id, to_addr, subject, body, status, error, track_token, message_id)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![contact_id, campaign_id, addr, subject, body, outcome, error, token,
+            (outcome == "sent").then_some(&message_id)],
     )
     .map_err(|e| e.to_string())?;
 
-    if status == "sent" {
-        if let Some(cid) = contact_id {
-            conn.execute(
-                "UPDATE contacts
-                 SET status = CASE WHEN status IN ('to_contact','to_evaluate','low_priority') THEN 'contacted' ELSE status END,
-                     first_contact = COALESCE(first_contact, date('now')),
-                     updated_at = datetime('now')
-                 WHERE id = ?1",
-                params![cid],
-            )
-            .map_err(|e| e.to_string())?;
+    if outcome == "sent" {
+        status::on_email_sent(&conn, contact_id, &addr);
+        if let (Some(camp), Some(cid)) = (campaign_id, contact_id) {
+            campaigns::mark_audience(&conn, camp, cid, "sent");
         }
+    } else if hard_bounce {
+        outbox::suppress(&conn, &addr, "bounce", error.as_deref());
     }
 
     Ok(SendResult {
-        ok: status == "sent",
+        ok: outcome == "sent",
         error,
         tracked,
+        code: hard_bounce.then(|| "bounced".to_string()),
     })
 }
 
@@ -476,23 +562,8 @@ pub fn list_emails(
     contact_id: Option<i64>,
 ) -> Result<Vec<crate::models::EmailLog>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
-    let cols = "id, contact_id, campaign_id, to_addr, subject, body, status, error, track_token, opened_at, open_count, sent_at";
-    let map = |row: &rusqlite::Row| -> rusqlite::Result<crate::models::EmailLog> {
-        Ok(crate::models::EmailLog {
-            id: row.get(0)?,
-            contact_id: row.get(1)?,
-            campaign_id: row.get(2)?,
-            to_addr: row.get(3)?,
-            subject: row.get(4)?,
-            body: row.get(5)?,
-            status: row.get(6)?,
-            error: row.get(7)?,
-            track_token: row.get(8)?,
-            opened_at: row.get(9)?,
-            open_count: row.get(10)?,
-            sent_at: row.get(11)?,
-        })
-    };
+    let cols = outbox::EMAIL_COLS;
+    let map = outbox::email_from_row;
     let mut out = Vec::new();
     match contact_id {
         Some(cid) => {
@@ -542,6 +613,36 @@ pub struct BulkResult {
     pub failed: usize,
     pub skipped: usize,
     pub errors: Vec<String>,
+    /// Addresses skipped because they are on the suppression list.
+    pub suppressed: Vec<String>,
+    /// Addresses suppressed during this send (hard SMTP rejection).
+    pub bounced: Vec<String>,
+    /// Recipients left unsent because the daily cap was reached.
+    pub deferred: usize,
+    pub cap: i64,
+}
+
+/// {{date}} / {{target_date}} for humans: an ISO day ("2026-10-21") becomes
+/// "21 Oct" (with the year when it is not the current one); anything else (a
+/// free-text date) is kept as typed. Mirrored by humanDate() in ComposeModal.tsx
+/// so the preview matches what is sent.
+pub(crate) fn human_date(raw: &str) -> String {
+    let t = raw.trim();
+    let Some(d) = t
+        .get(..10)
+        .and_then(|p| chrono::NaiveDate::parse_from_str(p, "%Y-%m-%d").ok())
+    else {
+        return t.to_string();
+    };
+    if t.len() > 10 && !t[10..].starts_with(['T', ' ']) {
+        return t.to_string();
+    }
+    use chrono::Datelike;
+    if d.year() == chrono::Local::now().year() {
+        d.format("%-d %b").to_string()
+    } else {
+        d.format("%-d %b %Y").to_string()
+    }
 }
 
 fn non_empty(s: Option<String>) -> Option<String> {
@@ -551,10 +652,31 @@ fn non_empty(s: Option<String>) -> Option<String> {
 /// Send one email per contact in `contact_ids`, rendering {{variables}} from the
 /// contact + its campaign (event/artist/target date). One SMTP connection is
 /// reused; progress is streamed via the `bulk-progress` event.
-#[tauri::command(async)]
-pub fn send_bulk(
+///
+/// A bulk send lasts minutes (throttled sends, blocking SMTP), so it runs on
+/// the blocking thread pool: as a plain `(async)` command it used to occupy an
+/// async runtime worker for the whole batch.
+#[tauri::command]
+pub async fn send_bulk(
     app: AppHandle,
     state: State<'_, AppState>,
+    campaign_id: Option<i64>,
+    contact_ids: Vec<i64>,
+    subject: String,
+    body: String,
+    extra_vars: Option<HashMap<String, String>>,
+) -> Result<BulkResult, String> {
+    let pool = state.pool.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_bulk_blocking(app, &pool, campaign_id, contact_ids, subject, body, extra_vars)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn send_bulk_blocking(
+    app: AppHandle,
+    pool: &crate::db::DbPool,
     campaign_id: Option<i64>,
     contact_ids: Vec<i64>,
     subject: String,
@@ -565,14 +687,24 @@ pub fn send_bulk(
         return Err("Un envoi groupé est déjà en cours.".into());
     }
     let _bulk = BulkGuard;
-    let cfg = load_smtp(&state)?;
+    let cfg = load_smtp_from(pool)?;
     if cfg.from_email.trim().is_empty() {
         return Err("Sender email is not configured (Settings → Email).".into());
     }
     let from_mbox = sender_mailbox(&cfg)?;
     let transport = build_transport(&cfg)?;
 
-    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    // Daily cap: what is left of today's quota bounds this batch; the rest is
+    // reported as deferred instead of failing the whole send.
+    let quota = outbox::quota(&conn);
+    if quota.remaining <= 0 {
+        return Err(format!(
+            "Quota journalier atteint ({}/{}). Réessayez demain ou augmentez le plafond.",
+            quota.sent_today, quota.cap
+        ));
+    }
+    let mut budget = quota.remaining;
     let tracking_base = setting(&conn, "tracking_base_url");
     let signature = load_signature(&conn);
     // Throttle between sends: spreading mail out is the single biggest lever for
@@ -609,7 +741,7 @@ pub fn send_bulk(
                 base_vars.insert("event".into(), e);
             }
             if let Some(td) = non_empty(target_date) {
-                base_vars.insert("target_date".into(), td);
+                base_vars.insert("target_date".into(), human_date(&td));
             }
             if let Some(aid) = artist_id {
                 if let Ok(name) = conn.query_row(
@@ -623,17 +755,31 @@ pub fn send_bulk(
         }
     }
 
+    let fallback_artist = sole_artist(&conn);
+
     let total = contact_ids.len();
-    let (mut sent, mut failed, mut skipped) = (0usize, 0usize, 0usize);
+    let (mut sent, mut failed, mut skipped, mut deferred) = (0usize, 0usize, 0usize, 0usize);
     let mut errors: Vec<String> = Vec::new();
+    let mut suppressed: Vec<String> = Vec::new();
+    let mut bounced: Vec<String> = Vec::new();
     // Several contacts can share one address (a promoter booking two venues):
     // mail it once per batch.
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (idx, cid) in contact_ids.iter().enumerate() {
+        if budget <= 0 {
+            // Daily cap reached: the rest waits for tomorrow.
+            deferred = total - idx;
+            let _ = app.emit(
+                "bulk-progress",
+                BulkProgress { done: total, total, sent, failed, skipped, current: None },
+            );
+            break;
+        }
         let row = conn
             .query_row(
-                "SELECT name, promoter, venue, area, date, email FROM contacts WHERE id = ?1",
+                "SELECT c.name, c.promoter, c.venue, c.area, c.date, c.email, a.name
+                 FROM contacts c LEFT JOIN artists a ON a.id = c.artist_id WHERE c.id = ?1",
                 params![cid],
                 |r| {
                     Ok((
@@ -643,6 +789,7 @@ pub fn send_bulk(
                         r.get::<_, Option<String>>(3)?,
                         r.get::<_, Option<String>>(4)?,
                         r.get::<_, Option<String>>(5)?,
+                        r.get::<_, Option<String>>(6)?,
                     ))
                 },
             )
@@ -655,7 +802,7 @@ pub fn send_bulk(
             );
         };
 
-        let Some((name, promoter, venue, area, date, email)) = row else {
+        let Some((name, promoter, venue, area, date, email, contact_artist)) = row else {
             skipped += 1;
             emit(idx + 1, sent, failed, skipped, None);
             continue;
@@ -667,6 +814,11 @@ pub fn send_bulk(
         };
 
         let mut vars = base_vars.clone();
+        if !vars.contains_key("artist") {
+            if let Some(a) = non_empty(contact_artist).or_else(|| fallback_artist.clone()) {
+                vars.insert("artist".into(), a);
+            }
+        }
         let display = non_empty(promoter.clone()).unwrap_or_else(|| name.clone());
         vars.insert("name".into(), display);
         vars.insert(
@@ -677,30 +829,43 @@ pub fn send_bulk(
         vars.insert("promoter".into(), promoter.clone().unwrap_or_default());
         vars.insert("city".into(), area.clone().unwrap_or_default());
         let fallback_date = base_vars.get("target_date").cloned().unwrap_or_default();
-        vars.insert("date".into(), non_empty(date).unwrap_or(fallback_date));
+        vars.insert(
+            "date".into(),
+            non_empty(date).map(|d| human_date(&d)).unwrap_or(fallback_date),
+        );
 
         let subj = render_template(&subject, &vars);
         let bod = render_template(&body, &vars);
 
-        if !seen.insert(email.trim().to_lowercase()) {
-            skipped += 1;
-            emit(idx + 1, sent, failed, skipped, Some(email.clone()));
-            continue;
-        }
-
-        let to_mbox: Mailbox = match email.trim().parse() {
-            Ok(m) => m,
-            Err(_) => {
+        let to_mbox: Mailbox = match parse_recipient(&email) {
+            Some(m) => m,
+            None => {
                 failed += 1;
                 errors.push(format!("{}: adresse invalide", email));
                 emit(idx + 1, sent, failed, skipped, Some(email.clone()));
                 continue;
             }
         };
+        let email = to_mbox.email.to_string();
+
+        if !seen.insert(email.trim().to_lowercase()) {
+            skipped += 1;
+            emit(idx + 1, sent, failed, skipped, Some(email.clone()));
+            continue;
+        }
+        if outbox::suppression_reason(&conn, &email).is_some() {
+            skipped += 1;
+            suppressed.push(email.clone());
+            emit(idx + 1, sent, failed, skipped, Some(email.clone()));
+            continue;
+        }
 
         let token = gen_token();
+        let message_id = outbox::gen_message_id(&cfg.from_email);
         // One malformed message must not abort the batch (and hide what was sent).
-        let msg = match build_message(&from_mbox, &to_mbox, &subj, &bod, &signature, &tracking_base, &token) {
+        let msg = match build_message(
+            &from_mbox, &to_mbox, &subj, &bod, &signature, &tracking_base, &token, &message_id,
+        ) {
             Ok(m) => m,
             Err(e) => {
                 failed += 1;
@@ -709,27 +874,26 @@ pub fn send_bulk(
                 continue;
             }
         };
-        let (status, err) = match transport.send(&msg) {
-            Ok(_) => ("sent", None),
-            Err(e) => ("failed", Some(e.to_string())),
-        };
+        let (outcome, err, hard_bounce) = deliver(&transport, &msg);
         let _ = conn.execute(
-            "INSERT INTO emails (contact_id, campaign_id, to_addr, subject, body, status, error, track_token)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-            params![cid, campaign_id, email, subj, bod, status, err, token],
+            "INSERT INTO emails (contact_id, campaign_id, to_addr, subject, body, status, error, track_token, message_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![cid, campaign_id, email, subj, bod, outcome, err, token,
+                (outcome == "sent").then_some(&message_id)],
         );
-        if status == "sent" {
+        if outcome == "sent" {
             sent += 1;
-            let _ = conn.execute(
-                "UPDATE contacts
-                 SET status = CASE WHEN status IN ('to_contact','to_evaluate','low_priority') THEN 'contacted' ELSE status END,
-                     first_contact = COALESCE(first_contact, date('now')),
-                     updated_at = datetime('now')
-                 WHERE id = ?1",
-                params![cid],
-            );
+            budget -= 1;
+            status::on_email_sent(&conn, Some(*cid), &email);
+            if let Some(camp) = campaign_id {
+                campaigns::mark_audience(&conn, camp, *cid, "sent");
+            }
         } else {
             failed += 1;
+            if hard_bounce {
+                outbox::suppress(&conn, &email, "bounce", err.as_deref());
+                bounced.push(email.clone());
+            }
             if let Some(e) = err {
                 errors.push(format!("{}: {}", email, e));
             }
@@ -742,7 +906,7 @@ pub fn send_bulk(
         }
     }
 
-    Ok(BulkResult { sent, failed, skipped, errors })
+    Ok(BulkResult { sent, failed, skipped, errors, suppressed, bounced, deferred, cap: quota.cap })
 }
 
 /// Apply a batch of open events (fetched by the frontend from the tracking
@@ -767,4 +931,19 @@ pub fn apply_opens(state: State<'_, AppState>, opens: Vec<OpenRecord>) -> Result
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(updated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::human_date;
+    use chrono::Datelike;
+
+    #[test]
+    fn date_variable_formatting() {
+        let y = chrono::Local::now().year();
+        assert_eq!(human_date(&format!("{}-10-21", y)), "21 Oct");
+        assert_eq!(human_date("2019-03-05"), "5 Mar 2019");
+        assert_eq!(human_date("Wed Oct 21"), "Wed Oct 21");
+        assert_eq!(human_date("2026-10-21abc"), "2026-10-21abc");
+    }
 }

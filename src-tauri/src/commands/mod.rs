@@ -13,6 +13,8 @@ pub mod meta;
 pub mod musicbrainz;
 pub mod pulse;
 pub mod spotify;
+pub mod status;
+pub mod outbox;
 pub mod youtube;
 pub mod ra;
 pub mod vi;

@@ -24,28 +24,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
 
       - name: Install Rust (both macOS targets)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
+      # Caches are scoped per ref: a tag run can only restore what the default
+      # branch saved, never another tag's cache (every release used to log
+      # "No cache found" and rebuild all crates twice). warm-cache.yml fills the
+      # cache from main under this same shared key; tag runs only read it.
       - name: Cache cargo
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: macos-universal-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build & publish release
         uses: tauri-apps/tauri-action@v0

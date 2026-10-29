@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -12,6 +13,7 @@ import {
   Check,
   X,
   FileText,
+  CalendarDays,
 } from "lucide-react";
 import clsx from "clsx";
 import {
@@ -19,13 +21,16 @@ import {
   deleteVisaCountry,
   listArtists,
   listDossiers,
+  listEvents,
+  listEventVisas,
   listVisaCountries,
   saveDossier,
   saveVisaCountry,
 } from "../lib/api";
-import type { ChecklistItem, VisaCountry, VisaDossier } from "../lib/types";
+import type { ChecklistItem, Event, VisaCountry, VisaDossier } from "../lib/types";
 import { VISA_STATUSES } from "../lib/types";
 import { PageHeader } from "../components/Layout";
+import { formatDate, parseDay, toDay } from "../lib/format";
 import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 
 type Tab = "dossiers" | "countries";
@@ -55,7 +60,7 @@ export function Visa() {
   return (
     <div>
       <PageHeader title={t("visa.title")} subtitle={t("visa.subtitle")} />
-      <div className="px-8 pb-10 pt-6">
+      <div className="px-page pb-10 pt-6">
         <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-warn/30 bg-warn/5 px-4 py-3 text-xs text-warn dark:text-warn">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
           <span>{t("visa.disclaimer")}</span>
@@ -91,11 +96,37 @@ function DossiersTab() {
     queryFn: listDossiers,
   });
   const { data: artists = [] } = useQuery({ queryKey: ["artists"], queryFn: listArtists });
+  const { data: events = [] } = useQuery({
+    queryKey: ["events", "all"],
+    queryFn: () => listEvents({}),
+  });
   const [editing, setEditing] = useState<VisaDossier | null>(null);
+
+  // Deep links from the Agenda: ?event=ID starts a dossier for that gig,
+  // ?dossier=ID opens an existing one.
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const ev = params.get("event");
+    const dos = params.get("dossier");
+    if (ev) {
+      setEditing({ title: "", status: "draft", checklist: "[]", event_id: Number(ev) } as VisaDossier);
+    } else if (dos) {
+      const d = dossiers.find((x) => x.id === Number(dos));
+      if (!d) return; // wait for the list
+      setEditing(d);
+    } else return;
+    const next = new URLSearchParams(params);
+    next.delete("event");
+    next.delete("dossier");
+    setParams(next, { replace: true });
+  }, [params, dossiers]);
 
   const delMut = useMutation({
     mutationFn: (id: number) => deleteDossier(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["dossiers"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["dossiers"] });
+      qc.invalidateQueries({ queryKey: ["event_visas"] });
+    },
   });
 
   const artistName = (id?: number | null) =>
@@ -119,7 +150,7 @@ function DossiersTab() {
           {t("visa.no_dossiers")}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
           {dossiers.map((d) => {
             const items = parseChecklist(d.checklist);
             const done = items.filter((i) => i.done).length;
@@ -145,11 +176,17 @@ function DossiersTab() {
                   </span>
                 </div>
 
+                {d.event_id != null && events.find((e) => e.id === d.event_id) && (
+                  <div className="mt-2 flex items-center gap-1.5 text-xs text-fg-subtle">
+                    <CalendarDays size={12} />
+                    {events.find((e) => e.id === d.event_id)!.title}
+                  </div>
+                )}
                 {(d.event_date || d.entry_date) && (
                   <div className="mt-2 text-xs text-fg-subtle">
                     {[
-                      d.event_date && `${t("visa.event_date")}: ${d.event_date}`,
-                      d.entry_date && `${t("visa.entry_date")}: ${d.entry_date}`,
+                      d.event_date && `${t("visa.event_date")}: ${formatDate(d.event_date)}`,
+                      d.entry_date && `${t("visa.entry_date")}: ${formatDate(d.entry_date)}`,
                     ]
                       .filter(Boolean)
                       .join(" · ")}
@@ -197,6 +234,7 @@ function DossiersTab() {
           onSaved={() => {
             setEditing(null);
             qc.invalidateQueries({ queryKey: ["dossiers"] });
+            qc.invalidateQueries({ queryKey: ["event_visas"] });
           }}
         />
       )}
@@ -223,8 +261,54 @@ function DossierModal({
   const [form, setForm] = useState<VisaDossier>({ ...dossier });
   const [items, setItems] = useState<ChecklistItem[]>(parseChecklist(dossier.checklist));
   const [newDoc, setNewDoc] = useState("");
+  // Gigs that can be linked: upcoming ones, plus the one already linked.
+  const day = toDay(new Date());
+  const { data: allEvents = [] } = useQuery({
+    queryKey: ["events", "all"],
+    queryFn: () => listEvents({}),
+  });
+  const pickable = allEvents.filter(
+    (e) => e.id === form.event_id || (e.status !== "cancelled" && e.date >= day)
+  );
 
   const set = (k: keyof VisaDossier, v: any) => setForm((f) => ({ ...f, [k]: v }));
+
+  // Fill dates, artist, title and (when it can be inferred) country from the gig.
+  const linkEvent = async (ev: Event | undefined) => {
+    if (!ev) {
+      set("event_id", null);
+      return;
+    }
+    const d = parseDay(ev.date);
+    const entry = d ? toDay(new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1)) : null;
+    let code: string | null = null;
+    try {
+      const v = await listEventVisas({ from: ev.date, to: ev.date });
+      code = v.find((x) => x.event_id === ev.id)?.country_code ?? null;
+    } catch {
+      /* country stays manual */
+    }
+    const c = code ? countries.find((x) => x.code === code) : undefined;
+    setForm((f) => ({
+      ...f,
+      event_id: ev.id ?? null,
+      event_date: ev.date,
+      entry_date: f.entry_date || entry,
+      artist_id: f.artist_id ?? ev.artist_id ?? null,
+      title: f.title.trim() ? f.title : [ev.title, c?.name].filter(Boolean).join(" · "),
+      country_code: f.country_code || c?.code || f.country_code,
+      country_name: f.country_code ? f.country_name : c?.name ?? f.country_name,
+      purpose: f.purpose || "Performance",
+    }));
+  };
+  // Opened from the Agenda with a gig preselected: prefill once.
+  useEffect(() => {
+    if (!dossier.id && dossier.event_id != null && countries.length) {
+      const ev = allEvents.find((e) => e.id === dossier.event_id);
+      if (ev) linkEvent(ev);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allEvents.length, countries.length]);
 
   const onCountry = (code: string) => {
     const c = countries.find((x) => x.code === code);
@@ -272,6 +356,24 @@ function DossierModal({
             onChange={(e) => set("title", e.target.value)}
             placeholder="ADE 2026 · Piers"
           />
+        </Field>
+        <Field label={t("visa.linked_event")}>
+          <select
+            className="input"
+            value={form.event_id ?? ""}
+            onChange={(e) =>
+              linkEvent(
+                e.target.value ? allEvents.find((x) => x.id === Number(e.target.value)) : undefined
+              )
+            }
+          >
+            <option value="">{t("visa.no_event")}</option>
+            {pickable.map((e) => (
+              <option key={e.id} value={e.id}>
+                {[formatDate(e.date), e.title, e.city].filter(Boolean).join(" · ")}
+              </option>
+            ))}
+          </select>
         </Field>
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
           <Field label={t("visa.artist")}>
@@ -327,6 +429,7 @@ function DossierModal({
           </Field>
           <Field label={t("visa.event_date")}>
             <input
+              type="date"
               className="input"
               value={form.event_date ?? ""}
               onChange={(e) => set("event_date", e.target.value)}
@@ -334,6 +437,7 @@ function DossierModal({
           </Field>
           <Field label={t("visa.entry_date")}>
             <input
+              type="date"
               className="input"
               value={form.entry_date ?? ""}
               onChange={(e) => set("entry_date", e.target.value)}

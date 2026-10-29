@@ -3,7 +3,7 @@
 //! RA exposes a public, unauthenticated GraphQL API at https://ra.co/graphql.
 //! There is no official documentation and **the schema changes without notice**.
 //! This is the known fragile point of the whole module. If harvesting suddenly
-//! returns "réponse RA inattendue", the query below probably drifted:
+//! returns "unexpected RA response", the query below probably drifted:
 //!   1. open https://ra.co/events in Chrome, DevTools, Network tab,
 //!   2. filter on "graphql", trigger a listing, copy a working request,
 //!   3. update EVENT_LISTINGS_QUERY / AREA_QUERY here, nothing else references them.
@@ -27,6 +27,14 @@ query VI_AREA($c: String, $u: String) {
 const VENUE_QUERY: &str = r#"
 query VI_VENUE($id: ID!) {
   venue(id: $id) { id name website phone address capacity blurb }
+}"#;
+
+// Best-effort: only used by the "retry venues without an email" pass to reach a
+// venue's main promoter. If RA drops or renames `website`, the call errors and
+// the retry just skips this step.
+const PROMOTER_QUERY: &str = r#"
+query VI_PROMOTER($id: ID!) {
+  promoter(id: $id) { id name website }
 }"#;
 
 const EVENT_LISTINGS_QUERY: &str = r#"
@@ -109,7 +117,7 @@ async fn post<T: for<'de> Deserialize<'de>>(
     }
     if !status.is_success() {
         return Err(RaError {
-            message: format!("RA HTTP {} (Cloudflare ou schéma ?), voir commands/ra.rs", code),
+            message: format!("RA HTTP {} (Cloudflare or schema change?), see commands/ra.rs", code),
             status: Some(code),
             retryable: code == 403,
         });
@@ -117,14 +125,14 @@ async fn post<T: for<'de> Deserialize<'de>>(
     let parsed: GqlResp<T> = resp
         .json()
         .await
-        .map_err(|e| RaError::msg(format!("réponse RA illisible: {}, voir commands/ra.rs", e)))?;
+        .map_err(|e| RaError::msg(format!("unreadable RA response: {}, see commands/ra.rs", e)))?;
     if let Some(errs) = parsed.errors {
         let m = errs.into_iter().map(|e| e.message).collect::<Vec<_>>().join("; ");
-        return Err(RaError::msg(format!("GraphQL RA: {}, voir commands/ra.rs", m)));
+        return Err(RaError::msg(format!("RA GraphQL: {}, see commands/ra.rs", m)));
     }
     parsed
         .data
-        .ok_or_else(|| RaError::msg("réponse RA inattendue (schéma changé ?), voir commands/ra.rs"))
+        .ok_or_else(|| RaError::msg("unexpected RA response (schema changed?), see commands/ra.rs"))
 }
 
 // ---------------- Area resolution ----------------
@@ -203,6 +211,10 @@ pub struct CountryInfo {
 }
 #[derive(Deserialize)]
 pub struct NamedNode {
+    /// Present on artists and promoters (the query asks for it); kept optional
+    /// so a schema drift on ids does not fail the whole listing.
+    #[serde(default)]
+    pub id: Option<String>,
     pub name: String,
 }
 
@@ -231,6 +243,37 @@ pub async fn fetch_venue_detail(
     Ok(data.venue.unwrap_or_default())
 }
 
+#[derive(Deserialize)]
+struct PromoterData {
+    promoter: Option<PromoterNode>,
+}
+#[derive(Deserialize)]
+struct PromoterNode {
+    website: Option<String>,
+}
+
+/// A promoter's website as RA lists it (None when RA has none).
+pub async fn fetch_promoter_website(
+    client: &reqwest::Client,
+    promoter_id: i64,
+) -> Result<Option<String>, RaError> {
+    let body = json!({ "query": PROMOTER_QUERY, "variables": { "id": promoter_id.to_string() } });
+    let data: PromoterData = post(client, body).await?;
+    Ok(data.promoter.and_then(|p| p.website).filter(|w| !w.trim().is_empty()))
+}
+
+/// RA promoter page URL as stored in vi_promoters.ra_url.
+pub fn promoter_url(id: &str) -> Option<String> {
+    let id = id.trim();
+    (!id.is_empty() && id.chars().all(|c| c.is_ascii_digit()))
+        .then(|| format!("https://ra.co/promoters/{}", id))
+}
+
+/// Numeric id back out of a promoter URL ("https://ra.co/promoters/1234").
+pub fn promoter_id_from_url(url: &str) -> Option<i64> {
+    url.trim_end_matches('/').rsplit('/').next()?.parse().ok()
+}
+
 /// Fetch one page of event listings for an area over a date window (ISO 8601).
 pub async fn fetch_listings(
     client: &reqwest::Client,
@@ -256,9 +299,20 @@ pub async fn fetch_listings(
 mod tests {
     use super::*;
 
-    // Live smoke test against the real RA API: proves the query + serde structs
-    // still match today. Run with: cargo test live_ra_smoke -- --nocapture
     #[test]
+    fn promoter_urls_round_trip() {
+        let u = promoter_url("1234").unwrap();
+        assert_eq!(u, "https://ra.co/promoters/1234");
+        assert_eq!(promoter_id_from_url(&u), Some(1234));
+        assert_eq!(promoter_url("abc"), None);
+        assert_eq!(promoter_id_from_url("https://ra.co/promoters/"), None);
+    }
+
+    // Live smoke test against the real RA API: proves the query + serde structs
+    // still match today. Network-bound, so opt-in:
+    //   cargo test live_ra_smoke -- --ignored --nocapture
+    #[test]
+    #[ignore]
     fn live_ra_smoke() {
         let client = client();
         tauri::async_runtime::block_on(async {

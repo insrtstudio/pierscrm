@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
+import { ReplySync } from "./components/ReplySync";
 
 import { Home } from "./pages/Home";
 
@@ -48,6 +49,8 @@ const page = (el: React.ReactNode) => <Suspense fallback={<Fallback />}>{el}</Su
 export function App() {
   return (
     <HashRouter>
+      {/* Background IMAP reply detection, every 10 minutes while the app is open. */}
+      <ReplySync />
       <Routes>
         <Route element={<Layout />}>
           <Route index element={page(<Home />)} />

@@ -8,7 +8,17 @@ use tauri::State;
 pub fn list_artists(state: State<'_, AppState>) -> Result<Vec<Artist>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT * FROM artists ORDER BY name COLLATE NOCASE")
+        // Every column but the base64 avatar (often hundreds of KB), which every
+        // `artists` query shipped to every page. The UI loads it per artist
+        // through `get_artist_avatar`; `get_artist` still returns it.
+        .prepare(
+            "SELECT id, name, real_name, tagline, bio, genres, city, country, NULL AS avatar,
+                    email, phone, booking_email, website, instagram, soundcloud, spotify,
+                    apple_music, beatport, youtube, press_quotes, achievements, links, mix_url,
+                    tech_rider, fee_range, stats, audience_cities, spotify_artist_id,
+                    created_at, updated_at
+             FROM artists ORDER BY name COLLATE NOCASE",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], Artist::from_row)
@@ -33,6 +43,17 @@ pub fn get_artist(state: State<'_, AppState>, id: i64) -> Result<Option<Artist>,
         Some(r) => Ok(Some(r.map_err(|e| e.to_string())?)),
         None => Ok(None),
     }
+}
+
+/// Just the avatar (data URL) of one artist, for list views.
+#[tauri::command(async)]
+pub fn get_artist_avatar(state: State<'_, AppState>, id: i64) -> Result<Option<String>, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let v: Option<String> = conn
+        .query_row("SELECT avatar FROM artists WHERE id=?1", params![id], |r| r.get(0))
+        .ok()
+        .flatten();
+    Ok(v.filter(|s| !s.trim().is_empty()))
 }
 
 #[tauri::command(async)]
@@ -161,4 +182,22 @@ fn base64_encode(input: &[u8]) -> String {
         }
     }
     out
+}
+
+/// The artist a new contact belongs to when nothing else says so: the only
+/// artist of the roster, or None when there are zero or several (then the
+/// choice is the user's). Used by the import, the startup backfill and the
+/// Discovery / Radar promotion paths, so a one-artist CRM never grows contacts
+/// without an artist again (they made the artist page and filter useless).
+pub(crate) fn default_artist_id(conn: &rusqlite::Connection) -> Option<i64> {
+    let mut stmt = conn.prepare("SELECT id FROM artists LIMIT 2").ok()?;
+    let ids: Vec<i64> = stmt
+        .query_map([], |r| r.get(0))
+        .ok()?
+        .filter_map(Result::ok)
+        .collect();
+    match ids.as_slice() {
+        [only] => Some(*only),
+        _ => None,
+    }
 }

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { getArtistAvatar } from "./api";
 
 /// Delay a fast-changing value (a search box) so it only reaches a query key
 /// once the user pauses. Without this every keystroke mints a new React Query
@@ -55,4 +57,17 @@ export function useAppIntent(id: string, handler: () => void) {
     window.addEventListener("app:intent", h);
     return () => window.removeEventListener("app:intent", h);
   }, [id]);
+}
+
+/// One artist's avatar (base64 data URL), loaded on its own and cached: the
+/// `artists` list no longer carries it. The key sits under ["artist", id], so
+/// invalidating an artist after an edit refreshes its avatar too.
+export function useArtistAvatar(id?: number | null): string | null {
+  const { data } = useQuery({
+    queryKey: ["artist", id, "avatar"],
+    queryFn: () => getArtistAvatar(id as number),
+    enabled: id != null,
+    staleTime: Infinity,
+  });
+  return data ?? null;
 }

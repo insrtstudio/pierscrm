@@ -39,11 +39,23 @@ thiserror = "2"
 reqwest = { version = "0.13", features = ["json"] }
 tokio = { version = "1", features = ["time"] }
 regex = "1"
+# Secrets (SMTP password, API keys) live in the macOS Keychain, not in SQLite.
+keyring = { version = "3", features = ["apple-native"] }
+# Reply detection (read-only IMAP scan of the sender's inbox).
+imap = "2.4"
+native-tls = "0.2"
 
 [profile.release]
 # NOT "abort": a panic in a background harvest/enrich worker must never take the
 # whole app down. With unwind, a panicked task aborts alone and the app survives.
-codegen-units = 1
-lto = true
+#
+# CI time vs size: `lto = true` + `codegen-units = 1` compiled the app crate and
+# ran a single-threaded whole-program link, ~4 min per arch out of a 15 min
+# universal build. Thin LTO with parallel codegen keeps most of the cross-crate
+# inlining/dead-code removal and uses all runner cores; the binary is a few
+# percent larger (an app this size moves by a couple of MB at most, the
+# dependencies dominate) and runtime is unchanged for an I/O-bound app.
+codegen-units = 16
+lto = "thin"
 opt-level = "s"
 strip = true

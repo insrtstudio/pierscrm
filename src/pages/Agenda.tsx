@@ -2,7 +2,18 @@ import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, ChevronRight, Plus, Trash2, MapPin, Clock } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Trash2,
+  MapPin,
+  Clock,
+  Plane,
+  AlertTriangle,
+  ListChecks,
+} from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import clsx from "clsx";
 import {
   deleteEvent,
@@ -10,13 +21,15 @@ import {
   listArtists,
   listContacts,
   listEvents,
+  listEventVisas,
+  listTasks,
   saveEvent,
 } from "../lib/api";
-import type { Artist, Contact, Event } from "../lib/types";
+import type { Artist, Contact, Event, EventVisa, Task } from "../lib/types";
 import { EVENT_STATUSES } from "../lib/types";
 import { PageHeader } from "../components/Layout";
 import { euro, parseDay } from "../lib/format";
-import { useAppIntent } from "../lib/hooks";
+import { useAppIntent, useDebounced } from "../lib/hooks";
 import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 
 // Warm, on-brand ramp (reds → warm neutrals) so artists stay distinguishable
@@ -83,6 +96,27 @@ export function Agenda() {
       }),
   });
 
+  // Light layer: open tasks with a due date in the visible range.
+  const { data: tasks = [] } = useQuery({ queryKey: ["tasks"], queryFn: listTasks });
+  const tasksByDay = useMemo(() => {
+    const map: Record<string, Task[]> = {};
+    for (const tk of tasks)
+      if (tk.due_date && !tk.done && tk.due_date >= rangeFrom && tk.due_date <= rangeTo)
+        (map[tk.due_date] ??= []).push(tk);
+    return map;
+  }, [tasks, rangeFrom, rangeTo]);
+  // Visa situation per gig: linked dossier, or a gig abroad that needs one.
+  const { data: visas = [] } = useQuery({
+    queryKey: ["event_visas", rangeFrom, rangeTo],
+    queryFn: () => listEventVisas({ from: rangeFrom, to: rangeTo }),
+  });
+  const visaFor = useMemo(() => {
+    const m = new Map<number, EventVisa>();
+    for (const v of visas) m.set(v.event_id, v);
+    return m;
+  }, [visas]);
+  const navigate = useNavigate();
+
   const colorFor = (artistId?: number | null) => {
     if (!artistId) return "#8b929c";
     const idx = artists.findIndex((a) => a.id === artistId);
@@ -100,6 +134,8 @@ export function Agenda() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["events"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["budget"] });
+      qc.invalidateQueries({ queryKey: ["event_visas"] });
     },
   });
 
@@ -146,7 +182,7 @@ export function Agenda() {
         }
       />
 
-      <div className="px-8 py-6">
+      <div className="px-page py-6">
         {/* Month nav */}
         <div className="mb-4 flex items-center gap-3">
           <div className="flex items-center gap-1">
@@ -242,11 +278,31 @@ export function Agenda() {
                           <span className="tabular opacity-80">{ev.start_time}</span>
                         )}
                         <span className="truncate">{ev.title}</span>
+                        <VisaMark v={visaFor.get(ev.id!)} />
                       </div>
                     ))}
                     {dayEvents.length > 3 && (
                       <div className="px-1.5 text-2xs text-fg-subtle">
                         +{dayEvents.length - 3}
+                      </div>
+                    )}
+                    {(tasksByDay[dISO] ?? []).slice(0, 2).map((tk) => (
+                      <div
+                        key={`t${tk.id}`}
+                        title={tk.title}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate("/agenda?tab=planning");
+                        }}
+                        className="flex items-center gap-1 border border-dashed border-border px-1.5 py-0.5 text-2xs leading-tight text-fg-subtle hover:text-fg"
+                      >
+                        <ListChecks size={10} className="shrink-0" />
+                        <span className="truncate">{tk.title.split("\n")[0]}</span>
+                      </div>
+                    ))}
+                    {(tasksByDay[dISO]?.length ?? 0) > 2 && (
+                      <div className="px-1.5 text-2xs text-fg-faint">
+                        +{tasksByDay[dISO].length - 2}
                       </div>
                     )}
                   </div>
@@ -276,11 +332,19 @@ export function Agenda() {
         <EventModal
           event={editing}
           artists={artists}
+          visa={editing.id != null ? visaFor.get(editing.id) : undefined}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
             qc.invalidateQueries({ queryKey: ["events"] });
             qc.invalidateQueries({ queryKey: ["dashboard"] });
+            // A confirmed gig flips its linked contact to "confirmed" server-side.
+            qc.invalidateQueries({ queryKey: ["contacts"] });
+            qc.invalidateQueries({ queryKey: ["followups"] });
+            qc.invalidateQueries({ queryKey: ["vi_venues"] });
+            // A confirmed gig with a fee owns a budget revenue line.
+            qc.invalidateQueries({ queryKey: ["budget"] });
+            qc.invalidateQueries({ queryKey: ["event_visas"] });
           }}
           onDelete={(id) => {
             if (confirm(t("common.confirm_delete"))) {
@@ -298,8 +362,44 @@ export function Agenda() {
           artist={artists.find((a) => a.id === hover.ev.artist_id)}
           color={colorFor(hover.ev.artist_id)}
           months={months}
+          visa={visaFor.get(hover.ev.id!)}
         />
       )}
+    </div>
+  );
+}
+
+/// Small mark on an event chip: a dossier exists, or the gig needs one.
+function VisaMark({ v }: { v?: EventVisa }) {
+  const { t } = useTranslation();
+  if (!v) return null;
+  if (v.dossier_id != null)
+    return (
+      <span title={t("agenda.visa_dossier", { status: t(`visa.st_${v.dossier_status}`) })} className="ml-auto shrink-0">
+        <Plane size={10} />
+      </span>
+    );
+  if (v.needs_visa)
+    return (
+      <span title={t("agenda.visa_missing", { country: v.country_name ?? v.country_code })} className="ml-auto shrink-0 text-warn">
+        <AlertTriangle size={10} />
+      </span>
+    );
+  return null;
+}
+
+function VisaLine({ v }: { v?: EventVisa }) {
+  const { t } = useTranslation();
+  if (!v || (v.dossier_id == null && !v.needs_visa)) return null;
+  return v.dossier_id != null ? (
+    <div className="flex items-center gap-2">
+      <Plane size={12} className="shrink-0 text-fg-faint" />
+      {t("agenda.visa_dossier", { status: t(`visa.st_${v.dossier_status}`) })}
+    </div>
+  ) : (
+    <div className="flex items-center gap-2 font-semibold text-warn">
+      <AlertTriangle size={12} className="shrink-0" />
+      {t("agenda.visa_missing", { country: v.country_name ?? v.country_code })}
     </div>
   );
 }
@@ -310,12 +410,14 @@ function EventHoverCard({
   artist,
   color,
   months,
+  visa,
 }: {
   ev: Event;
   rect: DOMRect;
   artist?: Artist;
   color: string;
   months: string[];
+  visa?: EventVisa;
 }) {
   const { t } = useTranslation();
   const W = 268;
@@ -364,6 +466,7 @@ function EventHoverCard({
           </div>
         )}
         {ev.fee != null && <div className="font-bold text-fg">{euro(ev.fee)}</div>}
+        <VisaLine v={visa} />
         {ev.notes && <div className="line-clamp-3 pt-1 leading-relaxed">{ev.notes}</div>}
       </div>
     </div>,
@@ -374,35 +477,62 @@ function EventHoverCard({
 function EventModal({
   event,
   artists,
+  visa,
   onClose,
   onSaved,
   onDelete,
 }: {
   event: Event;
   artists: Artist[];
+  visa?: EventVisa;
   onClose: () => void;
   onSaved: () => void;
   onDelete: (id: number) => void;
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const navigate = useNavigate();
   const [form, setForm] = useState<Event>({ ...event });
-  // Only contacts that can plausibly be a booking (confirmed / in discussion),
-  // plus the one currently linked: the full list runs into the thousands.
+  // Contacts that can plausibly be a booking (confirmed / in discussion /
+  // contacted), plus the one currently linked, plus search hits over the whole
+  // pipeline: the full list runs into the thousands, and on a fresh pipeline
+  // nobody is "in discussion" yet, which left this picker empty.
+  const [bookingSearch, setBookingSearch] = useState("");
+  const dBookingSearch = useDebounced(bookingSearch.trim(), 250);
   const { data: bookings = [] } = useQuery({
-    queryKey: ["contacts", "booking-options", event.contact_id ?? null],
+    queryKey: ["contacts", "booking-options", form.contact_id ?? null, dBookingSearch],
     queryFn: async () => {
-      const [confirmed, discussing, linked] = await Promise.all([
+      const [confirmed, discussing, linked, hits] = await Promise.all([
         listContacts({ status: "confirmed" }),
         listContacts({ status: "in_discussion" }),
-        event.contact_id ? getContact(event.contact_id) : Promise.resolve(null),
+        form.contact_id ? getContact(form.contact_id) : Promise.resolve(null),
+        dBookingSearch.length >= 2
+          ? listContacts({ search: dBookingSearch, sort: "name", limit: 50 })
+          : Promise.resolve([] as Contact[]),
       ]);
       const byId = new Map<number, Contact>();
-      for (const c of [...confirmed, ...discussing, ...(linked ? [linked] : [])])
+      for (const c of [
+        ...(linked ? [linked] : []),
+        ...hits.slice(0, 50),
+        ...confirmed,
+        ...discussing,
+      ])
         if (c.id != null) byId.set(c.id, c);
       return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
     },
+    placeholderData: (prev) => prev,
   });
+  const pickContact = (id: number | null) => {
+    const c = bookings.find((b) => b.id === id);
+    setForm((f) => ({
+      ...f,
+      contact_id: id,
+      // Prefill the empty fields from the booking so the gig is not retyped.
+      venue: f.venue || (c ? c.venue || c.name : f.venue),
+      city: f.city || (c?.area ?? f.city),
+      title: f.title || (c ? c.venue || c.name : f.title),
+    }));
+  };
   const set = (k: keyof Event, v: any) => setForm((f) => ({ ...f, [k]: v }));
   const [save, busy] = useSubmit(async () => {
     if (!form.title.trim() || !form.date) {
@@ -506,10 +636,16 @@ function EventModal({
             />
           </Field>
           <Field label={t("agenda.link_contact")}>
+            <input
+              className="input mb-1.5 py-1.5 text-xs"
+              placeholder={t("agenda.search_contact")}
+              value={bookingSearch}
+              onChange={(e) => setBookingSearch(e.target.value)}
+            />
             <select
               className="input"
               value={form.contact_id ?? ""}
-              onChange={(e) => set("contact_id", e.target.value ? Number(e.target.value) : null)}
+              onChange={(e) => pickContact(e.target.value ? Number(e.target.value) : null)}
             >
               <option value="">·</option>
               {bookings.map((c) => (
@@ -527,6 +663,30 @@ function EventModal({
             onChange={(e) => set("notes", e.target.value)}
           />
         </Field>
+        {event.id != null && visa && (visa.dossier_id != null || visa.needs_visa) && (
+          <div
+            className={clsx(
+              "flex items-center gap-3 border px-3 py-2 text-xs",
+              visa.dossier_id != null ? "border-border text-fg-subtle" : "border-warn/40 bg-warn/5 text-warn"
+            )}
+          >
+            <div className="flex-1">
+              <VisaLine v={visa} />
+            </div>
+            <button
+              className="btn-outline py-1 text-xs"
+              onClick={() =>
+                navigate(
+                  visa.dossier_id != null
+                    ? `/visa?dossier=${visa.dossier_id}`
+                    : `/visa?event=${event.id}`
+                )
+              }
+            >
+              {visa.dossier_id != null ? t("agenda.open_dossier") : t("agenda.create_dossier")}
+            </button>
+          </div>
+        )}
         <div className="flex items-center justify-between pt-1">
           <div>
             {event.id && (

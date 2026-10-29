@@ -1,5 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import { useAppIntent, useDebounced } from "../lib/hooks";
@@ -11,24 +17,40 @@ import {
   Pencil,
   Trash2,
   Upload,
+  Building2,
+  X,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  addToCampaign,
+  assignContactsArtist,
+  countContacts,
   createContact,
   deleteContact,
   deleteContacts,
+  getContact,
+  listArtists,
   listContacts,
+  listEmails,
+  listCampaigns,
+  listEvents,
+  listOrganisations,
+  saveOrganisation,
   updateContact,
   updateContactStatus,
+  updateContactsStatus,
 } from "../lib/api";
 import type { Contact, Status } from "../lib/types";
+import { formatDate } from "../lib/format";
 import { STATUSES } from "../lib/types";
 import { CATEGORIES } from "../lib/constants";
 import { PageHeader, Loader, ErrorState } from "../components/Layout";
 import { StatusBadge, StatusSelect, PriorityBadge } from "../components/StatusBadge";
 import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 import { ComposeModal } from "../components/ComposeModal";
+
+const PAGE_SIZE = 200;
 
 export function Contacts() {
   const { t } = useTranslation();
@@ -37,24 +59,92 @@ export function Contacts() {
   const toast = useToast();
   const confirm = useConfirm();
 
-  const [category, setCategory] = useState("all");
-  const [status, setStatus] = useState("all");
+  // Filters live in the URL so other pages (dashboard pipeline bars) can deep
+  // link into a filtered Pipeline, and they survive a round trip to a contact.
+  const [params, setParams] = useSearchParams();
+  const [category, setCategory] = useState(() => params.get("category") || "all");
+  const [status, setStatus] = useState(() => params.get("status") || "all");
+  const [artist, setArtist] = useState(() => params.get("artist") || "all");
+  const [sort, setSort] = useState(() => params.get("sort") || "priority");
+  const [org, setOrg] = useState(() => params.get("org") || "all");
   const [search, setSearch] = useState("");
+  useEffect(() => {
+    const next: Record<string, string> = {};
+    if (category !== "all") next.category = category;
+    if (status !== "all") next.status = status;
+    if (artist !== "all") next.artist = artist;
+    if (org !== "all") next.org = org;
+    if (sort !== "priority") next.sort = sort;
+    setParams(next, { replace: true });
+  }, [category, status, artist, org, sort]);
+  const filtersActive =
+    category !== "all" ||
+    status !== "all" ||
+    artist !== "all" ||
+    org !== "all" ||
+    search.trim() !== "";
+  const resetFilters = () => {
+    setCategory("all");
+    setStatus("all");
+    setArtist("all");
+    setOrg("all");
+    setSearch("");
+  };
+  const { data: artists = [] } = useQuery({ queryKey: ["artists"], queryFn: listArtists });
+  const { data: organisations = [] } = useQuery({
+    queryKey: ["organisations"],
+    queryFn: listOrganisations,
+  });
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [editing, setEditing] = useState<Contact | null>(null);
   const [composing, setComposing] = useState<Contact | null>(null);
   // Typing must not fire a query per keystroke.
   const dSearch = useDebounced(search, 250);
 
+  // Rows are paged in on scroll (light rows, no notes), and the size of the
+  // result comes from its own COUNT query: loading the 3 000 full rows on every
+  // filter change was the slow part of this page.
+  const filterArgs = {
+    category,
+    status,
+    search: dSearch,
+    artist_id: artist === "all" ? null : Number(artist),
+    organisation_id: org === "all" ? null : Number(org),
+  };
   const {
-    data: contacts = [],
+    data: pages,
     isLoading: contactsLoading,
     isError: contactsError,
     refetch: refetchContacts,
-  } = useQuery({
-    queryKey: ["contacts", category, status, dSearch],
-    queryFn: () => listContacts({ category, status, search: dSearch }),
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: ["contacts", "page", filterArgs, sort],
+    queryFn: ({ pageParam }) =>
+      listContacts({ ...filterArgs, sort, limit: PAGE_SIZE, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (last, all) =>
+      last.length < PAGE_SIZE ? undefined : all.length * PAGE_SIZE,
+    placeholderData: keepPreviousData,
   });
+  const contacts = useMemo(() => pages?.pages.flat() ?? [], [pages]);
+  const { data: total } = useQuery({
+    queryKey: ["contacts", "count", filterArgs],
+    queryFn: () => countContacts(filterArgs),
+    placeholderData: keepPreviousData,
+  });
+
+  // Contact status feeds the follow-up queue, the dashboard and the Discovery
+  // "contacted" flag: refresh all of them, not only this list.
+  const invalidateAll = () => {
+    qc.invalidateQueries({ queryKey: ["contacts"] });
+    qc.invalidateQueries({ queryKey: ["dashboard"] });
+    qc.invalidateQueries({ queryKey: ["followups"] });
+    qc.invalidateQueries({ queryKey: ["vi_venues"] });
+    qc.invalidateQueries({ queryKey: ["artist"] });
+    qc.invalidateQueries({ queryKey: ["organisations"] });
+  };
 
   // Render only the rows in view. The full pipeline is thousands of contacts and
   // each row carries an inline status <select>, so mounting them all made every
@@ -73,29 +163,48 @@ export function Contacts() {
     ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
     : 0;
 
+  // Pull the next page once the user scrolls near the end of what is loaded.
+  const lastVisible = virtualRows.length ? virtualRows[virtualRows.length - 1].index : 0;
+  useEffect(() => {
+    if (
+      contacts.length > 0 &&
+      hasNextPage &&
+      !isFetchingNextPage &&
+      lastVisible >= contacts.length - 40
+    )
+      fetchNextPage();
+  }, [lastVisible, contacts.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [category, status, dSearch, artist, org, sort]);
+
+  // With a single artist, new contacts belong to it unless the user says otherwise.
+  const soleArtist = artists.length === 1 ? artists[0].id ?? null : null;
+
   useAppIntent("new:contact", () =>
-    setEditing({ category: "venue", name: "", status: "to_contact" } as Contact)
+    setEditing({
+      category: "venue",
+      name: "",
+      status: "to_contact",
+      artist_id: soleArtist,
+    } as Contact)
   );
 
   // A selection made under one filter must not survive into another: bulk
   // delete used to remove contacts that were no longer on screen.
-  useEffect(() => setSelected(new Set()), [category, status, dSearch]);
+  useEffect(() => setSelected(new Set()), [category, status, dSearch, artist, org]);
   const visibleSelected = contacts.filter((c) => selected.has(c.id!)).map((c) => c.id!);
 
   const statusMut = useMutation({
     mutationFn: ({ id, status }: { id: number; status: Status }) =>
       updateContactStatus(id, status),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["contacts"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
-    },
+    onSuccess: invalidateAll,
   });
 
   const delMut = useMutation({
     mutationFn: (id: number) => deleteContact(id),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["contacts"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      invalidateAll();
       toast(t("common.delete"), "ok");
     },
   });
@@ -103,10 +212,27 @@ export function Contacts() {
   const bulkDelMut = useMutation({
     mutationFn: (ids: number[]) => deleteContacts(ids),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["contacts"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      invalidateAll();
       setSelected(new Set());
     },
+  });
+  const bulkStatusMut = useMutation({
+    mutationFn: ({ ids, status }: { ids: number[]; status: string }) =>
+      updateContactsStatus(ids, status),
+    onSuccess: (n) => {
+      invalidateAll();
+      toast(t("contacts.bulk_updated", { count: n }), "ok");
+    },
+    onError: (e) => toast(String(e), "error"),
+  });
+  const bulkArtistMut = useMutation({
+    mutationFn: ({ ids, artistId }: { ids: number[]; artistId: number | null }) =>
+      assignContactsArtist(ids, artistId),
+    onSuccess: (n) => {
+      invalidateAll();
+      toast(t("contacts.bulk_updated", { count: n }), "ok");
+    },
+    onError: (e) => toast(String(e), "error"),
   });
 
   const allChecked =
@@ -141,7 +267,9 @@ export function Contacts() {
               setEditing({
                 category: category === "all" ? "venue" : category,
                 name: "",
-                status: "to_contact",
+                status: status === "all" ? "to_contact" : status,
+                artist_id: artist === "all" ? soleArtist : Number(artist),
+                organisation_id: org === "all" ? null : Number(org),
               } as Contact)
             }
           >
@@ -152,7 +280,7 @@ export function Contacts() {
         }
       />
 
-      <div className="px-8 pb-10 pt-6">
+      <div className="px-page pb-10 pt-6">
         {/* Filters */}
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px]">
@@ -191,6 +319,45 @@ export function Contacts() {
               </option>
             ))}
           </select>
+          {artists.length > 0 && (
+            <select
+              className="input w-auto"
+              value={artist}
+              onChange={(e) => setArtist(e.target.value)}
+            >
+              <option value="all">{t("contacts.all_artists")}</option>
+              {artists.map((a) => (
+                <option key={a.id} value={String(a.id)}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          )}
+          {organisations.length > 0 && (
+            <select
+              className="input w-auto max-w-[220px]"
+              value={org}
+              onChange={(e) => setOrg(e.target.value)}
+            >
+              <option value="all">{t("contacts.all_organisations")}</option>
+              {organisations.map((o) => (
+                <option key={o.id} value={String(o.id)}>
+                  {o.name} ({o.contact_count ?? 0})
+                </option>
+              ))}
+            </select>
+          )}
+          <select
+            className="input w-auto"
+            value={sort}
+            onChange={(e) => setSort(e.target.value)}
+          >
+            {["priority", "name", "recent", "created", "date", "area", "organisation"].map((k) => (
+              <option key={k} value={k}>
+                {t(`contacts.sort_${k}`)}
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Bulk bar */}
@@ -199,6 +366,48 @@ export function Contacts() {
             <span className="text-fg-subtle">
               {t("contacts.selected", { count: visibleSelected.length })}
             </span>
+            <select
+              className="input w-auto py-1.5 text-xs"
+              value=""
+              disabled={bulkStatusMut.isPending}
+              aria-label={t("contacts.bulk_status")}
+              onChange={(e) => {
+                const s = e.target.value;
+                if (s) bulkStatusMut.mutate({ ids: visibleSelected, status: s });
+              }}
+            >
+              <option value="">{t("contacts.bulk_status")}</option>
+              {STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {t(`status.${s}`)}
+                </option>
+              ))}
+            </select>
+            {artists.length > 0 && (
+              <select
+                className="input w-auto py-1.5 text-xs"
+                value=""
+                disabled={bulkArtistMut.isPending}
+                aria-label={t("contacts.bulk_artist")}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v)
+                    bulkArtistMut.mutate({
+                      ids: visibleSelected,
+                      artistId: v === "none" ? null : Number(v),
+                    });
+                }}
+              >
+                <option value="">{t("contacts.bulk_artist")}</option>
+                {artists.map((a) => (
+                  <option key={a.id} value={String(a.id)}>
+                    {a.name}
+                  </option>
+                ))}
+                <option value="none">{t("contacts.no_artist")}</option>
+              </select>
+            )}
+            <AddToCampaign ids={visibleSelected} onDone={invalidateAll} />
             <button
               className="btn-danger ml-auto py-1.5"
               disabled={bulkDelMut.isPending}
@@ -260,7 +469,16 @@ export function Contacts() {
                       colSpan={7}
                       className="px-3 py-16 text-center text-sm text-fg-subtle"
                     >
-                      {t("common.empty")}
+                      {filtersActive ? (
+                        <>
+                          {t("contacts.no_match")}{" "}
+                          <button className="text-accent hover:underline" onClick={resetFilters}>
+                            {t("contacts.reset_filters")}
+                          </button>
+                        </>
+                      ) : (
+                        t("common.empty")
+                      )}
                     </td>
                   </tr>
                 )}
@@ -292,15 +510,27 @@ export function Contacts() {
                         <PriorityBadge priority={c.priority} />
                         <span className="font-medium">{c.name}</span>
                       </button>
-                      {c.promoter && (
-                        <div className="text-xs text-fg-subtle">{c.promoter}</div>
+                      {(c.promoter || c.organisation_name) && (
+                        <div className="flex items-center gap-2 text-xs text-fg-subtle">
+                          {c.promoter && <span className="truncate">{c.promoter}</span>}
+                          {c.organisation_name && c.organisation_id != null && (
+                            <button
+                              className="badge shrink-0 border border-border py-0 hover:border-accent hover:text-accent"
+                              title={t("contacts.filter_organisation")}
+                              onClick={() => setOrg(String(c.organisation_id))}
+                            >
+                              <Building2 size={10} />
+                              {c.organisation_name}
+                            </button>
+                          )}
+                        </div>
                       )}
                     </td>
                     <td className="px-3 py-2.5 text-fg-subtle">
                       {c.area || c.venue || "·"}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-fg-subtle">
-                      {c.date || "·"}
+                      {formatDate(c.date)}
                     </td>
                     <td className="px-3 py-2.5">
                       {c.email ? (
@@ -374,18 +604,19 @@ export function Contacts() {
           </div>
         </div>
         <div className="mt-3 text-xs text-fg-subtle">
-          {t("contacts.count", { count: contacts.length })}
+          {total != null && total > contacts.length
+            ? t("contacts.count_partial", { shown: contacts.length, count: total })
+            : t("contacts.count", { count: total ?? contacts.length })}
         </div>
       </div>
 
       {editing && (
-        <ContactModal
+        <ContactEditor
           contact={editing}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            qc.invalidateQueries({ queryKey: ["contacts"] });
-            qc.invalidateQueries({ queryKey: ["dashboard"] });
+            invalidateAll();
           }}
         />
       )}
@@ -424,7 +655,64 @@ function StatusSelectInline({
   );
 }
 
+// ---------------- Bulk: add to campaign ----------------
+
+// Planned audience of a campaign (campaign_contacts).
+function AddToCampaign({ ids, onDone }: { ids: number[]; onDone: () => void }) {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const { data: campaigns = [] } = useQuery({ queryKey: ["campaigns"], queryFn: listCampaigns });
+  const qc = useQueryClient();
+  const mut = useMutation({
+    mutationFn: (campaignId: number) => addToCampaign(campaignId, ids),
+    onSuccess: (n) => {
+      qc.invalidateQueries({ queryKey: ["campaigns"] });
+      onDone();
+      toast(t("contacts.bulk_added_campaign", { count: typeof n === "number" ? n : ids.length }), "ok");
+    },
+    onError: (e) => toast(String(e), "error"),
+  });
+  const open = campaigns.filter((c) => c.status !== "archived" && c.status !== "done");
+  if (open.length === 0) return null;
+  return (
+    <select
+      className="input w-auto py-1.5 text-xs"
+      value=""
+      disabled={mut.isPending}
+      aria-label={t("contacts.bulk_campaign")}
+      onChange={(e) => e.target.value && mut.mutate(Number(e.target.value))}
+    >
+      <option value="">{t("contacts.bulk_campaign")}</option>
+      {open.map((c) => (
+        <option key={c.id} value={String(c.id)}>
+          {c.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 // ---------------- Contact editor ----------------
+
+// List rows are light (no notes / reason): the editor works on the full row.
+function ContactEditor(props: {
+  contact: Contact;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const id = props.contact.id;
+  const { data: full, isLoading } = useQuery({
+    queryKey: ["contact", id],
+    queryFn: () => getContact(id!),
+    enabled: id != null,
+    staleTime: 0,
+  });
+  if (id == null) return <ContactModal {...props} />;
+  if (isLoading) return null;
+  return <ContactModal {...props} contact={full ?? props.contact} />;
+}
+
+const isIsoDay = (v?: string | null) => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
 
 function ContactModal({
   contact,
@@ -439,17 +727,42 @@ function ContactModal({
   const toast = useToast();
   const [form, setForm] = useState<Contact>({ ...contact });
   const isNew = !contact.id;
+  const { data: artists = [] } = useQuery({ queryKey: ["artists"], queryFn: listArtists });
 
   const set = (k: keyof Contact, v: any) =>
     setForm((f) => ({ ...f, [k]: v }));
+  // Dates are ISO days edited with a date picker. A value that is still free
+  // text (not migrated) stays editable as text instead of showing blank.
+  const dateInp = (k: "date" | "first_contact" | "follow_up") => {
+    const v = (form[k] as string | null | undefined) ?? "";
+    return v && !isIsoDay(v)
+      ? { className: "input", value: v, onChange: (e: any) => set(k, e.target.value) }
+      : {
+          type: "date",
+          className: "input",
+          value: v,
+          onChange: (e: any) => set(k, e.target.value || null),
+        };
+  };
+  const { data: organisations = [] } = useQuery({
+    queryKey: ["organisations"],
+    queryFn: listOrganisations,
+  });
+  const [newOrg, setNewOrg] = useState<string | null>(null);
 
   const [save, saving] = useSubmit(async () => {
     if (!form.name.trim()) {
       toast(t("contacts.name") + " " + t("common.required"), "error");
       return;
     }
-    if (isNew) await createContact(form);
-    else await updateContact(form);
+    let payload = form;
+    if (newOrg != null && newOrg.trim()) {
+      const domain = form.email?.split("@")[1]?.trim().toLowerCase() || null;
+      const orgId = await saveOrganisation({ name: newOrg.trim(), email_domain: domain });
+      payload = { ...form, organisation_id: orgId };
+    }
+    if (isNew) await createContact(payload);
+    else await updateContact(payload);
     toast(t("common.save"), "ok");
     onSaved();
   });
@@ -487,6 +800,56 @@ function ContactModal({
         <Field label={t("contacts.priority")}>
           <input {...inp("priority")} placeholder="P1 / A / …" />
         </Field>
+        {artists.length > 0 && (
+          <Field label={t("contacts.artist")} className="col-span-2">
+            <select
+              className="input"
+              value={form.artist_id ?? ""}
+              onChange={(e) => set("artist_id", e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">{t("contacts.no_artist")}</option>
+              {artists.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+        <Field label={t("contacts.organisation")} className="col-span-2">
+          {newOrg != null ? (
+            <div className="flex gap-2">
+              <input
+                className="input flex-1"
+                autoFocus
+                placeholder={t("contacts.new_organisation_name")}
+                value={newOrg}
+                onChange={(e) => setNewOrg(e.target.value)}
+              />
+              <button className="btn-ghost px-2" onClick={() => setNewOrg(null)} aria-label={t("common.cancel")}>
+                <X size={15} />
+              </button>
+            </div>
+          ) : (
+            <select
+              className="input"
+              value={form.organisation_id ?? ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "__new") setNewOrg(form.promoter ?? "");
+                else set("organisation_id", v ? Number(v) : null);
+              }}
+            >
+              <option value="">{t("contacts.no_organisation")}</option>
+              {organisations.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+              <option value="__new">{t("contacts.new_organisation")}</option>
+            </select>
+          )}
+        </Field>
         <Field label={t("contacts.promoter")}>
           <input {...inp("promoter")} />
         </Field>
@@ -500,7 +863,7 @@ function ContactModal({
           <input {...inp("area")} />
         </Field>
         <Field label={t("contacts.date")}>
-          <input {...inp("date")} />
+          <input {...dateInp("date")} />
         </Field>
         <Field label={t("contacts.time")}>
           <input {...inp("time")} />
@@ -527,10 +890,10 @@ function ContactModal({
           <input {...inp("website")} />
         </Field>
         <Field label={t("contacts.first_contact")}>
-          <input {...inp("first_contact")} />
+          <input {...dateInp("first_contact")} />
         </Field>
         <Field label={t("contacts.follow_up")}>
-          <input {...inp("follow_up")} />
+          <input {...dateInp("follow_up")} />
         </Field>
         <Field label={t("contacts.contact_channel")} className="col-span-2">
           <input {...inp("contact_channel")} />
@@ -545,6 +908,10 @@ function ContactModal({
           <input {...inp("tags")} placeholder="fit-a, noord, boat…" />
         </Field>
       </div>
+      {form.organisation_id != null && newOrg == null && (
+        <OrganisationSiblings orgId={form.organisation_id} selfId={contact.id} />
+      )}
+      {!isNew && <ContactHistory contactId={contact.id!} />}
       <div className="mt-5 flex justify-end gap-2">
         <button className="btn-outline" onClick={onClose}>
           {t("common.cancel")}
@@ -554,5 +921,98 @@ function ContactModal({
         </button>
       </div>
     </Modal>
+  );
+}
+
+// Other contacts of the same organisation (one programmer, several venues).
+function OrganisationSiblings({ orgId, selfId }: { orgId: number; selfId?: number }) {
+  const { t } = useTranslation();
+  const { data: rows = [] } = useQuery({
+    queryKey: ["contacts", "organisation", orgId],
+    queryFn: () => listContacts({ organisation_id: orgId, sort: "name", limit: 30 }),
+  });
+  const siblings = rows.filter((c) => c.id !== selfId);
+  return (
+    <div className="mt-5 border-t border-border pt-4">
+      <div className="eyebrow mb-2 flex items-center gap-1.5 text-fg">
+        <Building2 size={12} />
+        {t("contacts.same_organisation")} ({siblings.length})
+      </div>
+      {siblings.length === 0 ? (
+        <p className="text-xs text-fg-subtle">{t("contacts.same_organisation_none")}</p>
+      ) : (
+        <ul className="space-y-1 text-xs">
+          {siblings.map((c) => (
+            <li key={c.id} className="flex items-center gap-2">
+              <span className="truncate font-medium">{c.name}</span>
+              <span className="truncate text-fg-subtle">{c.area || c.venue}</span>
+              <span className="ml-auto shrink-0">
+                <StatusBadge status={c.status} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// What happened with this contact elsewhere in the app: emails sent to it
+// (Outbox / campaigns) and Agenda events linked to it as a booking.
+function ContactHistory({ contactId }: { contactId: number }) {
+  const { t } = useTranslation();
+  const { data: emails = [] } = useQuery({
+    queryKey: ["emails", "contact", contactId],
+    queryFn: () => listEmails(contactId),
+  });
+  const { data: events = [] } = useQuery({
+    queryKey: ["events", "all"],
+    queryFn: () => listEvents({}),
+  });
+  const linked = events.filter((e) => e.contact_id === contactId);
+  return (
+    <div className="mt-5 border-t border-border pt-4">
+      <div className="eyebrow mb-2 text-fg">{t("contacts.history")}</div>
+      {emails.length === 0 && linked.length === 0 ? (
+        <p className="text-xs text-fg-subtle">{t("contacts.history_empty")}</p>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div>
+            <div className="mb-1 text-2xs uppercase tracking-wide text-fg-subtle">
+              {t("contacts.history_emails")} ({emails.length})
+            </div>
+            <ul className="space-y-1 text-xs">
+              {emails.slice(0, 8).map((e) => (
+                <li key={e.id} className="flex items-baseline gap-2">
+                  <span className="shrink-0 tabular text-fg-subtle">
+                    {e.sent_at?.slice(0, 10)}
+                  </span>
+                  <span className="truncate">{e.subject}</span>
+                  {e.status !== "sent" ? (
+                    <span className="shrink-0 text-danger">{t("contacts.failed")}</span>
+                  ) : e.opened_at ? (
+                    <span className="shrink-0 text-ok">{t("contacts.opened")}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <div className="mb-1 text-2xs uppercase tracking-wide text-fg-subtle">
+              {t("contacts.history_events")} ({linked.length})
+            </div>
+            <ul className="space-y-1 text-xs">
+              {linked.map((e) => (
+                <li key={e.id} className="flex items-baseline gap-2">
+                  <span className="shrink-0 tabular text-fg-subtle">{formatDate(e.date)}</span>
+                  <span className="truncate">{e.title}</span>
+                  <span className="shrink-0 text-fg-subtle">{t(`agenda.st_${e.status}`)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
