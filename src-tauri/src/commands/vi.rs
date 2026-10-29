@@ -411,6 +411,9 @@ pub(crate) fn migrate_quality(conn: &rusqlite::Connection) {
         "ALTER TABLE vi_venues ADD COLUMN ville_norm TEXT",
         // #1: the write-time "already on another venue" check looks addresses up by value.
         "CREATE INDEX IF NOT EXISTS idx_vi_contacts_val ON vi_contacts(valeur, venue_id)",
+        // #13: when the "retry venues without an email" pass last went over a
+        // venue, so a second click resumes instead of starting over.
+        "ALTER TABLE vi_venues ADD COLUMN email_retry_at TEXT",
         // #12: YouTube channels were stored as kind 'playlist'.
         "UPDATE radar_curators SET kind='channel' WHERE source='youtube' AND kind != 'channel'",
     ] {

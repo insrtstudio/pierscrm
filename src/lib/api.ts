@@ -371,8 +371,9 @@ export const pulseWatchlistToggle = (id: number, active: boolean) =>
 import type { CuratorRow, RadarStats } from "./types";
 export const radarHarvest = (genres: string[], sources: string[], limit?: number) =>
   invoke<number>("radar_harvest", { genres, sources, limit: limit ?? null });
-export const radarEnrich = (force?: boolean) =>
-  invoke<number>("radar_enrich", { force: force ?? false });
+/// `ids`: hunt exactly these curators (per-row "search again"), whatever they have.
+export const radarEnrich = (force?: boolean, ids?: number[]) =>
+  invoke<number>("radar_enrich", { force: force ?? false, ids: ids ?? null });
 /// `filter` is "all", "email" (addressable) or "pipeline" (already promoted).
 export const radarList = (p: { filter?: string; kind?: string; search?: string; limit?: number }) =>
   invoke<CuratorRow[]>("radar_list", {
