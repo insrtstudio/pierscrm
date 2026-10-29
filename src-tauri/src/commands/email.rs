@@ -218,7 +218,7 @@ fn render_signature(s: &SignatureData) -> (String, String) {
     } else {
         format!(
             "<div style=\"margin-top:22px;padding-top:14px;border-top:1px solid #e6e6e6;\
-             font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.55;color:#555\">{}</div>",
+             font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.55;color:#555\">{}</div>",
             rows.join("")
         )
     };
@@ -321,15 +321,50 @@ fn message_body(
         "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\
          <body style=\"margin:0;padding:0;background:#ffffff\">\
-         <div style=\"font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111111\">{}</div>{}{}\
+         <div style=\"max-width:560px;padding:8px 4px;font-family:-apple-system,Helvetica,Arial,sans-serif;\
+         font-size:15px;line-height:1.55;color:#111111\">{}{}</div>{}\
          </body></html>",
-        html_escape(body).replace('\n', "<br/>"),
+        body_html(body),
         sig_html,
         pixel
     );
     MultiPart::alternative()
         .singlepart(SinglePart::plain(plain))
         .singlepart(SinglePart::html(html))
+}
+
+/// The body as a plain, personal-looking email: one <p> per paragraph, line
+/// breaks kept, every URL clickable. No banner, no button, no template look:
+/// it should read like a message typed in a mail app.
+fn body_html(body: &str) -> String {
+    body.trim()
+        .split("\n\n")
+        .filter(|p| !p.trim().is_empty())
+        .map(|p| {
+            let lines: Vec<String> = p.trim().lines().map(|l| linkify(&html_escape(l))).collect();
+            format!("<p style=\"margin:0 0 14px 0\">{}</p>", lines.join("<br/>"))
+        })
+        .collect()
+}
+
+/// Wrap http(s) URLs of an already-escaped line in links. Trailing punctuation
+/// stays outside the link.
+fn linkify(escaped: &str) -> String {
+    let mut out = String::with_capacity(escaped.len());
+    let mut rest = escaped;
+    while let Some(i) = rest.find("http://").into_iter().chain(rest.find("https://")).min() {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        let end = tail.find(|c: char| c.is_whitespace() || c == '<').unwrap_or(tail.len());
+        let mut url = &tail[..end];
+        while url.ends_with(['.', ',', ')', ';', ':', '!', '?']) {
+            url = &url[..url.len() - 1];
+        }
+        out.push_str(&format!("<a href=\"{0}\" style=\"color:#ff5a1f\">{0}</a>", url));
+        rest = &tail[url.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Sender as a structured mailbox: formatting "Name <addr>" by hand broke (and
@@ -956,6 +991,20 @@ pub fn apply_opens(state: State<'_, AppState>, opens: Vec<OpenRecord>) -> Result
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(updated)
+}
+
+#[cfg(test)]
+mod body_html_tests {
+    use super::{body_html, linkify};
+
+    #[test]
+    fn paragraphs_and_links() {
+        let h = body_html("Hello,\n\nTout est là :\nhttps://insrt.studio/fr/p/abc\n\nÀ bientôt,\nThibault");
+        assert_eq!(h.matches("<p ").count(), 3);
+        assert!(h.contains("<a href=\"https://insrt.studio/fr/p/abc\""));
+        assert!(h.contains("À bientôt,<br/>Thibault"));
+        assert_eq!(linkify("voir https://a.fr/x."), "voir <a href=\"https://a.fr/x\" style=\"color:#ff5a1f\">https://a.fr/x</a>.");
+    }
 }
 
 #[cfg(test)]

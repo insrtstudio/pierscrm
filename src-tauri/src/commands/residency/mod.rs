@@ -278,54 +278,106 @@ pub fn default_steps() -> Vec<Step> {
     vec![
         Step {
             offset_days: 0,
-            subject: "Résidence {{ask}} à {{venue}} ? {{artist}}".into(),
-            body: "Bonjour,\n\nJe suis {{artist}}, DJ et producteur. Après ADE, je cherche un club à taille humaine pour \
-                   une résidence {{ask}} à {{city}}, et {{venue}} correspond à ce que j'imagine.\n\n\
-                   L'idée : une date régulière, documentée à chaque fois en contenu (une série « en développement ») \
-                   pour faire grandir la soirée avec le club et son public.\n\n\
-                   Mix, vidéos et chiffres sont réunis ici : {{press_link}}\n\n\
-                   Est-ce que ça vous parlerait d'en discuter ?\n\n{{artist}}"
+            subject: "{{venue}} x {{artist}}, une idée de résidence".into(),
+            body: "Hello,\n\n\
+                   Moi c'est Thibault, je mixe sous le nom de {{artist}} (house, tech house). Je rentre d'ADE avec pas mal d'envie et un peu d'élan.\n\n\
+                   Je cherche un club à {{city}} où poser une date {{rhythm}}, quelque chose qui s'installe dans le temps. \
+                   Et {{venue}}, honnêtement, c'est un des premiers endroits qui me sont venus en tête.\n\n\
+                   En parallèle je filme tout pour PIERS FM, ma série où je montre les morceaux en cours, les edits et les coulisses. \
+                   Chaque date chez vous deviendrait un épisode, donc un rendez-vous qui se voit aussi en ligne.\n\n\
+                   Tout est là si vous voulez écouter (le Vol. 4, c'est mon dernier mix) :\n{{press_link}}\n\n\
+                   Ça vous dirait qu'on en parle autour d'un café, ou juste au téléphone ?\n\n\
+                   À bientôt,\nThibault"
                 .into(),
-            subject_en: "A {{ask}} residency at {{venue}}? {{artist}}".into(),
-            body_en: "Hi,\n\nI'm {{artist}}, a DJ and producer. After ADE I'm looking for a mid-size club for a {{ask}} \
-                      residency in {{city}}, and {{venue}} is exactly the kind of room I have in mind.\n\n\
-                      The idea: a regular night, each one documented as content (an \"in development\" series) to grow \
-                      the night together with the club and its crowd.\n\n\
-                      Mix, videos and numbers are all here: {{press_link}}\n\n\
-                      Would you be open to a chat about it?\n\n{{artist}}"
+            subject_en: "{{venue}} x {{artist}}, a residency idea".into(),
+            body_en: "Hello,\n\n\
+                      I'm Thibault, I play as {{artist}} (house, tech house). Just got back from ADE with a lot of drive.\n\n\
+                      I'm looking for a club in {{city}} to hold a night {{rhythm}}, something that builds over time. \
+                      And honestly, {{venue}} was one of the first places that came to mind.\n\n\
+                      I film everything for PIERS FM, my series where I share tracks in progress, edits and what happens behind the decks. \
+                      Every night at yours would become an episode, so the night gets seen online too.\n\n\
+                      Everything's here if you want a listen (Vol. 4 is my latest mix):\n{{press_link}}\n\n\
+                      Up for a quick call or a coffee to talk it through?\n\n\
+                      Cheers,\nThibault"
                 .into(),
             extra_asset: None,
         },
         Step {
             offset_days: 5,
-            subject: "Re: résidence à {{venue}}".into(),
-            body: "Bonjour,\n\nJe me permets de remonter mon message de la semaine dernière à propos d'une résidence \
-                   {{ask}} à {{venue}}. Le dossier complet est toujours ici : {{press_link}}\n\n\
-                   Si je ne m'adresse pas à la bonne personne, pouvez-vous m'indiquer à qui écrire ?\n\nMerci,\n{{artist}}"
+            subject: "Re: {{venue}} x {{artist}}, une idée de résidence".into(),
+            body: "Hello,\n\n\
+                   Je remonte mon message pour {{venue}}, j'imagine que vos boîtes mail débordent en ce moment.\n\n\
+                   Si ce n'est pas vous qui gérez la prog, vous pouvez me dire à qui écrire ? Ça m'aiderait beaucoup.\n\n\
+                   Le mix et le reste sont toujours ici : {{press_link}}\n\n\
+                   Merci,\nThibault"
                 .into(),
-            subject_en: "Re: residency at {{venue}}".into(),
-            body_en: "Hi,\n\nJust bringing my note from last week back up, about a {{ask}} residency at {{venue}}. \
-                      Everything is still here: {{press_link}}\n\n\
-                      If I'm not writing to the right person, could you point me to who handles bookings?\n\n\
-                      Thanks,\n{{artist}}"
+            subject_en: "Re: {{venue}} x {{artist}}, a residency idea".into(),
+            body_en: "Hello,\n\n\
+                      Bumping this up about {{venue}}, I'm guessing your inbox is pretty full right now.\n\n\
+                      If you're not the one handling bookings, could you tell me who to write to? That would help a lot.\n\n\
+                      The mix and everything else are still here: {{press_link}}\n\n\
+                      Thanks,\nThibault"
                 .into(),
             extra_asset: None,
         },
         Step {
             offset_days: 12,
-            subject: "Dernier message, résidence à {{venue}}".into(),
-            body: "Bonjour,\n\nDernier petit message de ma part : si une résidence n'est pas d'actualité pour {{venue}}, \
-                   aucun souci, je ne relancerai plus. Si la porte reste ouverte pour plus tard, je serais ravi d'en \
-                   reparler.\n\nLe mix et le dossier : {{press_link}}\n\nBelle journée,\n{{artist}}"
+            subject: "Re: {{venue}} x {{artist}}, une idée de résidence".into(),
+            body: "Hello,\n\n\
+                   Dernier message de ma part, promis. Si ce n'est pas le moment pour {{venue}}, aucun souci, je comprends très bien.\n\n\
+                   Et si ça peut se faire plus tard dans la saison, je serais vraiment content d'en reparler.\n\n\
+                   {{press_link}}\n\n\
+                   Belle journée,\nThibault"
                 .into(),
-            subject_en: "Last note, residency at {{venue}}".into(),
-            body_en: "Hi,\n\nLast note from me: if a residency isn't on the cards for {{venue}} right now, no worries, \
-                      I won't follow up again. If the door is open for later, I'd love to talk.\n\n\
-                      Mix and press kit: {{press_link}}\n\nBest,\n{{artist}}"
+            subject_en: "Re: {{venue}} x {{artist}}, a residency idea".into(),
+            body_en: "Hello,\n\n\
+                      Last one from me, promise. If it's not the right time for {{venue}}, no worries at all.\n\n\
+                      And if it could work later in the season, I'd be really happy to pick it up again.\n\n\
+                      {{press_link}}\n\n\
+                      Have a good one,\nThibault"
                 .into(),
             extra_asset: None,
         },
     ]
+}
+
+/// Markers of the first default templates (v0.15.0, stiff and "AI-sounding").
+/// A saved campaign whose step still contains one gets the new default for that
+/// step; a step the user rewrote is left alone.
+const OLD_STEP_MARKERS: [&str; 3] = [
+    "Je suis {{artist}}, DJ et producteur. Après ADE",
+    "Je me permets de remonter mon message de la semaine dernière",
+    "Dernier petit message de ma part",
+];
+
+/// One-shot per launch, cheap: refresh untouched v0.15.0 templates in saved campaigns.
+pub fn refresh_default_templates(conn: &Connection) {
+    let ids: Vec<i64> = match conn.prepare("SELECT campaign_id FROM residency_campaigns") {
+        Ok(mut st) => st
+            .query_map([], |r| r.get(0))
+            .map(|it| it.flatten().collect())
+            .unwrap_or_default(),
+        Err(_) => return,
+    };
+    let fresh = default_steps();
+    for id in ids {
+        let Some(r) = load(conn, id) else { continue };
+        let mut cfg = r.config;
+        let mut changed = false;
+        for (i, marker) in OLD_STEP_MARKERS.iter().enumerate() {
+            if let (Some(step), Some(new)) = (cfg.steps.get_mut(i), fresh.get(i)) {
+                if step.body.contains(marker) {
+                    let extra = step.extra_asset.take();
+                    *step = new.clone();
+                    step.extra_asset = extra;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            let _ = save_config(conn, id, &cfg);
+        }
+    }
 }
 
 /// French pitch pre-filled by "Nouvelle campagne résidence" (the user edits it).

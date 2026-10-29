@@ -755,6 +755,7 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // email_replies.body_excerpt. Additive and idempotent, see
     // commands/residency/mod.rs.
     crate::commands::residency::migrate(conn);
+    crate::commands::residency::refresh_default_templates(conn);
 
     Ok(())
 }

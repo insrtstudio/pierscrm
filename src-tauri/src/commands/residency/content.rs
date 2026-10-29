@@ -32,6 +32,17 @@ fn ask_word(ask: &str, lang: &str) -> &'static str {
     }
 }
 
+/// How often, said the way people talk ("une date tous les mois", not
+/// "une date mensuelle").
+fn rhythm_words(ask: &str, lang: &str) -> &'static str {
+    match (ask, lang) {
+        ("bimonthly", "en") => "every other month",
+        ("bimonthly", _) => "tous les deux mois",
+        (_, "en") => "every month",
+        _ => "tous les mois",
+    }
+}
+
 /// The campaign's plain asset links, one per line, when there is no personal
 /// press link (insrt not configured).
 pub fn assets_block(cfg: &Config) -> Option<String> {
@@ -66,6 +77,7 @@ pub fn vars_for(info: &TargetInfo, cfg: &Config, artist: &str, press_url: Option
         v.insert("artist".into(), artist.to_string());
     }
     v.insert("ask".into(), ask_word(&cfg.ask, &info.lang).to_string());
+    v.insert("rhythm".into(), rhythm_words(&cfg.ask, &info.lang).to_string());
     if let Some(f) = &info.first_name {
         v.insert("first_name".into(), f.clone());
     }
@@ -108,20 +120,47 @@ pub fn render_step(cfg: &Config, idx: usize, lang: &str, vars: &HashMap<String, 
 // ---------------- Claude first email ----------------
 
 const DRAFT_SYSTEM: &str = "You write the first email from a DJ/producer to a club, proposing a residency. \
-The email goes out under the artist's name to the club's booking or programming team.
+It goes out under the artist's own name to the club's booking or programming team, so it must read like \
+the artist typed it himself between two studio sessions: warm, direct, a bit casual, confident without selling.
+
+Voice (copy it, in French or English as requested):
+---
+Hello,
+
+Moi c'est Thibault, je mixe sous le nom de Piers (house, tech house). Je rentre d'ADE avec pas mal d'envie et un peu d'élan.
+
+Je cherche un club à Paris où poser une date tous les mois, quelque chose qui s'installe dans le temps. \
+Et Badaboum, honnêtement, c'est un des premiers endroits qui me sont venus en tête. Voir passer DJ Seinfeld et Shonky \
+chez vous cette année, ça m'a convaincu.
+
+En parallèle je filme tout pour PIERS FM, ma série où je montre les morceaux en cours, les edits et les coulisses. \
+Chaque date chez vous deviendrait un épisode, donc un rendez-vous qui se voit aussi en ligne.
+
+Tout est là si vous voulez écouter (le Vol. 4, c'est mon dernier mix) :
+https://example.link
+
+Ça vous dirait qu'on en parle autour d'un café, ou juste au téléphone ?
+
+À bientôt,
+Thibault
+---
 
 Rules:
-- Short: 80 to 140 words in the body. Plain text, no markdown, no emojis, no bullet points.
-- Personal: mention one or two concrete facts about this club taken only from the facts provided \
-(artists who played there recently, its identity, its programming). Never invent a fact, a name or a number.
-- Explain the residency in one or two sentences: a regular date (monthly or every two months) documented \
-each time as monthly content, the \"in development\" series.
-- Include the press link exactly once, copied verbatim, on its own line.
-- End with one simple question (a call, a coffee, a date to talk).
-- Sign with the artist name only (the signature block is added automatically).
-- Greet the contact by first name when one is given, otherwise a neutral greeting (\"Bonjour,\" / \"Hi,\").
-- Never use em dashes or en dashes; use commas, colons or parentheses.
-- Subject: under 60 characters, names the club, no clickbait.
+- 90 to 150 words in the body. Plain text, short paragraphs, no markdown, no emojis, no lists.
+- Open with \"Hello,\" (or \"Hello <first name>,\" when a first name is given). The sender is Thibault, who plays as the artist: introduce himself as \"Thibault\" playing as the artist name. Close with \"À bientôt,\" / \"Cheers,\" then \"Thibault\" on its own line (the full signature with phone and website is appended automatically, never write it).
+- One concrete, true detail about this club taken only from the facts provided (artists who played there, its programming), \
+said the way a DJ would say it. Never invent a fact, a name or a number. If no fact is usable, skip it rather than flatter.
+- Mention PIERS FM and that each date becomes an episode. Mention Vol. 4 as the latest mix.
+- The press link exactly once, copied verbatim, on its own line.
+- End with one simple, relaxed question.
+- Sound human: vary sentence length, use spoken turns (\"honnêtement\", \"pas mal\", \"juste\"), contractions in English. \
+At most one exclamation mark, none is fine.
+- Never use these (AI tells): \"Je me permets\", \"N'hésitez pas\", \"à taille humaine\", \"correspond parfaitement\", \
+\"L'idée :\", \"passionné\", \"univers\", \"synergie\", \"collaboration fructueuse\", \"je serais ravi de\", \"Cordialement\", \
+\"I hope this email finds you well\", \"I'm reaching out\", \"excited\", \"thrilled\", \"passionate\", \"vibrant\", \"elevate\", \
+\"resonate\", \"journey\", \"unique opportunity\". No colon used to introduce an explanation, no neat three-part structure, \
+no em dashes or en dashes.
+- Subject: under 60 characters, lowercase feel, like \"<club> x <artist>, une idée de résidence\". No clickbait.
 - Write in the language requested.
 
 Answer with JSON only: {\"subject\": \"...\", \"body\": \"...\"}.";
@@ -511,9 +550,9 @@ mod tests {
         let vars = vars_for(&info, &cfg, "Piers", None);
         let (subj, body) = render_step(&cfg, 0, "fr", &vars).unwrap();
         assert!(unresolved(&body).is_empty(), "{}", body);
-        assert!(body.contains("Mix ADE : https://sc.com/mix") && subj.contains("Club A") && subj.contains("mensuelle"));
+        assert!(body.contains("Mix ADE : https://sc.com/mix") && subj.contains("Club A") && body.contains("tous les mois"));
         let (_, b2) = render_step(&cfg, 1, "en", &vars).unwrap();
-        assert!(b2.starts_with("Hi,") && b2.contains("Live : https://yt.com/v"));
+        assert!(b2.starts_with("Hello,") && b2.contains("Live : https://yt.com/v"));
         assert!(!b2.contains('—'));
         // First name only when known.
         assert!(render_template("Bonjour {{first_name}}", &vars).contains("{{first_name}}"));
