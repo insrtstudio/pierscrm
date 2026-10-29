@@ -757,6 +757,11 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     crate::commands::residency::migrate(conn);
     crate::commands::residency::refresh_default_templates(conn);
 
+    // ---- Gigs published on insrt.studio (audit item 19) ----
+    // insrt_gigs: per-event "publier sur insrt" switch, ticket link and last
+    // push. Additive, see commands/insrt_gigs.rs.
+    crate::commands::insrt_gigs::migrate(conn);
+
     Ok(())
 }
 

@@ -48,8 +48,37 @@ pub fn upsert_event(conn: &Connection, ev: &ActivityEvent) -> bool {
         > 0
 }
 
-/// Poll the activity of every press kit used by a residency campaign since
-/// its cursor (`insrt_activity_cursor`, one cursor per kit). Returns how many
+/// Press kits whose activity is followed: the kit of every active residency
+/// campaign, plus the kit of any other residency campaign that already handed
+/// out personal links (paused or finished: a club can open its EPK link weeks
+/// after the last email).
+pub fn kits_to_poll(conn: &Connection) -> Vec<String> {
+    let mut ids = super::active_ids(conn);
+    if let Ok(mut st) = conn.prepare(
+        "SELECT DISTINCT m.campaign_id FROM campaign_messages m
+         WHERE m.press_url IS NOT NULL AND m.press_url <> '' ORDER BY m.campaign_id",
+    ) {
+        if let Ok(rows) = st.query_map([], |r| r.get::<_, i64>(0)) {
+            for id in rows.flatten() {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+    let mut kits: Vec<String> = Vec::new();
+    for id in ids {
+        if let Some(k) = super::load(conn, id).and_then(|r| r.config.press_kit_id).filter(|k| !k.trim().is_empty()) {
+            if !kits.contains(&k) {
+                kits.push(k);
+            }
+        }
+    }
+    kits
+}
+
+/// Poll the activity of every followed press kit (`kits_to_poll`) since its
+/// cursor (`insrt_activity_cursor`, one cursor per kit). Returns how many
 /// events were stored or updated.
 pub fn poll_press(conn: &Connection, client: &dyn Insrt, now: DateTime<Utc>) -> Result<usize, String> {
     let mut cursors: BTreeMap<String, String> = conn
@@ -57,14 +86,7 @@ pub fn poll_press(conn: &Connection, client: &dyn Insrt, now: DateTime<Utc>) -> 
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    let mut kits: Vec<String> = Vec::new();
-    for id in super::active_ids(conn) {
-        if let Some(k) = super::load(conn, id).and_then(|r| r.config.press_kit_id).filter(|k| !k.trim().is_empty()) {
-            if !kits.contains(&k) {
-                kits.push(k);
-            }
-        }
-    }
+    let kits = kits_to_poll(conn);
     let mut n = 0;
     for kit in kits {
         let mut since = cursors
@@ -91,6 +113,157 @@ pub fn poll_press(conn: &Connection, client: &dyn Insrt, now: DateTime<Utc>) -> 
     }
     engine::put(conn, "insrt_activity_cursor", &serde_json::to_string(&cursors).unwrap_or_default());
     Ok(n)
+}
+
+// ---------------- Activity of one contact (contact card) ----------------
+
+/// One track (or video) the contact played, all plays summed.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct TrackListen {
+    pub title: String,
+    pub plays: i64,
+    pub seconds: f64,
+    /// Best share of the track heard in one play (0..1), when known.
+    pub completion: Option<f64>,
+    pub last_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct FeedbackItem {
+    pub at: String,
+    pub track_title: Option<String>,
+    pub rating: Option<f64>,
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ActivityItem {
+    pub at: String,
+    /// view | listen | feedback | download
+    pub kind: String,
+    pub track_title: Option<String>,
+    pub seconds: Option<f64>,
+    pub completion: Option<f64>,
+    pub comment: Option<String>,
+    pub campaign_id: Option<i64>,
+}
+
+/// What the contact did on their private insrt EPK link.
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+pub struct ContactActivity {
+    pub contact_id: i64,
+    /// Their personal link (latest one handed out), when known.
+    pub link_url: Option<String>,
+    pub views: i64,
+    pub first_view_at: Option<String>,
+    pub last_view_at: Option<String>,
+    pub downloads: i64,
+    pub listen_seconds: f64,
+    /// A listen of at least HOT_LISTEN_SECS.
+    pub hot: bool,
+    pub tracks: Vec<TrackListen>,
+    pub feedback: Vec<FeedbackItem>,
+    /// The latest events, newest first (50 at most).
+    pub recent: Vec<ActivityItem>,
+    pub last_at: Option<String>,
+    /// When the activity was last fetched from insrt (any contact).
+    pub synced_at: Option<String>,
+}
+
+pub fn contact_activity(conn: &Connection, contact_id: i64) -> Result<ContactActivity, String> {
+    let mut out = ContactActivity { contact_id, ..Default::default() };
+    let (views, first, last, downloads, secs, last_any): (i64, Option<String>, Option<String>, i64, f64, Option<String>) = conn
+        .query_row(
+            "SELECT
+                COALESCE(SUM(type = 'view'), 0),
+                MIN(CASE WHEN type = 'view' THEN at END),
+                MAX(CASE WHEN type = 'view' THEN at END),
+                COALESCE(SUM(type = 'download'), 0),
+                COALESCE(SUM(CASE WHEN type = 'listen' THEN seconds END), 0),
+                MAX(at)
+             FROM press_activity WHERE contact_id = ?1",
+            params![contact_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    out.views = views;
+    out.first_view_at = first;
+    out.last_view_at = last;
+    out.downloads = downloads;
+    out.listen_seconds = secs;
+    out.last_at = last_any;
+
+    let mut st = conn
+        .prepare(
+            "SELECT COALESCE(NULLIF(trim(track_title), ''), '?'), COUNT(*), COALESCE(SUM(seconds), 0), MAX(completion), MAX(at),
+                    MAX(COALESCE(seconds, 0))
+             FROM press_activity WHERE contact_id = ?1 AND type = 'listen'
+             GROUP BY 1 ORDER BY 3 DESC, 1",
+        )
+        .map_err(|e| e.to_string())?;
+    let mut best = 0.0f64;
+    out.tracks = st
+        .query_map(params![contact_id], |r| {
+            Ok((
+                TrackListen { title: r.get(0)?, plays: r.get(1)?, seconds: r.get(2)?, completion: r.get(3)?, last_at: r.get(4)? },
+                r.get::<_, f64>(5)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .map(|(t, max)| {
+            best = best.max(max);
+            t
+        })
+        .collect();
+    out.hot = best >= HOT_LISTEN_SECS;
+
+    let mut st = conn
+        .prepare(
+            "SELECT at, track_title, rating, comment FROM press_activity
+             WHERE contact_id = ?1 AND type = 'feedback' ORDER BY at DESC, id DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    out.feedback = st
+        .query_map(params![contact_id], |r| {
+            Ok(FeedbackItem { at: r.get(0)?, track_title: r.get(1)?, rating: r.get(2)?, comment: r.get(3)? })
+        })
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .collect();
+
+    let mut st = conn
+        .prepare(
+            "SELECT at, type, track_title, seconds, completion, comment, campaign_id FROM press_activity
+             WHERE contact_id = ?1 ORDER BY at DESC, id DESC LIMIT 50",
+        )
+        .map_err(|e| e.to_string())?;
+    out.recent = st
+        .query_map(params![contact_id], |r| {
+            Ok(ActivityItem {
+                at: r.get(0)?,
+                kind: r.get(1)?,
+                track_title: r.get(2)?,
+                seconds: r.get(3)?,
+                completion: r.get(4)?,
+                comment: r.get(5)?,
+                campaign_id: r.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .collect();
+
+    out.link_url = conn
+        .query_row(
+            "SELECT press_url FROM campaign_messages WHERE contact_id = ?1 AND press_url IS NOT NULL AND press_url <> ''
+             ORDER BY id DESC LIMIT 1",
+            params![contact_id],
+            |r| r.get(0),
+        )
+        .ok();
+    out.synced_at = engine::get(conn, "insrt_last_poll");
+    Ok(out)
 }
 
 // ---------------- Email opens ----------------
@@ -523,6 +696,59 @@ mod tests {
         let hot = hot_signals(&c, Some(1));
         assert_eq!(hot.len(), 1);
         assert_eq!(hot[0].seconds, 240.0);
+    }
+
+    #[test]
+    fn kits_of_finished_campaigns_stay_followed() {
+        let c = setup();
+        let mut cfg = crate::commands::residency::load(&c, 1).unwrap().config;
+        cfg.press_kit_id = Some("pk1".into());
+        crate::commands::residency::save_config(&c, 1, &cfg).unwrap();
+        c.execute_batch("UPDATE campaigns SET status = 'done' WHERE id = 1").unwrap();
+        // Finished, no link handed out: nothing to follow.
+        assert!(kits_to_poll(&c).is_empty());
+        c.execute_batch(
+            "INSERT INTO campaign_messages (campaign_id, contact_id, step, status, press_url) VALUES (1, 10, 7, 'sent', 'https://insrt.studio/fr/p/abc')",
+        )
+        .unwrap();
+        assert_eq!(kits_to_poll(&c), vec!["pk1".to_string()]);
+    }
+
+    #[test]
+    fn contact_card_activity() {
+        let c = setup();
+        c.execute_batch(
+            "INSERT INTO campaign_messages (campaign_id, contact_id, step, status, press_url) VALUES (1, 10, 7, 'sent', 'https://insrt.studio/fr/p/abc');
+             INSERT INTO press_activity (event_id, contact_id, campaign_id, type, at, track_title, seconds, completion, comment) VALUES
+               ('event:1', 10, 1, 'view', '2026-10-28 13:59:00', NULL, NULL, NULL, NULL),
+               ('event:2', 10, 1, 'view', '2026-10-29 09:00:00', NULL, NULL, NULL, NULL),
+               ('listen:1', 10, 1, 'listen', '2026-10-28 14:04:00', 'Mix ADE', 240, 0.4, NULL),
+               ('listen:2', 10, 1, 'listen', '2026-10-29 09:05:00', 'Mix ADE', 30, 0.05, NULL),
+               ('listen:3', 10, 1, 'listen', '2026-10-29 09:10:00', 'PIERS FM Vol. 4', 20, 0.02, NULL),
+               ('feedback:1', 10, 1, 'feedback', '2026-10-29 09:12:00', 'Mix ADE', NULL, NULL, 'Top'),
+               ('event:3', 10, 1, 'download', '2026-10-29 09:13:00', NULL, NULL, NULL, NULL),
+               ('event:9', 11, 1, 'view', '2026-10-29 10:00:00', NULL, NULL, NULL, NULL);",
+        )
+        .unwrap();
+        let a = contact_activity(&c, 10).unwrap();
+        assert_eq!(a.views, 2);
+        assert_eq!(a.first_view_at.as_deref(), Some("2026-10-28 13:59:00"));
+        assert_eq!(a.last_view_at.as_deref(), Some("2026-10-29 09:00:00"));
+        assert_eq!(a.downloads, 1);
+        assert_eq!(a.listen_seconds, 290.0);
+        assert!(a.hot);
+        assert_eq!(a.tracks.len(), 2);
+        assert_eq!(a.tracks[0].title, "Mix ADE");
+        assert_eq!((a.tracks[0].plays, a.tracks[0].seconds, a.tracks[0].completion), (2, 270.0, Some(0.4)));
+        assert_eq!(a.feedback[0].comment.as_deref(), Some("Top"));
+        assert_eq!(a.recent.len(), 7);
+        assert_eq!(a.recent[0].kind, "download");
+        assert_eq!(a.last_at.as_deref(), Some("2026-10-29 09:13:00"));
+        assert_eq!(a.link_url.as_deref(), Some("https://insrt.studio/fr/p/abc"));
+        // A contact without activity: an empty card, not an error.
+        let none = contact_activity(&c, 99).unwrap();
+        assert_eq!((none.views, none.listen_seconds, none.hot), (0, 0.0, false));
+        assert!(none.tracks.is_empty() && none.recent.is_empty());
     }
 
     #[test]

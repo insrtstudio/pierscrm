@@ -66,6 +66,7 @@ pub fn save_event(state: State<'_, AppState>, event: Event) -> Result<i64, Strin
             status::on_event_cancelled(&conn, prev_cid);
         }
     }
+    crate::commands::insrt_gigs::after_event_change(&state.pool, saved); // insrt dates (audit #19)
     Ok(saved)
 }
 
@@ -117,5 +118,6 @@ pub fn delete_event(state: State<'_, AppState>, id: i64) -> Result<(), String> {
         }
     }
     let _ = crate::commands::data::sync_event_budget(&conn, id); // budget line (audit #7)
+    crate::commands::insrt_gigs::after_event_change(&state.pool, id); // insrt dates (audit #19)
     Ok(())
 }

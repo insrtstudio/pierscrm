@@ -49,6 +49,7 @@ import { PageHeader, Loader, ErrorState } from "../components/Layout";
 import { StatusBadge, StatusSelect, PriorityBadge } from "../components/StatusBadge";
 import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 import { ComposeModal } from "../components/ComposeModal";
+import { InsrtActivityPanel } from "../components/InsrtActivity";
 
 const PAGE_SIZE = 200;
 
@@ -912,6 +913,7 @@ function ContactModal({
         <OrganisationSiblings orgId={form.organisation_id} selfId={contact.id} />
       )}
       {!isNew && <ContactHistory contactId={contact.id!} />}
+      {!isNew && <InsrtActivityPanel contactId={contact.id!} />}
       <div className="mt-5 flex justify-end gap-2">
         <button className="btn-outline" onClick={onClose}>
           {t("common.cancel")}

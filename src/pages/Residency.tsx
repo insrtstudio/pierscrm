@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { TabbedPage, Loader, ErrorState, EmptyState } from "../components/Layout";
 import { Field, Modal, errorMessage, useConfirm, useToast } from "../components/ui";
+import { InsrtActivityPanel } from "../components/InsrtActivity";
 import {
   ASSET_TYPES,
   BOARD_COLUMNS,
@@ -1003,6 +1004,9 @@ function FollowTab({ view }: { view: ResidencyView }) {
 
 function BoardCard({ r, lang }: { r: BoardRow; lang: string }) {
   const { t } = useTranslation();
+  // insrt EPK activity in detail (tracks, time listened, feedback), on demand.
+  const [open, setOpen] = useState(false);
+  const active = r.views > 0 || r.listen_seconds > 0 || r.feedback > 0;
   return (
     <div className="card p-3 text-xs">
       <div className="truncate text-sm font-medium">{r.name}</div>
@@ -1021,6 +1025,12 @@ function BoardCard({ r, lang }: { r: BoardRow; lang: string }) {
         {r.feedback > 0 && <span className="badge bg-accent-soft text-accent-ink"><MessageSquare size={10} /> {r.feedback}</span>}
         {r.intent && <IntentBadge intent={r.intent} />}
       </div>
+      {active && (
+        <button className="mt-1.5 text-2xs text-fg-subtle underline" onClick={() => setOpen((v) => !v)}>
+          {open ? t("insrt.hide_detail") : t("insrt.show_detail")}
+        </button>
+      )}
+      {open && <InsrtActivityPanel contactId={r.contact_id} compact />}
       {r.summary && <p className="mt-2 line-clamp-3 text-2xs text-fg-subtle">{r.summary}</p>}
       {r.next_at && (
         <p className="mt-2 text-2xs text-fg-faint">
