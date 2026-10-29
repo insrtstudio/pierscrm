@@ -202,6 +202,9 @@ function OverviewTab() {
           {t("pulse.last_snapshot")}: {kpis.last_snapshot}
         </p>
       )}
+      {kpis?.spotify_metrics_unavailable && (
+        <p className="text-2xs text-warn">{t("pulse.unavailable_hint")}</p>
+      )}
 
       {/* KPI bento */}
       {kpisLoading ? (
@@ -210,14 +213,20 @@ function OverviewTab() {
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
           <div className="border border-border px-4 py-3">
             <div className="flex items-baseline gap-2">
-              <span className="font-condensed text-2xl tabular text-accent-2">{kpis?.artist_popularity ?? "·"}</span>
+              {kpis?.artist_popularity == null && kpis?.spotify_metrics_unavailable ? (
+                <span className="text-sm text-fg-subtle">{t("pulse.unavailable")}</span>
+              ) : (
+                <span className="font-condensed text-2xl tabular text-accent-2">{kpis?.artist_popularity ?? "·"}</span>
+              )}
               {delta(kpis?.artist_delta7)}
             </div>
             <div className="text-2xs uppercase tracking-wide text-fg-faint">{t("pulse.k_artist_pop")}</div>
           </div>
           <div className="border border-border px-4 py-3">
             <div className="flex items-baseline gap-2">
-              <span className="truncate text-sm font-semibold">{kpis?.best_track_name ?? "·"}</span>
+              <span className="truncate text-sm font-semibold">
+                {kpis?.best_track_name ?? (kpis?.spotify_metrics_unavailable ? t("pulse.unavailable") : "·")}
+              </span>
               <span className="font-condensed text-2xl tabular text-accent-2">{kpis?.best_track_popularity ?? ""}</span>
               {delta(kpis?.best_track_delta7)}
             </div>

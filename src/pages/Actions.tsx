@@ -219,7 +219,7 @@ export function Actions() {
         cta: { label: t("actions.gig_cta"), run: () => navigate("/agenda") },
       });
       const v = visaFor.get(ev.id!);
-      if (v?.needs_visa && !v.dossier_id) {
+      if (v?.confirmed && v.needs_visa && !v.dossier_id) {
         out.push({
           key: `v${ev.id}`,
           day: today,

@@ -307,4 +307,19 @@ mod tests {
         assert_eq!(parse_spotify_id(id), Some(("unknown".into(), id.into())));
         assert_eq!(parse_spotify_id("not an id"), None);
     }
+
+    /// Apps created since Spotify's late-2024 restrictions get objects without
+    /// popularity / followers: parsing must still succeed, with None.
+    #[test]
+    fn parses_restricted_payloads() {
+        let a: ArtistResp = serde_json::from_str(r#"{"name":"Piers","id":"x"}"#).unwrap();
+        assert!(a.popularity.is_none() && a.followers.is_none());
+        let a: ArtistResp = serde_json::from_str(r#"{"name":"Piers","popularity":null,"followers":{"href":null}}"#).unwrap();
+        assert!(a.popularity.is_none() && a.followers.and_then(|f| f.total).is_none());
+        let t: TracksResp = serde_json::from_str(r#"{"tracks":[{"id":"t1","name":"Song"},null]}"#).unwrap();
+        assert_eq!(t.tracks.len(), 2);
+        assert!(t.tracks[0].as_ref().unwrap().popularity.is_none());
+        let p: PlaylistResp = serde_json::from_str(r#"{"name":"P","tracks":{"items":[]}}"#).unwrap();
+        assert!(p.followers.is_none());
+    }
 }

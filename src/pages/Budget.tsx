@@ -2,14 +2,16 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { Plus, Pencil, Trash2, TrendingDown, TrendingUp, CalendarDays, Megaphone } from "lucide-react";
+import { Plus, Pencil, Trash2, TrendingDown, TrendingUp, CalendarDays, Megaphone, Link2 } from "lucide-react";
 import {
   dashboardStats,
   deleteBudgetItem,
+  linkBudgetItem,
   listBudget,
+  listEvents,
   saveBudgetItem,
 } from "../lib/api";
-import type { BudgetItem } from "../lib/types";
+import type { BudgetItem, Event } from "../lib/types";
 import { euro } from "../lib/format";
 import { PageHeader } from "../components/Layout";
 import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
@@ -28,17 +30,54 @@ export function Budget() {
   const { data: stats } = useQuery({ queryKey: ["dashboard"], queryFn: dashboardStats });
   const adSpend = stats?.ad_spend ?? 0;
   const [editing, setEditing] = useState<BudgetItem | null>(null);
+  const toast = useToast();
+  // Gigs that own a fee line: the targets a manual revenue line can be linked to.
+  const { data: allEvents = [] } = useQuery({
+    queryKey: ["events", "budget"],
+    queryFn: () => listEvents({}),
+  });
+  const paidGigs = allEvents.filter((e) => e.status === "confirmed" && (e.fee ?? 0) > 0);
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["budget"] });
+    qc.invalidateQueries({ queryKey: ["dashboard"] });
+  };
 
   const delMut = useMutation({
     mutationFn: (id: number) => deleteBudgetItem(id),
+    onSuccess: refresh,
+  });
+  const linkMut = useMutation({
+    mutationFn: ({ id, eventId }: { id: number; eventId: number }) => linkBudgetItem(id, eventId),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["budget"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      refresh();
+      toast(t("budget.linked_ok"), "ok");
     },
+    onError: (e: any) => toast(e?.toString?.() ?? "error", "error"),
   });
 
   const expenses = items.filter((i) => i.kind === "expense");
   const revenues = items.filter((i) => i.kind === "revenue");
+  // A manual revenue line with the amount or the name of a gig's fee line is
+  // probably that fee typed twice: flagged, with a one-click link.
+  const duplicates = useMemo(() => {
+    const m = new Map<number, Event>();
+    const norm = (s?: string | null) => (s ?? "").trim().toLowerCase();
+    for (const i of revenues) {
+      if (i.event_id != null || i.id == null) continue;
+      for (const l of revenues) {
+        const ev = l.event_id != null ? paidGigs.find((e) => e.id === l.event_id) : undefined;
+        if (!ev) continue;
+        const sameAmount = i.actual != null && i.actual > 0 && i.actual === l.actual;
+        const name = norm(i.item);
+        const sameName = name !== "" && (name === norm(l.item) || name === norm(ev.title));
+        if (sameAmount || sameName) {
+          m.set(i.id, ev);
+          break;
+        }
+      }
+    }
+    return m;
+  }, [items, allEvents]);
 
   const totals = useMemo(() => {
     const min = expenses.reduce((a, i) => a + (i.min_cost || 0), 0);
@@ -134,17 +173,20 @@ export function Budget() {
           onEdit={setEditing}
           onDelete={(id) => confirm(t("common.confirm_delete")) && delMut.mutate(id)}
           revenue
+          duplicates={duplicates}
+          onLink={(id, eventId) => linkMut.mutate({ id, eventId })}
         />
       </div>
 
       {editing && (
         <BudgetModal
           item={editing}
+          gigs={paidGigs}
+          suggested={editing.id != null ? duplicates.get(editing.id)?.id : undefined}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            qc.invalidateQueries({ queryKey: ["budget"] });
-            qc.invalidateQueries({ queryKey: ["dashboard"] });
+            refresh();
           }}
         />
       )}
@@ -181,6 +223,8 @@ function BudgetTable({
   onDelete,
   revenue,
   extra,
+  duplicates,
+  onLink,
 }: {
   title: string;
   rows: BudgetItem[];
@@ -189,6 +233,9 @@ function BudgetTable({
   revenue?: boolean;
   /// Read-only row appended to the table (ad spend).
   extra?: React.ReactNode;
+  /// Manual lines that look like a gig's fee typed again, by line id.
+  duplicates?: Map<number, Event>;
+  onLink?: (id: number, eventId: number) => void;
 }) {
   const { t } = useTranslation();
   if (rows.length === 0 && !extra) return null;
@@ -210,7 +257,9 @@ function BudgetTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((i) => (
+          {rows.map((i) => {
+            const dup = i.id != null ? duplicates?.get(i.id) : undefined;
+            return (
             <tr key={i.id} className="group border-b border-border/60 hover:bg-muted/40">
               <td className="px-5 py-2.5">
                 <div className="flex items-center gap-2 font-medium">
@@ -224,6 +273,24 @@ function BudgetTable({
                     >
                       {t("budget.linked_event")}
                     </Link>
+                  )}
+                  {dup && (
+                    <span
+                      className="badge bg-warn/15 py-0 text-warn"
+                      title={t("budget.duplicate_hint", { title: dup.title })}
+                    >
+                      {t("budget.duplicate")}
+                    </span>
+                  )}
+                  {dup && onLink && (
+                    <button
+                      className="btn-ghost px-1.5 py-0.5 text-xs"
+                      title={t("budget.duplicate_hint", { title: dup.title })}
+                      onClick={() => onLink(i.id!, dup.id!)}
+                    >
+                      <Link2 size={12} />
+                      {t("budget.link_now")}
+                    </button>
                   )}
                 </div>
                 {i.category && (
@@ -262,7 +329,8 @@ function BudgetTable({
                 </div>
               </td>
             </tr>
-          ))}
+            );
+          })}
           {extra}
         </tbody>
       </table>
@@ -273,10 +341,16 @@ function BudgetTable({
 
 function BudgetModal({
   item,
+  gigs,
+  suggested,
   onClose,
   onSaved,
 }: {
   item: BudgetItem;
+  /// Confirmed gigs with a fee (link targets).
+  gigs: Event[];
+  /// Gig this line seems to duplicate, preselected.
+  suggested?: number;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -285,11 +359,14 @@ function BudgetModal({
   const [form, setForm] = useState<BudgetItem>({ ...item });
   // A gig's line follows its Agenda event: kind and amount are not editable here.
   const linked = item.event_id != null;
+  const [linkTo, setLinkTo] = useState<number | "">(suggested ?? "");
+  const willLink = !linked && form.kind === "revenue" && linkTo !== "";
   const num = (v: string) => (v === "" ? 0 : parseFloat(v));
   const [save, busy] = useSubmit(async () => {
     if (!form.item.trim()) return;
-    await saveBudgetItem(form);
-    toast(t("common.save"), "ok");
+    const id = await saveBudgetItem(form);
+    if (willLink) await linkBudgetItem(id, linkTo as number);
+    toast(t(willLink ? "budget.linked_ok" : "common.save"), "ok");
     onSaved();
   });
   return (
@@ -358,6 +435,23 @@ function BudgetModal({
         </Field>
         {linked && (
           <p className="col-span-2 text-xs text-fg-subtle">{t("budget.linked_event_hint")}</p>
+        )}
+        {!linked && form.kind === "revenue" && gigs.length > 0 && (
+          <Field label={t("budget.link_event")} className="col-span-2">
+            <select
+              className="input"
+              value={linkTo}
+              onChange={(e) => setLinkTo(e.target.value === "" ? "" : Number(e.target.value))}
+            >
+              <option value="">{t("budget.link_event_none")}</option>
+              {gigs.map((g) => (
+                <option key={g.id} value={g.id!}>
+                  {[g.date, g.title, g.city].filter(Boolean).join(" · ")} ({euro(g.fee ?? 0)})
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-fg-subtle">{t("budget.link_event_hint")}</p>
+          </Field>
         )}
         <Field label={t("budget.notes")} className="col-span-2">
           <textarea

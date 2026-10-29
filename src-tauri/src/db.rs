@@ -743,6 +743,15 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // -> events, free-text dates -> ISO. Idempotent, see crm_links.rs.
     crate::crm_links::migrate(conn);
 
+    // ---- Audience tracks -> artist (audit item 11) ----
+    // Tracks added before the artist picker existed have no artist. With a
+    // single artist they can only be theirs; with several, left for the user.
+    let _ = conn.execute(
+        "UPDATE pulse_tracked_tracks SET artist_id=(SELECT id FROM artists)
+         WHERE artist_id IS NULL AND (SELECT COUNT(*) FROM artists)=1",
+        [],
+    );
+
     // ---- Venue Intelligence / Radar data quality (audit 2026-10-29 items 1, 12, 14, 18) ----
     // vi_venue_events (idempotent event counts), vi_venues.ville_norm (accent-
     // folded city for artist targeting), YouTube curators as kind 'channel',

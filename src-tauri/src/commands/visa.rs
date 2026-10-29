@@ -113,11 +113,27 @@ pub fn delete_dossier(state: State<'_, AppState>, id: i64) -> Result<(), String>
 
 // ---------- Agenda link (audit item 10) ----------
 
-/// Free movement area (EU, EEA, Switzerland): no work visa between these.
+/// The whole visa rule, in one place: an artist from a free movement country
+/// (EU, EEA, Switzerland) plays anywhere in it without a visa or work permit;
+/// any other destination outside the artist's own country needs one (details
+/// in the country sheet). Edit this list to change the rule.
 const FREE_MOVEMENT: &[&str] = &[
     "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT",
     "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE", "IS", "LI", "NO", "CH",
 ];
+
+/// Country assumed for an artist whose profile has none (Piers is French).
+const DEFAULT_ARTIST_COUNTRY: &str = "FR";
+
+/// Whether an artist from `home` (ISO code, None = default) needs a visa or
+/// work permit to play in `target` (ISO code).
+fn requires_permit(home: Option<&str>, target: &str) -> bool {
+    let home = home.unwrap_or(DEFAULT_ARTIST_COUNTRY);
+    if home == target {
+        return false;
+    }
+    !(FREE_MOVEMENT.contains(&home) && FREE_MOVEMENT.contains(&target))
+}
 
 /// ISO code from what the app stores: Discovery uses "UK" for Great Britain,
 /// artists carry a country name ("France").
@@ -137,7 +153,13 @@ fn country_code(conn: &rusqlite::Connection, raw: &str) -> Option<String> {
         ("royaume-uni", "GB"), ("uk", "GB"), ("england", "GB"), ("united states", "US"),
         ("usa", "US"), ("états-unis", "US"), ("etats-unis", "US"), ("canada", "CA"),
         ("switzerland", "CH"), ("suisse", "CH"), ("belgium", "BE"), ("belgique", "BE"),
-        ("italy", "IT"), ("italie", "IT"), ("portugal", "PT"),
+        ("italy", "IT"), ("italie", "IT"), ("portugal", "PT"), ("ireland", "IE"),
+        ("irlande", "IE"), ("scotland", "GB"), ("ecosse", "GB"), ("écosse", "GB"),
+        ("norway", "NO"), ("norvège", "NO"), ("japan", "JP"), ("japon", "JP"),
+        ("australia", "AU"), ("australie", "AU"), ("brazil", "BR"), ("brésil", "BR"),
+        ("mexico", "MX"), ("mexique", "MX"), ("morocco", "MA"), ("maroc", "MA"),
+        ("turkey", "TR"), ("turquie", "TR"), ("serbia", "RS"), ("serbie", "RS"),
+        ("uae", "AE"), ("dubai", "AE"), ("south africa", "ZA"), ("afrique du sud", "ZA"),
     ];
     if let Some((_, c)) = known.iter().find(|(n, _)| *n == low) {
         return Some((*c).into());
@@ -176,6 +198,10 @@ fn event_country(
             .flatten()
     });
     for c in [city.map(str::to_string), contact_city].into_iter().flatten() {
+        // "London, UK" / "Tokyo (Japon)": the country is written in the city.
+        if let Some(code) = city_suffix(&c).and_then(|t| country_code(conn, t)) {
+            return Some(code);
+        }
         let c = c.trim().to_lowercase();
         if c.is_empty() {
             continue;
@@ -195,22 +221,26 @@ fn event_country(
     None
 }
 
+/// Text after the last comma or inside the last parentheses of a city field.
+fn city_suffix(city: &str) -> Option<&str> {
+    let c = city.trim().trim_end_matches(')');
+    let cut = c.rfind([',', '('])?;
+    Some(c[cut + 1..].trim()).filter(|t| !t.is_empty())
+}
+
 /// Whether the artist needs a work visa to play in `target` (ISO code or a
-/// Discovery country): listed in the visa module, not the artist's own
-/// country, outside the free movement area. (code, name) when it does.
+/// Discovery country), see `requires_permit`. (code, name) when it does; the
+/// name comes from the visa module, else the code.
 pub(crate) fn visa_needed(conn: &rusqlite::Connection, artist_country: Option<&str>, target: &str) -> Option<(String, String)> {
     let code = country_code(conn, target)?;
-    let name: String = conn
-        .query_row("SELECT name FROM visa_countries WHERE code=?1", params![code], |r| r.get(0))
-        .ok()?;
     let home = artist_country.and_then(|c| country_code(conn, c));
-    if home.as_deref() == Some(code.as_str()) {
+    if !requires_permit(home.as_deref(), &code) {
         return None;
     }
-    let free = home
-        .as_deref()
-        .map_or(false, |h| FREE_MOVEMENT.contains(&h) && FREE_MOVEMENT.contains(&code.as_str()));
-    (!free).then_some((code, name))
+    let name: String = conn
+        .query_row("SELECT name FROM visa_countries WHERE code=?1", params![code], |r| r.get(0))
+        .unwrap_or_else(|_| code.clone());
+    Some((code, name))
 }
 
 #[derive(serde::Serialize)]
@@ -223,9 +253,12 @@ pub struct EventVisa {
     /// artist, country and date).
     pub dossier_id: Option<i64>,
     pub dossier_status: Option<String>,
-    /// The gig is in a country of the visa list, outside the artist's own
-    /// country and outside the free movement area shared with it.
+    /// The gig is outside the artist's own country and outside the free
+    /// movement area shared with it (`requires_permit`).
     pub needs_visa: bool,
+    /// Confirmed gig (holds are listed too): the "no dossier" alert is only
+    /// raised for these.
+    pub confirmed: bool,
 }
 
 /// Visa situation of every non-cancelled event between `from` and `to`.
@@ -249,21 +282,21 @@ pub(crate) fn event_visas(
         let it = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         it.collect::<rusqlite::Result<_>>()?
     };
-    type Ev = (i64, Option<i64>, Option<i64>, Option<String>, String, Option<String>);
+    type Ev = (i64, Option<i64>, Option<i64>, Option<String>, String, Option<String>, bool);
     let events: Vec<Ev> = {
         let mut stmt = conn.prepare(
-            "SELECT e.id, e.artist_id, e.contact_id, e.city, e.date, a.country
+            "SELECT e.id, e.artist_id, e.contact_id, e.city, e.date, a.country, e.status = 'confirmed'
              FROM events e LEFT JOIN artists a ON a.id = e.artist_id
              WHERE e.status <> 'cancelled'
                AND (?1 IS NULL OR e.date >= ?1) AND (?2 IS NULL OR e.date <= ?2)",
         )?;
         let it = stmt.query_map(params![from, to], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
         })?;
         it.collect::<rusqlite::Result<_>>()?
     };
     let mut out = Vec::with_capacity(events.len());
-    for (id, artist_id, contact_id, city, date, artist_country) in events {
+    for (id, artist_id, contact_id, city, date, artist_country, confirmed) in events {
         let code = event_country(conn, contact_id, city.as_deref());
         let dossier: Option<(i64, String)> = conn
             .query_row(
@@ -277,17 +310,7 @@ pub(crate) fn event_visas(
             )
             .ok();
         let home = artist_country.as_deref().and_then(|c| country_code(conn, c));
-        let needs_visa = match (&code, &home) {
-            (Some(c), home) => {
-                let in_list = listed.iter().any(|(l, _)| l == c);
-                let same = home.as_deref() == Some(c.as_str());
-                let free = home
-                    .as_deref()
-                    .map_or(false, |h| FREE_MOVEMENT.contains(&h) && FREE_MOVEMENT.contains(&c.as_str()));
-                in_list && !same && !free
-            }
-            (None, _) => false,
-        };
+        let needs_visa = code.as_deref().map_or(false, |c| requires_permit(home.as_deref(), c));
         let country_name = code
             .as_ref()
             .and_then(|c| listed.iter().find(|(l, _)| l == c).map(|(_, n)| n.clone()));
@@ -298,7 +321,63 @@ pub(crate) fn event_visas(
             dossier_id: dossier.as_ref().map(|d| d.0),
             dossier_status: dossier.map(|d| d.1),
             needs_visa,
+            confirmed,
         });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn permit_rule() {
+        // French artist (also the default when the profile has no country).
+        for (target, needed) in [("FR", false), ("NL", false), ("CH", false), ("NO", false), ("GB", true), ("US", true), ("JP", true)] {
+            assert_eq!(requires_permit(Some("FR"), target), needed, "{target}");
+            assert_eq!(requires_permit(None, target), needed, "{target}");
+        }
+        assert!(requires_permit(Some("US"), "FR"));
+        assert!(!requires_permit(Some("US"), "US"));
+    }
+
+    #[test]
+    fn city_suffix_reads_the_country() {
+        assert_eq!(city_suffix("London, UK"), Some("UK"));
+        assert_eq!(city_suffix("Tokyo (Japon)"), Some("Japon"));
+        assert_eq!(city_suffix("Amsterdam"), None);
+        assert_eq!(city_suffix("Paris,"), None);
+    }
+
+    #[test]
+    fn event_visas_flags_confirmed_gig_abroad_without_dossier() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate_for_tests(&c).unwrap();
+        c.execute("INSERT INTO artists (name, country) VALUES ('Piers', 'France')", []).unwrap();
+        let a = c.last_insert_rowid();
+        for (title, city, status) in [
+            ("Fabric", "London, UK", "confirmed"),
+            ("Paradiso", "Amsterdam, Netherlands", "confirmed"),
+            ("Output", "New York, USA", "hold"),
+        ] {
+            c.execute(
+                "INSERT INTO events (artist_id, title, city, date, status) VALUES (?1, ?2, ?3, '2026-12-01', ?4)",
+                params![a, title, city, status],
+            )
+            .unwrap();
+        }
+        let v = event_visas(&c, None, None).unwrap();
+        let by = |i: usize| (v[i].country_code.clone(), v[i].needs_visa, v[i].confirmed, v[i].dossier_id);
+        assert_eq!(by(0), (Some("GB".into()), true, true, None));
+        assert_eq!(by(1), (Some("NL".into()), false, true, None));
+        assert_eq!(by(2), (Some("US".into()), true, false, None));
+        // A dossier linked to the London gig clears its alert.
+        c.execute(
+            "INSERT INTO visa_dossiers (title, status, checklist, event_id) VALUES ('UK', 'draft', '[]', ?1)",
+            params![v[0].event_id],
+        )
+        .unwrap();
+        assert!(event_visas(&c, None, None).unwrap()[0].dossier_id.is_some());
+    }
 }

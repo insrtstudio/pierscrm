@@ -221,6 +221,9 @@ export const deleteTemplate = (id: number) => invoke<void>("delete_template", { 
 export const listBudget = () => invoke<BudgetItem[]>("list_budget");
 export const saveBudgetItem = (item: BudgetItem) => invoke<number>("save_budget_item", { item });
 export const deleteBudgetItem = (id: number) => invoke<void>("delete_budget_item", { id });
+/// Attach a manual revenue line to the confirmed gig it duplicates.
+export const linkBudgetItem = (id: number, eventId: number) =>
+  invoke<void>("link_budget_item", { id, eventId });
 
 // ---- Tasks ----
 export const listTasks = () => invoke<Task[]>("list_tasks");

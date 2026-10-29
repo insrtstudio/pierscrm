@@ -21,10 +21,15 @@ export function AudienceTile() {
   }, [qc]);
   // No artist given: the backend picks the first artist with a Spotify ID.
   const { data: k } = useQuery({ queryKey: ["pulse_kpis", "home"], queryFn: () => pulseKpis() });
+  // Spotify may answer without popularity / followers (restricted for recent
+  // apps): the snapshot did run, so show "unavailable" rather than the setup hint.
+  const restricted = !!k?.spotify_metrics_unavailable;
   const hasData =
-    !!k && (k.artist_popularity != null || k.best_track_popularity != null || k.spend_30d > 0);
+    !!k &&
+    (restricted || k.artist_popularity != null || k.best_track_popularity != null || k.spend_30d > 0);
+  const missing = restricted ? t("pulse.unavailable") : "·";
   const num = (n?: number | null) =>
-    n == null ? "·" : new Intl.NumberFormat(i18n.language).format(n);
+    n == null ? missing : new Intl.NumberFormat(i18n.language).format(n);
   const delta = k?.artist_delta7;
 
   return (
@@ -48,9 +53,15 @@ export function AudienceTile() {
             <div>
               <div className="eyebrow">{t("pulse.tile_pop")}</div>
               <div className="mt-1 flex items-baseline gap-2">
-                <span className="font-condensed text-[32px] leading-none tabular text-accent-2">
-                  {k?.artist_popularity ?? "·"}
-                </span>
+                {k?.artist_popularity != null || !restricted ? (
+                  <span className="font-condensed text-[32px] leading-none tabular text-accent-2">
+                    {k?.artist_popularity ?? "·"}
+                  </span>
+                ) : (
+                  <span className="text-sm text-fg-subtle" title={t("pulse.unavailable_hint")}>
+                    {missing}
+                  </span>
+                )}
                 {delta != null && (
                   <span
                     className={`text-2xs font-bold tabular ${
@@ -65,9 +76,15 @@ export function AudienceTile() {
             </div>
             <div>
               <div className="eyebrow">{t("pulse.tile_followers")}</div>
-              <div className="mt-1 font-condensed text-[32px] leading-none tabular">
-                {num(k?.artist_followers)}
-              </div>
+              {k?.artist_followers != null || !restricted ? (
+                <div className="mt-1 font-condensed text-[32px] leading-none tabular">
+                  {num(k?.artist_followers)}
+                </div>
+              ) : (
+                <div className="mt-1 text-sm text-fg-subtle" title={t("pulse.unavailable_hint")}>
+                  {missing}
+                </div>
+              )}
             </div>
           </div>
           <div className="mt-4 space-y-1 eyebrow text-[10.5px]">
