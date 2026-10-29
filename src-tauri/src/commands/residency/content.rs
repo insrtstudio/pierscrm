@@ -499,6 +499,7 @@ mod tests {
     #[test]
     fn templates_and_unresolved_vars() {
         let (c, mut cfg) = setup();
+        cfg.assets.clear();
         let info = target_info(&c, 10, &cfg).unwrap();
         // No press link, no assets: {{press_link}} stays unresolved.
         let vars = vars_for(&info, &cfg, "Piers", None);

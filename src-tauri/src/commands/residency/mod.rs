@@ -251,7 +251,14 @@ impl Default for Config {
             pitch_en: String::new(),
             concept: String::new(),
             ask: default_ask(),
-            assets: Vec::new(),
+            // PIERS FM Vol. 4 is the reference mix: every new residency
+            // campaign starts with it as its lead asset.
+            assets: vec![Asset {
+                kind: "mix".into(),
+                title: "PIERS FM Vol. 4".into(),
+                url: "https://www.youtube.com/watch?v=dnURpBKDE7w".into(),
+                note: "Mix de référence".into(),
+            }],
             press_kit_id: None,
             press_kit_title: None,
             steps: default_steps(),
