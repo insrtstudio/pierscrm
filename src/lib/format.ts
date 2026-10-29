@@ -16,7 +16,8 @@ export const euro = (n?: number | null) =>
 // ISO string the Date constructor reads as UTC before formatting to local time.
 function toDate(v?: string | null): Date | null {
   if (!v) return null;
-  const iso = v.includes("T") ? v : v.replace(" ", "T") + (v.length > 10 ? "Z" : "");
+  if (v.length === 10) return parseDay(v);
+  const iso = v.includes("T") ? v : v.replace(" ", "T") + "Z";
   const d = new Date(iso);
   return isNaN(d.getTime()) ? null : d;
 }
@@ -36,4 +37,30 @@ export function formatDateTime(v?: string | null, fallback = "·"): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+// Calendar dates ("YYYY-MM-DD") are local days, not instants. `new Date("2026-11-01")`
+// is UTC midnight, so west of UTC it printed the day before, and `toISOString()`
+// on a local date shifted it back a day in Paris/Amsterdam.
+export function parseDay(v?: string | null): Date | null {
+  const m = v ? /^(\d{4})-(\d{2})-(\d{2})/.exec(v) : null;
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+export function toDay(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
+export const today = () => toDay(new Date());
+
+/// Whole calendar days from today to `v` (negative when past).
+export function daysUntil(v?: string | null): number | null {
+  const d = parseDay(v);
+  if (!d) return null;
+  const now = new Date();
+  const t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((d.getTime() - t0.getTime()) / 86_400_000);
 }

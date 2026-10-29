@@ -50,7 +50,7 @@ export function PriorityBadge({ priority }: { priority?: string | null }) {
   return (
     <span
       className={clsx(
-        "inline-flex items-center px-1.5 py-0.5 text-2xs font-bold tabular",
+        "inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 font-mono text-[10px] tabular",
         tone
       )}
     >

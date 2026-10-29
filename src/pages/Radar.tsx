@@ -1,29 +1,29 @@
-import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useDebounced } from "../lib/hooks";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Radar as RadarIcon,
-  Sparkles,
   Play,
   RefreshCw,
   Mail,
-  Globe,
   ExternalLink,
   UserPlus,
   Check,
   Music2,
+  AlertTriangle,
+  ShieldCheck,
 } from "lucide-react";
 import clsx from "clsx";
 import {
-  radarEnrich,
   radarHarvest,
   radarList,
   radarPromote,
   radarPromoteBulk,
   radarStats,
+  viListRuns,
 } from "../lib/api";
 import type { ViRunProgress } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
@@ -39,7 +39,18 @@ const GENRE_PRESETS = [
   "electronica",
   "disco",
 ];
-const SOURCES = ["spotify", "deezer", "youtube", "labels"] as const;
+
+/// Every source is queried on every scan. Picking sources was a decision the user
+/// had no basis to make (and "spotify" silently returned nothing without API
+/// keys, "labels" never matched at all), so the scan just casts the wide net and
+/// reports what each source gave back.
+const SOURCES = ["spotify", "deezer", "youtube", "labels"];
+
+type Filter = "all" | "email" | "official" | "pipeline";
+
+/// Rows fetched per "load more" step. The command has no offset, so paging just
+/// raises the limit.
+const PAGE = 500;
 
 export function Radar() {
   const { t } = useTranslation();
@@ -48,48 +59,60 @@ export function Radar() {
 
   const [genres, setGenres] = useState<string[]>(["tech house", "house"]);
   const [customGenre, setCustomGenre] = useState("");
-  const [sources, setSources] = useState<string[]>(["spotify", "deezer"]);
-  const [running, setRunning] = useState(false);
+  // The scan's run id. Component state is lost when the user leaves the page, so
+  // on mount it is restored from the runs table (a radar run still 'en_cours').
+  const [runId, setRunId] = useState<number | null>(null);
+  const running = runId != null;
   const [progress, setProgress] = useState<ViRunProgress | null>(null);
+  const [limit, setLimit] = useState(PAGE);
 
-  // Filters
-  const [statut, setStatut] = useState("qualifie");
-  const [source, setSource] = useState("all");
-  const [genreF, setGenreF] = useState("all");
+  const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
-  const [hasEmail, setHasEmail] = useState(false);
-  const [hideEditorial, setHideEditorial] = useState(true);
+  const dSearch = useDebounced(search, 250);
+  useEffect(() => setLimit(PAGE), [filter, dSearch]);
 
   const { data: stats } = useQuery({
     queryKey: ["radar_stats"],
     queryFn: radarStats,
     refetchInterval: running ? 4000 : false,
   });
-  // Typing must not fire a query per keystroke.
-  const dSearch = useDebounced(search, 250);
-  const { data: rows = [] } = useQuery({
-    queryKey: ["radar_list", statut, source, genreF, dSearch, hasEmail, hideEditorial],
-    queryFn: () =>
-      radarList({
-        statut,
-        source,
-        genre: genreF,
-        search: dSearch,
-        has_email: hasEmail || undefined,
-        hide_editorial: hideEditorial || undefined,
-        limit: 500,
-      }),
+  const {
+    data: rows = [],
+    isError,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: ["radar_list", filter, dSearch, limit],
+    queryFn: () => radarList({ filter, search: dSearch, limit }),
+    placeholderData: keepPreviousData,
     refetchInterval: running ? 4000 : false,
   });
 
   useEffect(() => {
+    let alive = true;
+    viListRuns()
+      .then((runs) => {
+        const r = runs.find((x) => x.type_.startsWith("radar_") && x.statut === "en_cours");
+        if (alive && r) setRunId((cur) => cur ?? r.id);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Venues runs share this event, so only our own run may stop the spinner.
+  const runIdRef = useRef(runId);
+  runIdRef.current = runId;
+  useEffect(() => {
     const un = listen<ViRunProgress>("vi:run-progress", (e) => {
+      if (e.payload.run_id !== runIdRef.current) return;
       setProgress(e.payload);
-      const done = e.payload.statut === "termine" || e.payload.statut === "arrete";
-      if (done) {
-        setRunning(false);
+      if (e.payload.statut !== "en_cours") {
+        setRunId(null);
         qc.invalidateQueries({ queryKey: ["radar_list"] });
         qc.invalidateQueries({ queryKey: ["radar_stats"] });
+        qc.invalidateQueries({ queryKey: ["vi_runs"] });
       }
     });
     return () => {
@@ -99,35 +122,34 @@ export function Radar() {
 
   const toggleGenre = (g: string) =>
     setGenres((s) => (s.includes(g) ? s.filter((x) => x !== g) : [...s, g]));
-  const toggleSource = (s: string) =>
-    setSources((v) => (v.includes(s) ? v.filter((x) => x !== s) : [...v, s]));
 
-  const harvest = async () => {
+  const scan = async () => {
     const gs = [...genres];
     if (customGenre.trim()) gs.push(customGenre.trim());
-    if (!gs.length || !sources.length) return toast(t("radar.pick_hint"), "error");
-    setRunning(true);
+    if (!gs.length) return toast(t("radar.pick_hint"), "error");
+    setRunId(-1);
+    setProgress(null);
     try {
-      await radarHarvest(gs, sources);
+      // One call covers finding curators and then hunting their addresses.
+      setRunId(await radarHarvest(gs, SOURCES));
       qc.invalidateQueries({ queryKey: ["vi_runs"] });
-      toast(t("radar.harvest_started"), "ok");
+      toast(t("radar.scan_started"), "ok");
     } catch (e: any) {
-      setRunning(false);
+      setRunId(null);
       toast(e?.toString?.() ?? "error", "error");
     }
   };
-  const enrich = async () => {
-    setRunning(true);
-    try {
-      await radarEnrich();
-      toast(t("radar.enrich_started"), "ok");
-    } catch (e: any) {
-      setRunning(false);
-      const msg = e?.toString?.() ?? "error";
-      toast(msg.includes("enrichir") ? t("radar.enrich_none") : msg, "error");
-    }
-  };
 
+  const promote = useMutation({
+    mutationFn: (id: number) => radarPromote(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["radar_list"] });
+      qc.invalidateQueries({ queryKey: ["radar_stats"] });
+      qc.invalidateQueries({ queryKey: ["contacts"] });
+      toast(t("radar.promoted"), "ok");
+    },
+    onError: (e: any) => toast(e?.toString?.() ?? "error", "error"),
+  });
   const promoteBulk = useMutation({
     mutationFn: () => radarPromoteBulk(),
     onSuccess: (n) => {
@@ -138,48 +160,34 @@ export function Radar() {
     },
     onError: (e: any) => toast(e?.toString?.() ?? "error", "error"),
   });
-  const promote = useMutation({
-    mutationFn: (id: number) => radarPromote(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["radar_list"] });
-      qc.invalidateQueries({ queryKey: ["radar_stats"] });
-      toast(t("radar.promoted"), "ok");
-    },
-    onError: (e: any) => toast(e?.toString?.() ?? "error", "error"),
-  });
 
-  const chips = stats
-    ? [
-        { k: "total", label: t("radar.s_total"), v: stats.total, tone: "text-fg" },
-        { k: "qualifie", label: t("radar.s_qualified"), v: stats.qualifie, tone: "text-accent" },
-        {
-          k: "email",
-          label: t("radar.s_email"),
-          v: stats.with_email,
-          tone: "text-emerald-500",
-          on: hasEmail,
-          onClick: () => setHasEmail((x) => !x),
-        },
-        { k: "pipe", label: t("radar.s_pipeline"), v: stats.in_pipeline },
-        { k: "edito", label: t("radar.s_editorial"), v: stats.editorial },
-      ]
-    : [];
+  const filters: { k: Filter; label: string; count?: number }[] = [
+    { k: "all", label: t("radar.f_all"), count: stats?.total },
+    { k: "email", label: t("radar.f_email"), count: stats?.with_email },
+    { k: "official", label: t("radar.f_official"), count: stats?.official },
+    { k: "pipeline", label: t("radar.f_pipeline"), count: stats?.in_pipeline },
+  ];
+  const total = dSearch ? undefined : filters.find((f) => f.k === filter)?.count;
+  const capped = rows.length >= limit;
+  const addressable = (stats?.with_email ?? 0) - (stats?.in_pipeline ?? 0);
 
   return (
     <div>
-      <PageHeader kicker="RADAR" title={t("radar.title")} subtitle={t("radar.subtitle")} />
+      <PageHeader title={t("radar.title")} subtitle={t("radar.subtitle")} />
       <div className="space-y-5 px-8 py-6">
-        {/* Launcher */}
+        {/* Scan: pick genres, press once. */}
         <div className="card p-5">
           <div className="kicker mb-3">{t("radar.new_scan")}</div>
-          <div className="mb-3 flex flex-wrap gap-1.5">
+          <div className="mb-4 flex flex-wrap gap-1.5">
             {GENRE_PRESETS.map((g) => (
               <button
                 key={g}
                 onClick={() => toggleGenre(g)}
                 className={clsx(
-                  "badge cursor-pointer border-2",
-                  genres.includes(g) ? "border-accent bg-accent text-accent-fg" : "border-border text-fg-subtle hover:border-accent-2"
+                  "badge cursor-pointer border",
+                  genres.includes(g)
+                    ? "border-accent bg-accent text-accent-fg"
+                    : "border-border text-fg-subtle hover:border-accent-2"
                 )}
               >
                 {g}
@@ -192,158 +200,133 @@ export function Radar() {
               onChange={(e) => setCustomGenre(e.target.value)}
             />
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="segmented">
-              {SOURCES.map((s) => (
-                <button key={s} data-active={sources.includes(s)} className="segmented-item" onClick={() => toggleSource(s)}>
-                  {s}
-                </button>
-              ))}
-            </div>
-            <button className="btn-primary" onClick={harvest} disabled={running}>
+          <div className="flex flex-wrap items-center gap-3">
+            <button className="btn-primary" onClick={scan} disabled={running}>
               <Play size={15} />
-              {t("radar.scan")}
+              {running ? t("radar.scanning") : t("radar.scan")}
             </button>
-            <button className="btn-outline" onClick={enrich} disabled={running} title={t("radar.enrich_hint")}>
-              <Sparkles size={15} className={running ? "animate-pulse" : ""} />
-              {t("radar.enrich")}
-            </button>
-            <button className="btn-outline" onClick={() => promoteBulk.mutate()} disabled={promoteBulk.isPending} title={t("radar.promote_bulk_hint")}>
-              <UserPlus size={15} />
-              {t("radar.promote_bulk")}
-            </button>
+            <span className="text-2xs text-fg-subtle">{t("radar.scan_hint")}</span>
           </div>
           {running && progress && (
             <div className="mt-3 flex items-center gap-2 text-2xs text-fg-subtle">
               <RefreshCw size={12} className="animate-spin text-accent" />
               <span className="tabular">
-                {progress.tasks_done}/{progress.tasks_total} {t("venues.tasks")}
+                {progress.tasks_done}/{progress.tasks_total}
               </span>
               {progress.message && <span className="truncate font-mono">· {progress.message}</span>}
             </div>
           )}
-          <p className="mt-3 text-2xs leading-relaxed text-fg-subtle">{t("radar.disclaimer")}</p>
         </div>
 
-        {/* Stats bento */}
-        {chips.length > 0 && (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-            {chips.map((c) => (
+        {/* One filter row: the three states that lead to an action. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="segmented">
+            {filters.map((f) => (
               <button
-                key={c.k}
-                onClick={c.onClick}
-                disabled={!c.onClick}
-                className={clsx(
-                  "border-2 px-3 py-2 text-left transition-colors",
-                  c.on ? "border-accent bg-accent/5" : "border-border",
-                  c.onClick ? "cursor-pointer hover:border-accent-2" : "cursor-default"
-                )}
+                key={f.k}
+                data-active={filter === f.k}
+                className="segmented-item"
+                onClick={() => setFilter(f.k)}
               >
-                <div className={clsx("text-xl font-black tabular", c.tone ?? "text-fg")}>{c.v}</div>
-                <div className="text-2xs uppercase tracking-wide text-fg-faint">{c.label}</div>
+                {f.label}
+                {f.count != null && <span className="ml-1.5 tabular opacity-60">{f.count}</span>}
               </button>
             ))}
           </div>
-        )}
-
-        {/* Filters */}
-        <div className="flex flex-wrap items-center gap-2">
           <input
             className="input max-w-xs flex-1"
             placeholder={t("radar.search")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <select className="input w-auto" value={statut} onChange={(e) => setStatut(e.target.value)}>
-            <option value="all">{t("common.all")}</option>
-            <option value="qualifie">{t("venues.st_qualifie")}</option>
-            <option value="candidat">{t("venues.st_candidat")}</option>
-            <option value="valide">{t("venues.st_valide")}</option>
-          </select>
-          <select className="input w-auto" value={source} onChange={(e) => setSource(e.target.value)}>
-            <option value="all">{t("radar.all_sources")}</option>
-            {SOURCES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <select className="input w-auto" value={genreF} onChange={(e) => setGenreF(e.target.value)}>
-            <option value="all">{t("radar.all_genres")}</option>
-            {(stats?.genres ?? []).map(([g, n]) => (
-              <option key={g} value={g}>
-                {g} ({n})
-              </option>
-            ))}
-          </select>
-          <button
-            className={clsx("badge cursor-pointer border-2", hasEmail ? "border-accent bg-accent text-accent-fg" : "border-border text-fg-subtle")}
-            onClick={() => setHasEmail((x) => !x)}
-          >
-            <Mail size={11} /> {t("radar.s_email")}
-          </button>
-          <button
-            className={clsx("badge cursor-pointer border-2", hideEditorial ? "border-accent bg-accent text-accent-fg" : "border-border text-fg-subtle")}
-            onClick={() => setHideEditorial((x) => !x)}
-          >
-            {t("radar.hide_editorial")}
-          </button>
+          {addressable > 0 && (
+            <button
+              className="btn-outline ml-auto"
+              onClick={() => promoteBulk.mutate()}
+              disabled={promoteBulk.isPending}
+              title={t("radar.promote_bulk_hint")}
+            >
+              <UserPlus size={15} />
+              {t("radar.promote_bulk_n", { count: addressable })}
+            </button>
+          )}
         </div>
 
-        {/* List */}
-        {rows.length === 0 ? (
+        {/* List. A failed query must say so: this page showed "no curators" for
+            weeks while the command was in fact erroring out on every call. */}
+        {isError ? (
+          <div className="card p-8 text-center">
+            <AlertTriangle size={20} className="mx-auto mb-2 text-accent" />
+            <div className="text-sm font-bold">{t("radar.load_error")}</div>
+            <div className="mx-auto mt-1 max-w-lg break-words font-mono text-2xs text-fg-subtle">
+              {String((error as any)?.message ?? error)}
+            </div>
+            <button className="btn-outline mx-auto mt-4" onClick={() => refetch()}>
+              <RefreshCw size={14} />
+              {t("common.retry")}
+            </button>
+          </div>
+        ) : rows.length === 0 ? (
           <div className="card">
             <EmptyState icon={RadarIcon} title={t("radar.empty")} hint={t("radar.empty_hint")} />
           </div>
         ) : (
-          <div className="card max-h-[calc(100vh-460px)] overflow-auto">
+          <div className="card max-h-[calc(100vh-400px)] overflow-auto">
             <table className="tbl">
               <thead>
                 <tr>
-                  <th className="w-14 text-right">{t("venues.score")}</th>
                   <th>{t("radar.curator")}</th>
-                  <th className="text-right">{t("radar.followers")}</th>
-                  <th>{t("venues.contact")}</th>
-                  <th>{t("radar.genre")}</th>
-                  <th></th>
+                  <th className="w-32 text-right">{t("radar.followers")}</th>
+                  <th className="w-64">{t("radar.email")}</th>
+                  <th className="w-44"></th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((c) => (
                   <tr key={c.id}>
-                    <td className="text-right">
-                      <span className="text-lg font-black tabular text-accent">{c.score}</span>
-                    </td>
                     <td>
                       <div className="flex items-center gap-2 font-semibold">
-                        <Music2 size={12} className="text-accent-2" />
-                        {c.nom}
-                        {c.editorial && (
-                          <span className="badge bg-muted text-fg-faint">{t("radar.editorial")}</span>
-                        )}
+                        <Music2 size={12} className="shrink-0 text-accent-2" />
+                        <span className="truncate">{c.nom}</span>
                         {c.in_pipeline && (
-                          <span className="badge bg-emerald-500/15 text-emerald-500">
+                          <span className="badge shrink-0 bg-ok/15 text-ok">
                             <Check size={11} /> {t("radar.in_pipeline")}
                           </span>
                         )}
                       </div>
-                      {c.owner_name && <div className="text-2xs text-fg-subtle">{c.owner_name} · {c.source}</div>}
-                    </td>
-                    <td className="text-right font-bold tabular">{c.followers?.toLocaleString() ?? "·"}</td>
-                    <td>
-                      <div className="flex items-center gap-2 text-fg-subtle">
-                        {c.best_email ? (
-                          <span className="inline-flex items-center gap-1 text-emerald-500" title={c.best_email}>
-                            <Mail size={13} />
-                            {c.nb_emails > 1 ? c.nb_emails : ""}
-                          </span>
-                        ) : (
-                          <Mail size={13} className="text-fg-faint" />
-                        )}
-                        <Globe size={13} className={c.site_web ? "text-fg-subtle" : "text-fg-faint"} />
+                      <div className="text-2xs text-fg-subtle">
+                        {[c.owner_name, c.source, c.genre].filter(Boolean).join(" · ")}
                       </div>
                     </td>
-                    <td className="text-2xs text-fg-subtle">{c.genre}</td>
+                    <td className="text-right font-bold tabular">
+                      {c.followers?.toLocaleString() ?? "·"}
+                    </td>
+                    <td>
+                      {c.best_email ? (
+                        <div className="flex items-center gap-1.5">
+                          <a
+                            href={`mailto:${c.best_email}`}
+                            className="inline-flex min-w-0 items-center gap-1.5 font-mono text-2xs text-ok hover:underline"
+                            title={c.best_email}
+                          >
+                            <Mail size={12} className="shrink-0" />
+                            <span className="truncate">{c.best_email}</span>
+                          </a>
+                          {c.official && (
+                            <span
+                              className="badge shrink-0 bg-accent-2/15 text-accent-2"
+                              title={t("radar.official_hint")}
+                            >
+                              <ShieldCheck size={11} /> {t("radar.official")}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-2xs text-fg-faint">
+                          {c.enriched ? t("radar.no_email") : t("radar.email_pending")}
+                        </span>
+                      )}
+                    </td>
                     <td className="text-right">
                       <div className="flex justify-end gap-1">
                         {c.url && (
@@ -374,7 +357,18 @@ export function Radar() {
             </table>
           </div>
         )}
-        <div className="text-2xs text-fg-subtle">{t("radar.count", { count: rows.length })}</div>
+        <div className="flex items-center gap-3 text-2xs text-fg-subtle">
+          <span>
+            {capped && total != null && total > rows.length
+              ? t("radar.count_of", { shown: rows.length, count: total })
+              : t("radar.count", { count: rows.length })}
+          </span>
+          {capped && (
+            <button className="btn-ghost px-2 py-1 text-2xs" onClick={() => setLimit((l) => l + PAGE)}>
+              {t("radar.load_more")}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

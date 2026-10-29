@@ -42,17 +42,54 @@ fn cell_to_string(d: &Data) -> String {
     }
 }
 
+/// CSV text as UTF-8 (BOM stripped). Excel on a French Mac/PC exports
+/// Windows-1252, which is not valid UTF-8: decode that instead of failing.
+fn decode_text(bytes: &[u8]) -> String {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_string();
+    }
+    bytes
+        .iter()
+        .map(|&b| match b {
+            0x80 => '€',
+            0x85 => '…',
+            0x8C => 'Œ',
+            0x91 => '‘',
+            0x92 => '’',
+            0x93 => '“',
+            0x94 => '”',
+            0x96 => '–',
+            0x97 => '—',
+            0x9C => 'œ',
+            _ => b as char, // Latin-1 for the rest
+        })
+        .collect()
+}
+
+/// French Excel writes `;`-separated CSV. Pick whichever of `;`, `,`, tab is
+/// most frequent on the header line.
+fn sniff_delimiter(text: &str) -> u8 {
+    let first = text.lines().next().unwrap_or("");
+    [b';', b',', b'\t']
+        .into_iter()
+        .max_by_key(|&d| first.bytes().filter(|&b| b == d).count())
+        .filter(|&d| first.bytes().any(|b| b == d))
+        .unwrap_or(b',')
+}
+
 /// Read the raw rows of a given sheet (or the whole CSV) into strings.
 fn read_rows(path: &str, sheet: Option<&str>) -> Result<Vec<Vec<String>>, String> {
     let lower = path.to_lowercase();
     if lower.ends_with(".csv") || lower.ends_with(".tsv") {
-        let delim = if lower.ends_with(".tsv") { b'\t' } else { b',' };
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let text = decode_text(&bytes);
+        let delim = if lower.ends_with(".tsv") { b'\t' } else { sniff_delimiter(&text) };
         let mut rdr = csv::ReaderBuilder::new()
             .has_headers(false)
             .flexible(true)
             .delimiter(delim)
-            .from_path(path)
-            .map_err(|e| e.to_string())?;
+            .from_reader(text.as_bytes());
         let mut out = Vec::new();
         for rec in rdr.records() {
             let rec = rec.map_err(|e| e.to_string())?;

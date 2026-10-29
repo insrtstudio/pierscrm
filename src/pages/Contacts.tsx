@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
-import { useDebounced } from "../lib/hooks";
+import { useAppIntent, useDebounced } from "../lib/hooks";
 import {
   Plus,
   Search,
@@ -10,7 +10,9 @@ import {
   ExternalLink,
   Pencil,
   Trash2,
+  Upload,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   createContact,
@@ -25,11 +27,12 @@ import { STATUSES } from "../lib/types";
 import { CATEGORIES } from "../lib/constants";
 import { PageHeader, Loader, ErrorState } from "../components/Layout";
 import { StatusBadge, StatusSelect, PriorityBadge } from "../components/StatusBadge";
-import { Modal, Field, useToast, useConfirm } from "../components/ui";
+import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 import { ComposeModal } from "../components/ComposeModal";
 
 export function Contacts() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const toast = useToast();
   const confirm = useConfirm();
@@ -70,14 +73,14 @@ export function Contacts() {
     ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
     : 0;
 
-  useEffect(() => {
-    const h = (e: Event) => {
-      if ((e as CustomEvent).detail === "new:contact")
-        setEditing({ category: "venue", name: "", status: "to_contact" } as Contact);
-    };
-    window.addEventListener("app:new", h);
-    return () => window.removeEventListener("app:new", h);
-  }, []);
+  useAppIntent("new:contact", () =>
+    setEditing({ category: "venue", name: "", status: "to_contact" } as Contact)
+  );
+
+  // A selection made under one filter must not survive into another: bulk
+  // delete used to remove contacts that were no longer on screen.
+  useEffect(() => setSelected(new Set()), [category, status, dSearch]);
+  const visibleSelected = contacts.filter((c) => selected.has(c.id!)).map((c) => c.id!);
 
   const statusMut = useMutation({
     mutationFn: ({ id, status }: { id: number; status: Status }) =>
@@ -127,6 +130,11 @@ export function Contacts() {
         title={t("contacts.title")}
         subtitle={t("contacts.subtitle")}
         actions={
+          <>
+          <button className="btn-outline" onClick={() => navigate("/import")}>
+            <Upload size={15} />
+            {t("nav.import")}
+          </button>
           <button
             className="btn-primary"
             onClick={() =>
@@ -140,10 +148,11 @@ export function Contacts() {
             <Plus size={16} />
             {t("contacts.new")}
           </button>
+          </>
         }
       />
 
-      <div className="px-8 pb-10">
+      <div className="px-8 pb-10 pt-6">
         {/* Filters */}
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px]">
@@ -175,7 +184,7 @@ export function Contacts() {
             value={status}
             onChange={(e) => setStatus(e.target.value)}
           >
-            <option value="all">{t("common.all")}</option>
+            <option value="all">{t("contacts.all_statuses")}</option>
             {STATUSES.map((s) => (
               <option key={s} value={s}>
                 {t(`status.${s}`)}
@@ -185,16 +194,17 @@ export function Contacts() {
         </div>
 
         {/* Bulk bar */}
-        {selected.size > 0 && (
+        {visibleSelected.length > 0 && (
           <div className="mb-3 flex items-center gap-3 rounded-lg border border-border bg-surface px-4 py-2 text-sm">
             <span className="text-fg-subtle">
-              {t("contacts.selected", { count: selected.size })}
+              {t("contacts.selected", { count: visibleSelected.length })}
             </span>
             <button
               className="btn-danger ml-auto py-1.5"
+              disabled={bulkDelMut.isPending}
               onClick={() => {
                 if (confirm(t("common.confirm_delete")))
-                  bulkDelMut.mutate([...selected]);
+                  bulkDelMut.mutate(visibleSelected);
               }}
             >
               <Trash2 size={14} />
@@ -209,7 +219,7 @@ export function Contacts() {
           <div ref={scrollRef} className="max-h-[calc(100vh-330px)] overflow-auto">
             <table className="w-full text-sm">
               {/* WebKit ignores `position: sticky` on <tr>, so it goes on the cells. */}
-              <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:border-b [&_th]:border-border [&_th]:bg-surface">
+              <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:border-b [&_th]:border-border [&_th]:bg-surface [&_th]:font-mono [&_th]:text-[10.5px] [&_th]:font-normal [&_th]:uppercase [&_th]:tracking-[0.14em] [&_th]:text-fg-subtle">
                 <tr className="text-left text-xs text-fg-subtle">
                   <th className="w-10 px-3 py-2.5">
                     <input
@@ -219,11 +229,11 @@ export function Contacts() {
                       className="accent-accent"
                     />
                   </th>
-                  <th className="px-3 py-2.5 font-medium">{t("contacts.name")}</th>
-                  <th className="px-3 py-2.5 font-medium">{t("contacts.area")}</th>
-                  <th className="px-3 py-2.5 font-medium">{t("contacts.date")}</th>
-                  <th className="px-3 py-2.5 font-medium">{t("contacts.email")}</th>
-                  <th className="px-3 py-2.5 font-medium">{t("contacts.status")}</th>
+                  <th className="px-3 py-2.5 ">{t("contacts.name")}</th>
+                  <th className="px-3 py-2.5 ">{t("contacts.area")}</th>
+                  <th className="px-3 py-2.5 ">{t("contacts.date")}</th>
+                  <th className="px-3 py-2.5 ">{t("contacts.email")}</th>
+                  <th className="px-3 py-2.5 ">{t("contacts.status")}</th>
                   <th className="px-3 py-2.5 text-right font-medium">
                     {t("common.actions")}
                   </th>
@@ -345,7 +355,7 @@ export function Contacts() {
                         <button
                           title={t("common.delete")}
                             aria-label={t("common.delete")}
-                          className="btn-ghost px-2 py-1.5 text-rose-500"
+                          className="btn-ghost px-2 py-1.5 text-danger"
                           onClick={() => {
                             if (confirm(t("common.confirm_delete")))
                               delMut.mutate(c.id!);
@@ -433,20 +443,16 @@ function ContactModal({
   const set = (k: keyof Contact, v: any) =>
     setForm((f) => ({ ...f, [k]: v }));
 
-  const save = async () => {
+  const [save, saving] = useSubmit(async () => {
     if (!form.name.trim()) {
       toast(t("contacts.name") + " " + t("common.required"), "error");
       return;
     }
-    try {
-      if (isNew) await createContact(form);
-      else await updateContact(form);
-      toast(t("common.save"), "ok");
-      onSaved();
-    } catch (e: any) {
-      toast(e?.toString?.() ?? "error", "error");
-    }
-  };
+    if (isNew) await createContact(form);
+    else await updateContact(form);
+    toast(t("common.save"), "ok");
+    onSaved();
+  });
 
   const inp = (k: keyof Contact) => ({
     className: "input",
@@ -543,7 +549,7 @@ function ContactModal({
         <button className="btn-outline" onClick={onClose}>
           {t("common.cancel")}
         </button>
-        <button className="btn-primary" onClick={save}>
+        <button className="btn-primary" onClick={() => save()} disabled={saving}>
           {t("common.save")}
         </button>
       </div>

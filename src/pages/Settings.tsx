@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw, Info, PenLine, Search, Activity } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import i18n from "../i18n";
-import { checkForUpdate, installAndRelaunch } from "../lib/updater";
+import type { Update } from "@tauri-apps/plugin-updater";
+import { checkForUpdate, installAndRelaunch, isInstalling, subscribeInstalling } from "../lib/updater";
+import { useAppIntent } from "../lib/hooks";
 import { applyTheme, getTheme, type Theme } from "../lib/theme";
 import {
   getSetting,
@@ -15,7 +17,8 @@ import {
 } from "../lib/api";
 import type { SmtpConfig } from "../lib/types";
 import { PageHeader } from "../components/Layout";
-import { Field, useToast } from "../components/ui";
+import clsx from "clsx";
+import { Field, errorMessage, useSubmit, useToast } from "../components/ui";
 
 type SignatureFields = {
   name: string;
@@ -38,7 +41,11 @@ const EMPTY_SIG: SignatureFields = {
   soundcloud: "",
 };
 
+const SETTINGS_TABS = ["general", "email", "integrations"] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number];
+
 export function Settings() {
+  const [tab, setTab] = useState<SettingsTab>("general");
   const { t } = useTranslation();
   const toast = useToast();
   const qc = useQueryClient();
@@ -59,11 +66,11 @@ export function Settings() {
   useEffect(() => {
     if (trackingUrl != null) setTrackVal(trackingUrl);
   }, [trackingUrl]);
-  const saveTracking = async () => {
+  const [saveTracking, saveTrackingBusy] = useSubmit(async () => {
     await setSetting("tracking_base_url", trackVal.trim());
     qc.invalidateQueries({ queryKey: ["setting", "tracking_base_url"] });
     toast(t("settings.saved"), "ok");
-  };
+  });
 
   // ---- Serper (venue website resolution) ----
   const { data: serperKey } = useQuery({
@@ -74,11 +81,11 @@ export function Settings() {
   useEffect(() => {
     if (serperKey != null) setSerperVal(serperKey);
   }, [serperKey]);
-  const saveSerper = async () => {
+  const [saveSerper, saveSerperBusy] = useSubmit(async () => {
     await setSetting("serper_api_key", serperVal.trim());
     qc.invalidateQueries({ queryKey: ["setting", "serper_api_key"] });
     toast(t("settings.saved"), "ok");
-  };
+  });
 
   // ---- Radar: YouTube Data API key ----
   const { data: ytKey } = useQuery({
@@ -89,11 +96,11 @@ export function Settings() {
   useEffect(() => {
     if (ytKey != null) setYtVal(ytKey);
   }, [ytKey]);
-  const saveYt = async () => {
+  const [saveYt, saveYtBusy] = useSubmit(async () => {
     await setSetting("youtube_api_key", ytVal.trim());
     qc.invalidateQueries({ queryKey: ["setting", "youtube_api_key"] });
     toast(t("settings.saved"), "ok");
-  };
+  });
 
   // ---- Pulse credentials (Spotify + Meta) ----
   const PULSE_KEYS = [
@@ -122,11 +129,11 @@ export function Settings() {
     value: pulseCfg[k] ?? "",
     onChange: (e: any) => setPulseCfg((c) => ({ ...c, [k]: e.target.value })),
   });
-  const savePulse = async () => {
+  const [savePulse, savePulseBusy] = useSubmit(async () => {
     for (const k of PULSE_KEYS) await setSetting(k, (pulseCfg[k] ?? "").trim());
     qc.invalidateQueries({ queryKey: ["settings", "pulse"] });
     toast(t("settings.saved"), "ok");
-  };
+  });
 
   // ---- Harvest performance (concurrent workers) ----
   const { data: workersRaw } = useQuery({
@@ -137,12 +144,12 @@ export function Settings() {
   useEffect(() => {
     if (workersRaw) setWorkers(workersRaw);
   }, [workersRaw]);
-  const saveWorkers = async (v: string) => {
+  const [saveWorkers, saveWorkersBusy] = useSubmit(async (v: string) => {
     setWorkers(v);
     await setSetting("vi_workers", v);
     qc.invalidateQueries({ queryKey: ["setting", "vi_workers"] });
     toast(t("settings.saved"), "ok");
-  };
+  });
 
   // ---- Email signature ----
   const { data: sigRaw } = useQuery({
@@ -164,11 +171,11 @@ export function Settings() {
     value: sig[k],
     onChange: (e: any) => setSig({ ...sig, [k]: e.target.value }),
   });
-  const saveSig = async () => {
+  const [saveSig, saveSigBusy] = useSubmit(async () => {
     await setSetting("email_signature", JSON.stringify(sig));
     qc.invalidateQueries({ queryKey: ["setting", "email_signature"] });
     toast(t("settings.saved"), "ok");
-  };
+  });
   const st = (v: string) => v.trim();
   const sigPreview: string[] = [];
   {
@@ -205,36 +212,40 @@ export function Settings() {
   // ---- App version + updates ----
   const [version, setVersion] = useState("");
   const [checking, setChecking] = useState(false);
-  const [installing, setInstalling] = useState(false);
+  // Found update awaiting an explicit "Install and restart" click.
+  const [pending, setPending] = useState<Update | null>(null);
+  const installing = useSyncExternalStore(subscribeInstalling, isInstalling);
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
   }, []);
 
   const checkUpdate = async () => {
+    if (checking || isInstalling()) return;
     setChecking(true);
     try {
       const update = await checkForUpdate(true);
-      if (!update) {
-        toast(t("update.uptodate"), "ok");
-        return;
-      }
-      toast(t("update.available", { version: update.version }), "ok");
-      setInstalling(true);
-      await installAndRelaunch(update);
-    } catch (e: any) {
-      toast(`${t("update.error")}: ${e?.toString?.() ?? e}`, "error");
+      setPending(update);
+      if (!update) toast(t("update.uptodate"), "ok");
+    } catch (e) {
+      toast(`${t("update.error")}: ${errorMessage(e)}`, "error");
     } finally {
       setChecking(false);
-      setInstalling(false);
     }
   };
 
-  useEffect(() => {
-    const h = () => checkUpdate();
-    window.addEventListener("app:check-updates", h);
-    return () => window.removeEventListener("app:check-updates", h);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const installUpdate = async () => {
+    if (!pending) return;
+    try {
+      await installAndRelaunch(pending);
+    } catch (e) {
+      toast(`${t("update.error")}: ${errorMessage(e)}`, "error");
+    }
+  };
+
+  useAppIntent("check-updates", () => {
+    setTab("general");
+    checkUpdate();
+  });
 
   const changeLang = (l: string) => {
     setLang(l);
@@ -246,16 +257,26 @@ export function Settings() {
     applyTheme(th);
   };
 
-  const saveSmtp = async () => {
-    await saveSmtpConfig(cfg);
+  // An emptied port field must not be saved as 0: fall back to the stored one, else 587.
+  const normCfg = (): SmtpConfig => ({
+    ...cfg,
+    port: cfg.port > 0 ? cfg.port : smtp?.port && smtp.port > 0 ? smtp.port : 587,
+  });
+
+  const [saveSmtp, saveSmtpBusy] = useSubmit(async () => {
+    const c = normCfg();
+    await saveSmtpConfig(c);
+    setCfg(c);
     qc.invalidateQueries({ queryKey: ["smtp"] });
     toast(t("settings.saved"), "ok");
-  };
+  });
 
   const runTest = async () => {
-    await saveSmtpConfig(cfg);
     setTesting(true);
     try {
+      const c = normCfg();
+      await saveSmtpConfig(c);
+      setCfg(c);
       const ok = await testSmtp();
       toast(ok ? t("settings.test_ok") : t("settings.test_failed"), ok ? "ok" : "error");
     } catch (e: any) {
@@ -267,7 +288,7 @@ export function Settings() {
 
   const cinp = (k: keyof SmtpConfig) => ({
     className: "input",
-    value: (cfg[k] as any) ?? "",
+    value: k === "port" && !cfg.port ? "" : ((cfg[k] as any) ?? ""),
     onChange: (e: any) =>
       setCfg({
         ...cfg,
@@ -277,8 +298,28 @@ export function Settings() {
 
   return (
     <div>
-      <PageHeader title={t("settings.title")} subtitle={t("settings.subtitle")} />
-      <div className="max-w-3xl space-y-6 px-8 pb-10">
+      <PageHeader title={t("settings.title")} subtitle={t("settings.subtitle")}>
+        {/* Grouped like the old single column, one concern per tab */}
+        <div role="tablist" className="-mb-px flex gap-6">
+          {SETTINGS_TABS.map((k) => (
+            <button
+              key={k}
+              role="tab"
+              aria-selected={tab === k}
+              onClick={() => setTab(k)}
+              className={clsx(
+                "border-b-2 pb-2.5 font-mono text-[11px] uppercase tracking-[0.14em] transition-colors",
+                tab === k ? "border-accent text-fg" : "border-transparent text-fg-subtle hover:text-fg"
+              )}
+            >
+              {t(`settings.tab_${k}`)}
+            </button>
+          ))}
+        </div>
+      </PageHeader>
+      <div className="max-w-3xl space-y-6 px-8 pb-10 pt-6">
+        {tab === "general" && (
+        <>
         {/* Appearance */}
         <div className="card p-6">
           <div className="grid grid-cols-2 gap-6">
@@ -327,6 +368,10 @@ export function Settings() {
           </div>
         </div>
 
+        </>
+        )}
+        {tab === "email" && (
+        <>
         {/* SMTP */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
@@ -371,16 +416,20 @@ export function Settings() {
             </Field>
           </div>
           <div className="mt-5 flex justify-end gap-2">
-            <button className="btn-outline" onClick={runTest} disabled={testing}>
+            <button className="btn-outline" onClick={runTest} disabled={testing || saveSmtpBusy}>
               <Plug size={15} />
               {testing ? t("settings.testing") : t("settings.test")}
             </button>
-            <button className="btn-primary" onClick={saveSmtp}>
+            <button className="btn-primary" onClick={saveSmtp} disabled={saveSmtpBusy}>
               {t("common.save")}
             </button>
           </div>
         </div>
 
+        </>
+        )}
+        {tab === "email" && (
+        <>
         {/* Open tracking */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
@@ -411,13 +460,17 @@ export function Settings() {
                 placeholder="https://track.insrt.fr"
               />
             </Field>
-            <button className="btn-primary" onClick={saveTracking}>
+            <button className="btn-primary" onClick={saveTracking} disabled={saveTrackingBusy}>
               {t("common.save")}
             </button>
           </div>
           <p className="mt-3 text-2xs text-fg-faint">{t("settings.tracking_note")}</p>
         </div>
 
+        </>
+        )}
+        {tab === "email" && (
+        <>
         {/* Email signature */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
@@ -467,12 +520,16 @@ export function Settings() {
           </div>
 
           <div className="mt-5 flex justify-end">
-            <button className="btn-primary" onClick={saveSig}>
+            <button className="btn-primary" onClick={saveSig} disabled={saveSigBusy}>
               {t("common.save")}
             </button>
           </div>
         </div>
 
+        </>
+        )}
+        {tab === "integrations" && (
+        <>
         {/* Venue website resolution (Serper) */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
@@ -490,13 +547,17 @@ export function Settings() {
                 autoComplete="off"
               />
             </Field>
-            <button className="btn-primary" onClick={saveSerper}>
+            <button className="btn-primary" onClick={saveSerper} disabled={saveSerperBusy}>
               {t("common.save")}
             </button>
           </div>
           <p className="mt-3 text-2xs text-fg-faint">{t("settings.serper_hint")}</p>
         </div>
 
+        </>
+        )}
+        {tab === "integrations" && (
+        <>
         {/* Harvest performance */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
@@ -508,6 +569,7 @@ export function Settings() {
               <select
                 className="input w-28"
                 value={workers}
+                disabled={saveWorkersBusy}
                 onChange={(e) => saveWorkers(e.target.value)}
               >
                 {[1, 2, 3, 4, 5, 6].map((n) => (
@@ -521,6 +583,10 @@ export function Settings() {
           </div>
         </div>
 
+        </>
+        )}
+        {tab === "integrations" && (
+        <>
         {/* Radar (YouTube) */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
@@ -538,13 +604,17 @@ export function Settings() {
                 autoComplete="off"
               />
             </Field>
-            <button className="btn-primary" onClick={saveYt}>
+            <button className="btn-primary" onClick={saveYt} disabled={saveYtBusy}>
               {t("common.save")}
             </button>
           </div>
           <p className="mt-3 text-2xs text-fg-faint">{t("settings.youtube_hint")}</p>
         </div>
 
+        </>
+        )}
+        {tab === "integrations" && (
+        <>
         {/* Pulse (Spotify + Meta) */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
@@ -570,12 +640,16 @@ export function Settings() {
           </div>
           <p className="mt-3 text-2xs text-fg-faint">{t("settings.pulse_hint")}</p>
           <div className="mt-4 flex justify-end">
-            <button className="btn-primary" onClick={savePulse}>
+            <button className="btn-primary" onClick={savePulse} disabled={savePulseBusy}>
               {t("common.save")}
             </button>
           </div>
         </div>
 
+        </>
+        )}
+        {tab === "general" && (
+        <>
         {/* Updates */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
@@ -587,24 +661,38 @@ export function Settings() {
               <span className="text-fg-subtle">{t("update.current")} </span>
               <span className="font-mono font-medium">v{version || "·"}</span>
             </div>
-            <button
-              className="btn-primary"
-              onClick={checkUpdate}
-              disabled={checking || installing}
-            >
-              {installing ? (
-                <Download size={15} />
-              ) : (
-                <RefreshCw size={15} className={checking ? "animate-spin" : ""} />
-              )}
-              {installing
-                ? t("update.installing")
-                : checking
-                ? t("update.checking")
-                : t("update.check")}
-            </button>
+            {pending ? (
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-fg">
+                  {t("update.available", { version: pending.version })}
+                </span>
+                <button className="btn-primary" onClick={installUpdate} disabled={installing}>
+                  <Download size={15} />
+                  {installing ? t("update.installing") : t("update.install")}
+                </button>
+              </div>
+            ) : (
+              <button
+                className="btn-primary"
+                onClick={checkUpdate}
+                disabled={checking || installing}
+              >
+                {installing ? (
+                  <Download size={15} />
+                ) : (
+                  <RefreshCw size={15} className={checking ? "animate-spin" : ""} />
+                )}
+                {installing
+                  ? t("update.installing")
+                  : checking
+                  ? t("update.checking")
+                  : t("update.check")}
+              </button>
+            )}
           </div>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

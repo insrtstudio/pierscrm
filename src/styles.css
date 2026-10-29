@@ -2,43 +2,75 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Overused Grotesk: the insrt.studio UI face (self-hosted, same files as the site) */
+@font-face {
+  font-family: "Overused Grotesk";
+  src: url("./assets/fonts/OverusedGrotesk-VF.woff2") format("woff2-variations");
+  font-weight: 300 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Overused Grotesk";
+  src: url("./assets/fonts/OverusedGrotesk-Italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+/* ------------------------------------------------------------------
+   "Chrome & Sunset", the insrt.studio art direction (see the site's
+   docs/DESIGN-DIRECTION.md). Two temperatures: paper (default, like the
+   site back office) and ink (.dark). One accent: sunset #ff5a1f.
+   Token names are kept from the previous system so every page follows.
+   ------------------------------------------------------------------ */
 @layer base {
   :root {
-    /* ---- Modernist LIGHT ---- */
-    --bg: 243 242 242;
-    --surface: 234 233 233;
-    --surface-2: 226 224 224;
-    --elevated: 248 244 244;
-    --border: 200 196 196;
-    --border-strong: 168 164 164;
-    --muted: 234 231 231;
-    --fg: 32 30 29;
-    --fg-subtle: 104 100 98;
-    --fg-faint: 122 118 115;
-    --accent: 236 48 19;
+    /* ---- PAPER ---- */
+    --bg: 235 233 227;          /* #ebe9e3 */
+    --surface: 242 241 237;     /* cards, inputs: a touch lighter than paper */
+    --surface-2: 226 223 215;   /* #e2dfd7, the site's bg-2 (hover, wells) */
+    --elevated: 247 246 243;
+    --border: 208 206 200;      /* ink at ~12% */
+    --border-strong: 180 178 172;
+    --muted: 226 223 215;
+    --fg: 11 11 11;             /* #0b0b0b */
+    --fg-subtle: 88 87 84;      /* ink 62% */
+    --fg-faint: 120 118 114;    /* ink ~45%, AA on paper for small caps */
+    --accent: 255 90 31;        /* sunset */
     --accent-fg: 255 255 255;
-    --accent-soft: 255 234 228;
-    --accent-2: 221 43 15;
-    --accent-ink: 26 7 3;
+    --accent-soft: 252 222 206;
+    --accent-2: 200 66 12;      /* sunset deepened for text on paper (AA) */
+    --accent-ink: 11 11 11;
+    --chrome: 201 206 214;
+    --chrome-dark: 111 119 130;
+    --ok: 31 130 86;
+    --warn: 176 104 20;
+    --danger: 204 46 52;
   }
 
   .dark {
-    /* ---- Modernist DARK (inverted, "2a") ---- */
-    --bg: 15 14 13;
-    --surface: 22 20 18;
-    --surface-2: 28 26 24;
-    --elevated: 33 29 26;
-    --border: 42 39 37;
-    --border-strong: 58 53 50;
-    --muted: 28 26 24;
-    --fg: 243 242 242;
-    --fg-subtle: 176 170 163;
-    --fg-faint: 140 133 126;
-    --accent: 236 48 19;
+    /* ---- INK ---- */
+    --bg: 11 11 11;
+    --surface: 20 20 20;
+    --surface-2: 30 30 29;
+    --elevated: 26 26 25;
+    --border: 44 43 41;         /* paper at ~14% */
+    --border-strong: 70 69 66;
+    --muted: 30 30 29;
+    --fg: 235 233 227;
+    --fg-subtle: 160 158 153;
+    --fg-faint: 120 118 114;
+    --accent: 255 90 31;
     --accent-fg: 255 255 255;
-    --accent-soft: 42 17 12;
-    --accent-2: 255 122 92;
-    --accent-ink: 26 7 3;
+    --accent-soft: 52 24 12;
+    --accent-2: 255 122 61;
+    --accent-ink: 235 233 227;
+    --chrome: 201 206 214;
+    --chrome-dark: 111 119 130;
+    --ok: 63 178 127;
+    --warn: 242 184 128;        /* amber */
+    --danger: 229 72 77;
   }
 
   * {
@@ -55,8 +87,9 @@
     @apply bg-bg text-fg font-sans antialiased;
     margin: 0;
     overflow: hidden;
-    font-size: 15px;
-    line-height: 1.55;
+    font-size: 14px;
+    line-height: 1.5;
+    font-feature-settings: "ss01", "cv05";
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -65,20 +98,20 @@
   h2,
   h3,
   h4 {
-    @apply font-heading;
-    font-weight: 800;
+    font-weight: 600;
     letter-spacing: -0.02em;
-    line-height: 1.08;
+    line-height: 1.1;
     margin: 0;
   }
 
   ::-webkit-scrollbar {
-    width: 11px;
-    height: 11px;
+    width: 10px;
+    height: 10px;
   }
   ::-webkit-scrollbar-thumb {
     @apply bg-border-strong;
     border: 3px solid transparent;
+    border-radius: 999px;
     background-clip: padding-box;
   }
   ::-webkit-scrollbar-thumb:hover {
@@ -91,49 +124,54 @@
   }
 
   ::selection {
-    background: rgb(var(--accent) / 0.3);
+    background: rgb(var(--accent));
+    color: #fff;
   }
 }
 
 @layer components {
-  /* ---- Buttons ---- */
+  /* ---- Buttons: the site's mono pill ---- */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold
-      font-heading uppercase tracking-wide transition-all duration-150 select-none whitespace-nowrap
+    @apply inline-flex h-9 items-center justify-center gap-2 rounded-full px-4 font-mono text-[11px] font-medium uppercase
+      transition-colors duration-300 select-none whitespace-nowrap
       disabled:opacity-45 disabled:pointer-events-none
       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.12em;
+    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
   }
   .btn-primary {
-    @apply btn bg-accent text-accent-fg hover:shadow-glow active:brightness-90;
-  }
-  .btn-primary:hover {
-    background: color-mix(in srgb, rgb(var(--accent)) 88%, white);
+    @apply btn bg-accent text-accent-fg hover:bg-fg hover:text-bg;
   }
   .btn-outline {
-    @apply btn border-2 border-border bg-transparent text-fg hover:border-fg-subtle hover:text-fg active:bg-muted;
+    @apply btn border border-border-strong bg-transparent text-fg hover:border-fg;
   }
   .btn-ghost {
-    @apply btn text-fg-subtle hover:text-accent-2 hover:bg-accent-soft/40;
+    @apply btn text-fg-subtle hover:bg-surface-2 hover:text-fg;
   }
   .btn-danger {
-    @apply btn border-2 border-accent/40 text-accent-2 hover:bg-accent/15;
+    @apply btn border border-danger/40 text-danger hover:bg-danger hover:text-white;
+  }
+  /* Square icon-only button (row actions) */
+  .btn-icon {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-full text-fg-subtle transition-colors
+      hover:bg-surface-2 hover:text-fg disabled:opacity-45 disabled:pointer-events-none
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent;
   }
 
   /* ---- Surfaces ---- */
   .card {
-    @apply bg-surface border-2 border-border;
+    @apply rounded-md border border-border bg-surface;
   }
   .panel {
-    @apply bg-surface-2 border-2 border-border;
+    @apply rounded-md border border-border bg-surface-2;
   }
 
   /* ---- Inputs ---- */
   .input {
-    @apply w-full border border-border-strong bg-surface px-3 py-2 text-sm text-fg font-sans
+    @apply w-full rounded border border-border-strong bg-surface px-3 py-2 text-sm text-fg font-sans
       placeholder:text-fg-faint outline-none transition-colors
-      focus:border-accent hover:border-fg-subtle;
-    min-height: 38px;
+      focus:border-fg hover:border-fg-subtle;
+    min-height: 36px;
   }
   textarea.input {
     @apply leading-relaxed resize-y;
@@ -144,52 +182,49 @@
     -webkit-appearance: none;
     appearance: none;
     padding-right: 32px;
-    /* Custom Modernist chevron (square caps), neutral grey for both themes */
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23948E8E' stroke-width='3' stroke-linecap='square'%3E%3Cpath d='M5 8l7 8 7-8'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23858380' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 11px center;
     background-size: 12px 12px;
   }
-  select.input:focus {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23ec3013' stroke-width='3' stroke-linecap='square'%3E%3Cpath d='M5 8l7 8 7-8'/%3E%3C/svg%3E");
-  }
-  /* Best-effort styling of the native option list (honoured on some platforms) */
   select.input option {
     background: rgb(var(--surface));
     color: rgb(var(--fg));
   }
+  /* Field label = the site's mono eyebrow */
   .label {
-    @apply mb-1.5 block text-2xs font-semibold uppercase tracking-wider text-fg-subtle;
+    @apply mb-1.5 block font-mono text-[10.5px] font-normal uppercase text-fg-subtle;
+    letter-spacing: 0.16em;
   }
 
-  /* ---- Kicker (section eyebrow) ---- */
-  .kicker {
-    @apply text-2xs font-bold uppercase text-accent-2;
+  /* ---- Eyebrow / kicker: "01 · BIOGRAPHY" ---- */
+  .eyebrow {
+    @apply font-mono text-[11px] uppercase text-fg-subtle;
     letter-spacing: 0.18em;
+  }
+  .kicker {
+    @apply eyebrow text-accent-2;
   }
 
   /* ---- Segmented control (tabs) ---- */
   .segmented {
-    @apply inline-flex items-center border-2 border-border bg-surface;
+    @apply inline-flex items-center gap-0.5 rounded-full border border-border bg-surface p-0.5;
   }
   .segmented-item {
-    @apply px-4 py-1.5 text-2xs font-bold uppercase tracking-wider text-fg-subtle transition-colors cursor-pointer;
+    @apply rounded-full px-3.5 py-1.5 font-mono text-[11px] uppercase text-fg-subtle transition-colors cursor-pointer whitespace-nowrap;
     letter-spacing: 0.1em;
   }
-  .segmented-item + .segmented-item {
-    @apply border-l-2 border-border;
-  }
   .segmented-item[data-active="true"] {
-    @apply bg-accent text-accent-fg;
+    @apply bg-fg text-bg;
   }
   .segmented-item:not([data-active="true"]):hover {
-    @apply bg-muted text-fg;
+    @apply bg-surface-2 text-fg;
   }
 
   /* ---- Badge / tag ---- */
   .badge {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 text-2xs font-semibold uppercase whitespace-nowrap;
-    letter-spacing: 0.04em;
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[10px] uppercase whitespace-nowrap;
+    letter-spacing: 0.08em;
   }
 
   /* ---- Table ---- */
@@ -197,8 +232,8 @@
     @apply w-full border-collapse text-sm;
   }
   .tbl thead th {
-    @apply sticky top-0 z-10 bg-surface border-b-2 border-border px-4 py-2.5 text-left text-2xs font-bold uppercase tracking-wider text-fg-subtle;
-    letter-spacing: 0.08em;
+    @apply sticky top-0 z-10 border-b border-border bg-bg px-4 py-2.5 text-left font-mono text-[10.5px] font-normal uppercase text-fg-subtle;
+    letter-spacing: 0.14em;
   }
   .tbl tbody td {
     @apply border-b border-border px-4 py-2.5 align-middle;
@@ -207,7 +242,7 @@
     @apply transition-colors;
   }
   .tbl tbody tr:hover {
-    background: rgb(var(--fg) / 0.04);
+    background: rgb(var(--fg) / 0.035);
   }
 }
 
@@ -221,16 +256,36 @@
   .tabular {
     font-variant-numeric: tabular-nums;
   }
-  /* Subtle CRT scanlines for the main canvas — the "signal underground" texture */
-  .scanlines {
-    background-image: repeating-linear-gradient(
-      0deg,
-      rgb(255 255 255 / 0.02) 0 1px,
-      transparent 1px 3px
-    );
+  /* Wide grotesk headline (Archivo at max width), as on the site */
+  .font-display {
+    font-family: "Archivo Variable", "Arial Black", sans-serif;
+    font-stretch: 125%;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 0.92;
+    text-transform: uppercase;
   }
+  /* Big numbers (EPK stat blocks) */
+  .font-condensed {
+    font-family: "Anton", Impact, sans-serif;
+    font-weight: 400;
+    letter-spacing: -0.005em;
+    line-height: 0.9;
+  }
+  /* 1px chrome gradient rule */
+  .hairline-chrome {
+    position: relative;
+  }
+  .hairline-chrome::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #8b929c 10%, #f7f8fa 35%, #6f7782 55%, #dfe3e8 80%, transparent);
+  }
+  /* Kept as no-ops: the previous system's CRT texture and red glow */
+  .scanlines,
   .text-glow {
-    text-shadow: 0 0 22px rgb(var(--accent) / 0.5);
   }
 }
 
@@ -253,15 +308,15 @@
     top: 0;
     width: 100%;
     border: none !important;
-    --bg: 243 242 242;
+    --bg: 255 255 255;
     --surface: 255 255 255;
-    --border: 200 196 196;
-    --muted: 234 231 231;
-    --fg: 32 30 29;
-    --fg-subtle: 90 86 84;
-    --accent: 236 48 19;
-    --accent-2: 221 43 15;
-    color: #201e1d;
+    --border: 208 206 200;
+    --muted: 235 233 227;
+    --fg: 11 11 11;
+    --fg-subtle: 88 87 84;
+    --accent: 255 90 31;
+    --accent-2: 200 66 12;
+    color: #0b0b0b;
   }
   @page {
     margin: 14mm;

@@ -49,15 +49,26 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     ])?;
 
     // ---- View / Aller à ----
+    // Same order as the sidebar (NAV_GROUPS in Layout.tsx), one separator per group.
+    let go = |id: &str, label: &str, key: &str| {
+        MenuItem::with_id(app, id, label, true, Some(&format!("CmdOrCtrl+{key}")))
+    };
     let view_menu = Submenu::new(app, "Aller à", true)?;
     view_menu.append_items(&[
-        &MenuItem::with_id(app, "nav:dashboard", "Tableau de bord", true, Some("CmdOrCtrl+1"))?,
-        &MenuItem::with_id(app, "nav:agenda", "Agenda", true, Some("CmdOrCtrl+2"))?,
-        &MenuItem::with_id(app, "nav:artists", "Artistes", true, Some("CmdOrCtrl+3"))?,
-        &MenuItem::with_id(app, "nav:contacts", "Contacts", true, Some("CmdOrCtrl+4"))?,
-        &MenuItem::with_id(app, "nav:emails", "Emails", true, Some("CmdOrCtrl+5"))?,
-        &MenuItem::with_id(app, "nav:budget", "Budget", true, Some("CmdOrCtrl+6"))?,
-        &MenuItem::with_id(app, "nav:visa", "Visas", true, Some("CmdOrCtrl+7"))?,
+        &go("nav:home", "Accueil", "1")?,
+        &go("nav:agenda", "Agenda", "2")?,
+        &PredefinedMenuItem::separator(app)?,
+        &go("nav:artists", "Artistes", "3")?,
+        &go("nav:audience", "Audience", "4")?,
+        &PredefinedMenuItem::separator(app)?,
+        &go("nav:pipeline", "Pipeline", "5")?,
+        &go("nav:discovery", "Découverte", "6")?,
+        &PredefinedMenuItem::separator(app)?,
+        &go("nav:campaigns", "Campagnes", "7")?,
+        &go("nav:outbox", "Boîte d'envoi", "8")?,
+        &PredefinedMenuItem::separator(app)?,
+        &go("nav:budget", "Budget", "9")?,
+        &go("nav:visa", "Visas", "0")?,
         &PredefinedMenuItem::separator(app)?,
         &PredefinedMenuItem::fullscreen(app, None)?,
     ])?;

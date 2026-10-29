@@ -10,16 +10,10 @@ import {
   listEvents,
 } from "../lib/api";
 import { PageHeader, EmptyState } from "../components/Layout";
-import { euro } from "../lib/format";
+import { euro, parseDay, today as todayDay } from "../lib/format";
+import { emitIntent } from "../lib/hooks";
 import { STATUS_DOT } from "../lib/constants";
 import { STATUSES, type Status } from "../lib/types";
-
-function isoToday() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-}
 
 export function Dashboard() {
   const { t } = useTranslation();
@@ -29,11 +23,13 @@ export function Dashboard() {
   const { data: artists = [] } = useQuery({ queryKey: ["artists"], queryFn: listArtists });
   const { data: campaigns = [] } = useQuery({ queryKey: ["campaigns"], queryFn: listCampaigns });
   const { data: emails = [] } = useQuery({ queryKey: ["emails"], queryFn: () => listEmails() });
-  const today = isoToday();
-  const { data: upcoming = [] } = useQuery({
+  const today = todayDay();
+  const { data: upcomingAll = [] } = useQuery({
     queryKey: ["events", "upcoming", today],
     queryFn: () => listEvents({ from: today }),
   });
+  // Cancelled gigs are not "upcoming".
+  const upcoming = upcomingAll.filter((e) => e.status !== "cancelled");
 
   const sent = emails.filter((e) => e.status === "sent").length;
   const opened = emails.filter((e) => e.opened_at).length;
@@ -50,10 +46,11 @@ export function Dashboard() {
   const cats = Object.entries(stats?.by_category ?? {});
   const catTotal = cats.reduce((a, [, v]) => a + v, 0) || 1;
   const CAT_COLOR: Record<string, string> = {
-    venue: "#ec3013",
-    lineup: "#8a847e",
-    major: "#3a3532",
-    other: "#5c5651",
+    venue: "#ff5a1f",
+    curator: "#f2b880",
+    lineup: "#6f7782",
+    major: "#4a4744",
+    other: "#a9a49b",
   };
 
   const months = t("agenda.months").split("_");
@@ -71,19 +68,26 @@ export function Dashboard() {
   return (
     <div>
       <PageHeader
-        kicker="PILOTAGE / VUE GÉNÉRALE"
+        kicker={t("dashboard.kicker")}
         title={t("dashboard.title")}
         actions={
           <>
-            <span className="mr-1 inline-flex items-center gap-2 border border-accent px-2.5 py-1.5 text-2xs font-bold uppercase tracking-widest text-accent-2">
-              <span className="h-[7px] w-[7px] bg-accent animate-livepulse" />
-              {t("agenda.months").split("_")[new Date().getMonth()].slice(0, 3)} 2026
+            <span className="badge mr-1 border border-border py-1.5 text-fg-subtle">
+              <span className="h-1.5 w-1.5 rounded-full bg-accent animate-livepulse" />
+              {months[new Date().getMonth()].slice(0, 3)} {new Date().getFullYear()}
             </span>
             <button className="btn-outline" onClick={() => navigate("/emails")}>
               <Mail size={15} />
               {t("artists.write_email")}
             </button>
-            <button className="btn-primary" onClick={() => navigate("/agenda")}>
+            <button
+              className="btn-primary"
+              onClick={() => {
+                navigate("/agenda");
+                // Parked until Agenda mounts, then opens the new-event editor.
+                emitIntent("new:event");
+              }}
+            >
               <Plus size={15} />
               {t("agenda.new_event")}
             </button>
@@ -92,18 +96,18 @@ export function Dashboard() {
       />
 
       {/* Stat band */}
-      <div className="grid grid-cols-2 border-b-2 border-border sm:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 border-b border-border sm:grid-cols-3 xl:grid-cols-6">
         {stat.map((s, i) => (
           <div
             key={i}
-            className="border-b-2 border-r-2 border-border px-6 py-6 last:border-r-0 xl:border-b-0"
+            className="border-b border-r border-border px-6 py-6 last:border-r-0 xl:border-b-0"
           >
-            <div className="text-2xs font-bold uppercase tracking-widest text-fg-subtle">
+            <div className="eyebrow">
               {s.label}
             </div>
             <div
-              className={`mt-2 text-[52px] font-black leading-[0.9] tracking-tightest tabular ${
-                s.hot ? "text-accent text-glow" : "text-fg"
+              className={`mt-2 font-condensed text-[56px] tabular ${
+                s.hot ? "text-accent-2" : "text-fg"
               }`}
             >
               {s.value}
@@ -115,10 +119,10 @@ export function Dashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px]">
         {/* Left: pipeline + upcoming */}
-        <div className="border-b-2 border-border p-8 lg:border-b-0 lg:border-r-2">
+        <div className="border-b border-border p-8 lg:border-b-0 lg:border-r">
           <div className="mb-5 flex items-baseline justify-between">
             <div className="kicker">{t("dashboard.by_status")}</div>
-            <Link to="/contacts" className="text-2xs font-bold uppercase tracking-widest text-accent-2">
+            <Link to="/contacts" className="kicker hover:text-accent">
               {t("nav.contacts")} →
             </Link>
           </div>
@@ -134,10 +138,10 @@ export function Dashboard() {
           )}
 
           {/* Upcoming */}
-          <div className="mt-8 border-t-2 border-border pt-6">
+          <div className="mt-8 border-t border-border pt-6">
             <div className="mb-4 flex items-baseline justify-between">
               <div className="kicker">{t("dashboard.upcoming")}</div>
-              <Link to="/agenda" className="text-2xs font-bold uppercase tracking-widest text-accent-2">
+              <Link to="/agenda" className="kicker hover:text-accent">
                 {t("dashboard.view_agenda")} →
               </Link>
             </div>
@@ -146,7 +150,7 @@ export function Dashboard() {
             ) : (
               <div>
                 {upcoming.slice(0, 6).map((ev) => {
-                  const d = new Date(ev.date);
+                  const d = parseDay(ev.date) ?? new Date();
                   const artist = artists.find((a) => a.id === ev.artist_id);
                   return (
                     <div
@@ -154,7 +158,7 @@ export function Dashboard() {
                       className="grid grid-cols-[64px_1fr_auto] items-center gap-4 border-b border-border py-3 transition-colors hover:bg-muted/50"
                     >
                       <div className="tabular">
-                        <span className="text-[26px] font-black leading-none">
+                        <span className="font-condensed text-[26px]">
                           {String(d.getDate()).padStart(2, "0")}
                         </span>
                         <span className="text-2xs text-fg-faint">
@@ -164,7 +168,7 @@ export function Dashboard() {
                       </div>
                       <div className="min-w-0">
                         <div className="truncate text-sm font-bold">{ev.title}</div>
-                        <div className="truncate text-2xs uppercase tracking-wide text-fg-subtle">
+                        <div className="truncate eyebrow text-[10.5px]">
                           {[artist?.name, ev.venue].filter(Boolean).join(" · ")}
                         </div>
                       </div>
@@ -188,14 +192,14 @@ export function Dashboard() {
                 {cats.map(([k, v]) => (
                   <div
                     key={k}
-                    style={{ width: `${(v / catTotal) * 100}%`, background: CAT_COLOR[k] ?? "#5c5651" }}
+                    style={{ width: `${(v / catTotal) * 100}%`, background: CAT_COLOR[k] ?? "#a9a49b" }}
                   />
                 ))}
               </div>
               <div className="space-y-2.5">
                 {cats.map(([k, v]) => (
                   <div key={k} className="flex items-center gap-2.5 text-sm">
-                    <span className="h-2.5 w-2.5" style={{ background: CAT_COLOR[k] ?? "#5c5651" }} />
+                    <span className="h-2.5 w-2.5" style={{ background: CAT_COLOR[k] ?? "#a9a49b" }} />
                     <span className="text-fg-subtle">{t(`category.${k}`, k)}</span>
                     <span className="ml-auto font-bold tabular">{v}</span>
                   </div>
@@ -205,16 +209,16 @@ export function Dashboard() {
           )}
 
           {/* Budget */}
-          <div className="mt-8 border-t-2 border-border pt-6">
+          <div className="mt-8 border-t border-border pt-6">
             <div className="kicker mb-4">{t("dashboard.budget")}</div>
-            <div className="border border-accent p-5 shadow-[inset_0_0_24px_rgba(236,48,19,0.15)]">
-              <div className="text-2xs font-bold uppercase tracking-widest text-fg-subtle">
+            <div className="border border-accent p-5">
+              <div className="eyebrow">
                 {t("dashboard.net")}
               </div>
-              <div className="mt-1 text-[38px] font-black leading-none tracking-tightest tabular text-accent text-glow">
+              <div className="mt-1 text-[38px] font-condensed leading-none tabular text-accent-2">
                 {euro(net)}
               </div>
-              <div className="mt-3 space-y-1 text-2xs uppercase tracking-wide text-fg-subtle">
+              <div className="mt-3 space-y-1 eyebrow text-[10.5px]">
                 <div>
                   {t("budget.min")} – {t("budget.max")}:{" "}
                   <span className="font-bold text-fg">
@@ -248,7 +252,7 @@ function PipelineRow({
   const color = STATUS_DOT[statusKey];
   return (
     <>
-      <div className="truncate text-2xs uppercase tracking-wide text-fg-subtle">{label}</div>
+      <div className="truncate eyebrow text-[10.5px]">{label}</div>
       <div className="h-2.5 bg-muted">
         <div
           className="h-full"

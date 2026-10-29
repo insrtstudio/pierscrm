@@ -26,16 +26,16 @@ import {
 import type { ChecklistItem, VisaCountry, VisaDossier } from "../lib/types";
 import { VISA_STATUSES } from "../lib/types";
 import { PageHeader } from "../components/Layout";
-import { Modal, Field, useToast, useConfirm } from "../components/ui";
+import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 
 type Tab = "dossiers" | "countries";
 
 const STATUS_STYLE: Record<string, string> = {
-  draft: "bg-slate-500/10 text-slate-500",
-  preparing: "bg-amber-500/10 text-amber-500",
-  submitted: "bg-blue-500/10 text-blue-500",
-  approved: "bg-emerald-500/10 text-emerald-500",
-  rejected: "bg-rose-500/10 text-rose-500",
+  draft: "bg-fg-faint/10 text-fg-faint",
+  preparing: "bg-warn/10 text-warn",
+  submitted: "bg-chrome-dark/10 text-chrome-dark",
+  approved: "bg-ok/10 text-ok",
+  rejected: "bg-danger/10 text-danger",
 };
 
 function parseChecklist(s?: string | null): ChecklistItem[] {
@@ -55,8 +55,8 @@ export function Visa() {
   return (
     <div>
       <PageHeader title={t("visa.title")} subtitle={t("visa.subtitle")} />
-      <div className="px-8 pb-10">
-        <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-600 dark:text-amber-400">
+      <div className="px-8 pb-10 pt-6">
+        <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-warn/30 bg-warn/5 px-4 py-3 text-xs text-warn dark:text-warn">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
           <span>{t("visa.disclaimer")}</span>
         </div>
@@ -176,7 +176,7 @@ function DossiersTab() {
                     <Pencil size={14} />
                   </button>
                   <button
-                    className="btn-ghost px-2 py-1.5 text-rose-500"
+                    className="btn-ghost px-2 py-1.5 text-danger"
                     onClick={() =>
                       confirm(t("common.confirm_delete")) && delMut.mutate(d.id!)
                     }
@@ -245,7 +245,7 @@ function DossierModal({
     setItems([...items, ...docs.filter((d) => !existing.has(d.label))]);
   };
 
-  const save = async () => {
+  const [save, busy] = useSubmit(async () => {
     if (!form.title.trim()) {
       toast(t("visa.dossier_title") + " " + t("common.required"), "error");
       return;
@@ -253,7 +253,7 @@ function DossierModal({
     await saveDossier({ ...form, checklist: JSON.stringify(items) });
     toast(t("common.save"), "ok");
     onSaved();
-  };
+  });
 
   const doneCount = items.filter((i) => i.done).length;
 
@@ -369,7 +369,7 @@ function DossierModal({
                   className={clsx(
                     "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border",
                     it.done
-                      ? "border-emerald-500 bg-emerald-500 text-white"
+                      ? "border-ok bg-ok text-white"
                       : "border-border"
                   )}
                 >
@@ -384,7 +384,7 @@ function DossierModal({
                   {it.label}
                 </span>
                 <button
-                  className="btn-ghost px-1.5 py-1 text-rose-500"
+                  className="btn-ghost px-1.5 py-1 text-danger"
                   onClick={() => setItems((arr) => arr.filter((_, i) => i !== idx))}
                 >
                   <X size={13} />
@@ -431,7 +431,7 @@ function DossierModal({
           <button className="btn-outline" onClick={onClose}>
             {t("common.cancel")}
           </button>
-          <button className="btn-primary" onClick={save}>
+          <button className="btn-primary" onClick={save} disabled={busy}>
             {t("common.save")}
           </button>
         </div>
@@ -521,7 +521,7 @@ function CountriesTab() {
                 {t("common.edit")}
               </button>
               <button
-                className="btn-ghost px-2 py-1.5 text-rose-500"
+                className="btn-ghost px-2 py-1.5 text-danger"
                 onClick={() =>
                   confirm(t("common.confirm_delete")) && delMut.mutate(current.code)
                 }
@@ -608,20 +608,30 @@ function CountryModal({
   const toast = useToast();
   const [form, setForm] = useState<VisaCountry>({ ...country });
   const isNew = !country.code;
+  const { data: countries = [] } = useQuery({
+    queryKey: ["visa_countries"],
+    queryFn: listVisaCountries,
+  });
   const inp = (k: keyof VisaCountry) => ({
     className: "input",
     value: (form[k] as string) ?? "",
     onChange: (e: any) => setForm({ ...form, [k]: e.target.value }),
   });
-  const save = async () => {
-    if (!form.code.trim() || !form.name.trim()) {
+  const [save, busy] = useSubmit(async () => {
+    const code = form.code.trim().toUpperCase();
+    if (!code || !form.name.trim()) {
       toast(t("common.required"), "error");
       return;
     }
-    await saveVisaCountry(form);
+    // The backend upserts on code: a new country must not silently overwrite one.
+    if (isNew && countries.some((c) => c.code.trim().toUpperCase() === code)) {
+      toast(t("visa.code_exists", { code }), "error");
+      return;
+    }
+    await saveVisaCountry({ ...form, code });
     toast(t("common.save"), "ok");
     onSaved();
-  };
+  });
   return (
     <Modal
       open
@@ -665,7 +675,7 @@ function CountryModal({
           <button className="btn-outline" onClick={onClose}>
             {t("common.cancel")}
           </button>
-          <button className="btn-primary" onClick={save}>
+          <button className="btn-primary" onClick={save} disabled={busy}>
             {t("common.save")}
           </button>
         </div>

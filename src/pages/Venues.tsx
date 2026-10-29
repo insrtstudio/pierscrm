@@ -82,7 +82,7 @@ const ROW_H = 45;
 const VENUE_STATUS_STYLE: Record<string, string> = {
   candidat: "bg-muted text-fg-subtle",
   qualifie: "bg-accent text-accent-fg",
-  valide: "bg-emerald-500/15 text-emerald-500",
+  valide: "bg-ok/15 text-ok",
   rejete: "bg-muted text-fg-faint",
   archive: "bg-muted text-fg-faint",
 };
@@ -93,7 +93,7 @@ export function Venues() {
   const tabs: Tab[] = ["venues", "runs", "areas", "artists"];
   return (
     <div>
-      <PageHeader kicker="INTELLIGENCE" title={t("venues.title")} subtitle={t("venues.subtitle")} />
+      <PageHeader title={t("venues.title")} subtitle={t("venues.subtitle")} />
       <div className="px-8 py-6">
         <div className="segmented mb-6">
           {tabs.map((tb) => (
@@ -125,7 +125,10 @@ function VenuesTab() {
   const [hasWebsite, setHasWebsite] = useState(false);
   const [contactedF, setContactedF] = useState(false);
   const [playedF, setPlayedF] = useState(false);
-  const [enriching, setEnriching] = useState(false);
+  // The enrich run being followed; restored from the runs table on mount, since
+  // leaving the tab used to forget a run that was still going.
+  const [enrichRunId, setEnrichRunId] = useState<number | null>(null);
+  const enriching = enrichRunId != null;
   const [openId, setOpenId] = useState<number | null>(null);
   const [targetArtist, setTargetArtist] = useState<number | "">("");
   // Typing must not fire a query per keystroke.
@@ -171,6 +174,11 @@ function VenuesTab() {
     refetchInterval: enriching ? 5000 : false,
   });
   const venues = useMemo(() => pages?.pages.flat() ?? [], [pages]);
+  // Rows are paged in on scroll: until the last page is in, the number shown is
+  // what is loaded, not the size of the result set.
+  const countLabel = hasNextPage
+    ? t("venues.count_loaded", { count: venues.length })
+    : t("venues.count_venues", { count: venues.length });
   const { data: stats } = useQuery({
     queryKey: ["vi_venue_stats"],
     queryFn: viVenueStats,
@@ -236,27 +244,43 @@ function VenuesTab() {
   }, []);
   useEffect(resetScroll, [statut, pays, dSearch, hasEmail, hasPhone, hasWebsite, contactedF, playedF, resetScroll]);
 
-  // Stop the auto-refresh once every enrich run has finished.
   useEffect(() => {
-    if (!enriching) return;
+    let alive = true;
+    viListRuns()
+      .then((runs) => {
+        const r = runs.find((x) => x.type_ === "enrich" && x.statut === "en_cours");
+        if (alive && r) setEnrichRunId((cur) => cur ?? r.id);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Stop the auto-refresh once our enrich run ends (finished or stopped); other
+  // runs emit the same event and must not stop it.
+  const enrichRunRef = useRef(enrichRunId);
+  enrichRunRef.current = enrichRunId;
+  useEffect(() => {
     const un = listen<ViRunProgress>("vi:run-progress", (e) => {
-      if (e.payload.statut === "termine") {
-        setEnriching(false);
-        qc.invalidateQueries({ queryKey: ["vi_venues"] });
-      }
+      if (e.payload.run_id !== enrichRunRef.current || e.payload.statut === "en_cours") return;
+      setEnrichRunId(null);
+      qc.invalidateQueries({ queryKey: ["vi_venues"] });
+      qc.invalidateQueries({ queryKey: ["vi_venue_stats"] });
+      qc.invalidateQueries({ queryKey: ["vi_runs"] });
     });
     return () => {
       un.then((f) => f());
     };
-  }, [enriching, qc]);
+  }, [qc]);
 
   const enrich = async () => {
-    setEnriching(true);
+    setEnrichRunId(-1);
     try {
-      await viStartEnrich();
+      setEnrichRunId(await viStartEnrich());
       toast(t("venues.enrich_started"), "ok");
     } catch (e: any) {
-      setEnriching(false);
+      setEnrichRunId(null);
       const msg = e?.toString?.() ?? "error";
       toast(msg.includes("enrichir") ? t("venues.enrich_none") : msg, "error");
     }
@@ -288,13 +312,13 @@ function VenuesTab() {
       ? [
           { key: "total", label: t("venues.s_total"), value: stats.total, tone: "text-fg" },
           { key: "qualifie", label: t("venues.st_qualifie"), value: stats.qualifie, tone: "text-accent" },
-          { key: "valide", label: t("venues.st_valide"), value: stats.valide, tone: "text-emerald-500" },
+          { key: "valide", label: t("venues.st_valide"), value: stats.valide, tone: "text-ok" },
           { key: "enriched", label: t("venues.s_enriched"), value: stats.enriched },
           {
             key: "email",
             label: t("venues.s_with_email"),
             value: stats.with_email,
-            tone: "text-emerald-500",
+            tone: "text-ok",
             active: hasEmail,
             onClick: () => setHasEmail((v) => !v),
           },
@@ -328,14 +352,14 @@ function VenuesTab() {
               onClick={c.onClick}
               disabled={!c.onClick}
               className={clsx(
-                "border-2 px-3 py-2 text-left transition-colors",
+                "border px-3 py-2 text-left transition-colors",
                 c.active ? "border-accent bg-accent/5" : "border-border",
                 c.onClick && "hover:border-accent-2 cursor-pointer",
                 !c.onClick && "cursor-default"
               )}
               title={c.onClick ? t("venues.click_to_filter") : undefined}
             >
-              <div className={clsx("text-xl font-black tabular", c.tone ?? "text-fg")}>{c.value}</div>
+              <div className={clsx("font-condensed text-xl tabular", c.tone ?? "text-fg")}>{c.value}</div>
               <div className="text-2xs uppercase tracking-wide text-fg-faint">{c.label}</div>
             </button>
           ))}
@@ -410,7 +434,7 @@ function VenuesTab() {
               key={i}
               onClick={() => c.set((v) => !v)}
               className={clsx(
-                "badge cursor-pointer border-2 transition-colors",
+                "badge cursor-pointer border transition-colors",
                 c.on
                   ? "border-accent bg-accent text-accent-fg"
                   : "border-border text-fg-subtle hover:border-accent-2 hover:text-fg"
@@ -436,7 +460,7 @@ function VenuesTab() {
           </button>
         )}
         <span className="ml-auto text-2xs tabular text-fg-subtle">
-          {t("venues.count_venues", { count: venues.length })}
+          {countLabel}
         </span>
       </div>
 
@@ -483,7 +507,7 @@ function VenuesTab() {
                   onClick={() => setOpenId(v.id)}
                 >
                   <td className="text-right">
-                    <span className="text-lg font-black tabular text-accent">{v.score_qualif}</span>
+                    <span className="font-condensed text-lg tabular text-accent-2">{v.score_qualif}</span>
                   </td>
                   <td className="overflow-hidden font-semibold">
                     <div className="flex items-center gap-1.5 whitespace-nowrap">
@@ -498,7 +522,7 @@ function VenuesTab() {
                       )}
                       {v.contacted && (
                         <span
-                          className="badge shrink-0 bg-emerald-500/15 text-emerald-500"
+                          className="badge shrink-0 bg-ok/15 text-ok"
                           title={t("venues.contacted_hint")}
                         >
                           <CheckCheck size={11} /> {t("venues.contacted_badge")}
@@ -517,7 +541,7 @@ function VenuesTab() {
                   <td>
                     <div className="flex items-center gap-2 whitespace-nowrap text-fg-subtle">
                       {v.best_email ? (
-                        <span className="inline-flex items-center gap-1 text-emerald-500" title={v.best_email}>
+                        <span className="inline-flex items-center gap-1 text-ok" title={v.best_email}>
                           <Mail size={13} />
                           {v.nb_emails > 1 ? v.nb_emails : ""}
                         </span>
@@ -547,13 +571,14 @@ function VenuesTab() {
                             e.stopPropagation();
                             promote.mutate(v.id);
                           }}
+                          disabled={promote.isPending}
                         >
                           <UserPlus size={13} />
                           {t("radar.promote")}
                         </button>
                       )}
                       {v.crm_contact_id && (
-                        <span className="badge bg-emerald-500/15 text-emerald-500">
+                        <span className="badge bg-ok/15 text-ok">
                           <Check size={11} /> {t("venues.in_pipeline")}
                         </span>
                       )}
@@ -581,7 +606,7 @@ function VenuesTab() {
         </div>
       )}
       <div className="flex items-center gap-2 text-2xs text-fg-subtle">
-        <span>{t("venues.count_venues", { count: venues.length })}</span>
+        <span>{countLabel}</span>
         {isFetchingNextPage && <RefreshCw size={11} className="animate-spin text-accent" />}
       </div>
 
@@ -594,8 +619,8 @@ function VenuesTab() {
 
 const ROLE_STYLE: Record<string, string> = {
   booking: "bg-accent text-accent-fg",
-  management: "bg-indigo-500/15 text-indigo-400",
-  presse: "bg-amber-500/15 text-amber-500",
+  management: "bg-chrome-dark/15 text-chrome-dark",
+  presse: "bg-warn/15 text-warn",
   general: "bg-muted text-fg-subtle",
   reservation: "bg-muted text-fg-faint",
   autre: "bg-muted text-fg-faint",
@@ -628,10 +653,10 @@ function VenueFicheModal({ id, onClose }: { id: number; onClose: () => void }) {
           </div>
         ) : (
           <>
-            <div className="sticky top-0 z-10 flex items-start justify-between border-b-2 border-border bg-bg px-6 py-4">
+            <div className="sticky top-0 z-10 flex items-start justify-between border-b border-border bg-bg px-6 py-4">
               <div>
                 <div className="kicker">{t("venues.fiche")}</div>
-                <h2 className="text-xl font-black">{fiche.nom}</h2>
+                <h2 className="text-xl font-semibold">{fiche.nom}</h2>
                 <div className="mt-0.5 text-xs text-fg-subtle">
                   {[fiche.ville, fiche.pays].filter(Boolean).join(", ")}
                   {fiche.capacite_est ? ` · ${t("venues.fiche_capacity")} ${fiche.capacite_est}` : ""}
@@ -641,7 +666,7 @@ function VenueFicheModal({ id, onClose }: { id: number; onClose: () => void }) {
                 <span className={clsx("badge", VENUE_STATUS_STYLE[fiche.statut])}>
                   {t(`venues.st_${fiche.statut}`, fiche.statut)}
                 </span>
-                <span className="text-lg font-black tabular text-accent">{fiche.score_qualif}</span>
+                <span className="font-condensed text-lg tabular text-accent-2">{fiche.score_qualif}</span>
                 <button className="btn-ghost px-2 py-1.5" onClick={onClose}>
                   <X size={16} />
                 </button>
@@ -669,7 +694,7 @@ function VenueFicheModal({ id, onClose }: { id: number; onClose: () => void }) {
                     {fiche.contacts
                       .filter((c) => c.type_ === "email")
                       .map((c) => (
-                        <div key={c.id} className="flex items-center gap-2 border-2 border-border px-3 py-2">
+                        <div key={c.id} className="flex items-center gap-2 border border-border px-3 py-2">
                           <span className={clsx("badge", ROLE_STYLE[c.role_devine || "autre"])}>
                             {t(`venues.role_${c.role_devine || "autre"}`, c.role_devine || "")}
                           </span>
@@ -696,7 +721,7 @@ function VenueFicheModal({ id, onClose }: { id: number; onClose: () => void }) {
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {fiche.evidence.map((ev, i) => (
-                      <span key={i} className="inline-flex items-center gap-1.5 border-2 border-border px-2 py-1 text-2xs">
+                      <span key={i} className="inline-flex items-center gap-1.5 border border-border px-2 py-1 text-2xs">
                         <span className="font-semibold">{ev.artiste}</span>
                         <span className="text-fg-faint">{ev.date_event}</span>
                       </span>
@@ -713,7 +738,7 @@ function VenueFicheModal({ id, onClose }: { id: number; onClose: () => void }) {
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {fiche.promoters.map((p, i) => (
-                      <span key={i} className="inline-flex items-center gap-1.5 border-2 border-border px-2 py-1 text-2xs">
+                      <span key={i} className="inline-flex items-center gap-1.5 border border-border px-2 py-1 text-2xs">
                         <span className="font-semibold">{p.nom}</span>
                         <span className="text-fg-faint tabular">{p.nb_events}</span>
                       </span>
@@ -743,7 +768,7 @@ function FicheLine({
   onCopy?: () => void;
 }) {
   return (
-    <div className="flex items-start gap-2 border-2 border-border px-3 py-2">
+    <div className="flex items-start gap-2 border border-border px-3 py-2">
       <Icon size={14} className="mt-0.5 shrink-0 text-fg-faint" />
       <div className="min-w-0 flex-1">
         <div className="text-2xs uppercase tracking-wide text-fg-faint">{label}</div>
@@ -860,7 +885,7 @@ function RunsTab() {
           <p className="text-xs text-fg-subtle">{t("venues.area_help")}</p>
         ) : (
           <>
-            <div className="mb-3 max-h-52 overflow-y-auto border-2 border-border">
+            <div className="mb-3 max-h-52 overflow-y-auto border border-border">
               {resolved.map((a) => {
                 const on = selected.has(a.id!);
                 return (
@@ -978,7 +1003,7 @@ function RunCard({
   const bento: { label: string; value: string | number; tone?: string }[] = stats
     ? isEnrich
       ? [
-          { label: t("venues.b_with_email"), value: stats.venues_with_email ?? 0, tone: "text-emerald-500" },
+          { label: t("venues.b_with_email"), value: stats.venues_with_email ?? 0, tone: "text-ok" },
           { label: t("venues.b_emails"), value: stats.emails_total ?? 0 },
           { label: t("venues.b_duration"), value: fmtDuration(stats.duration_secs) },
           { label: t("venues.errors"), value: stats.tasks_echec ?? 0, tone: (stats.tasks_echec ?? 0) > 0 ? "text-accent" : undefined },
@@ -986,7 +1011,7 @@ function RunCard({
       : [
           { label: t("venues.b_venues_new"), value: stats.venues_new ?? 0, tone: "text-accent" },
           { label: t("venues.b_evidence_new"), value: stats.evidence_new ?? 0, tone: "text-accent-2" },
-          { label: t("venues.b_qualified"), value: stats.qualified ?? 0, tone: "text-emerald-500" },
+          { label: t("venues.b_qualified"), value: stats.qualified ?? 0, tone: "text-ok" },
           { label: t("venues.b_duration"), value: fmtDuration(stats.duration_secs) },
         ]
     : [];
@@ -1006,9 +1031,9 @@ function RunCard({
             className={clsx(
               "badge",
               statut === "termine"
-                ? "bg-emerald-500/15 text-emerald-500"
+                ? "bg-ok/15 text-ok"
                 : statut === "arrete"
-                ? "bg-amber-500/15 text-amber-500"
+                ? "bg-warn/15 text-warn"
                 : active
                 ? "bg-accent text-accent-fg"
                 : "bg-muted text-fg-subtle"
@@ -1060,8 +1085,8 @@ function RunCard({
       {bento.length > 0 && (
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           {bento.map((b, i) => (
-            <div key={i} className="border-2 border-border px-3 py-2">
-              <div className={clsx("text-lg font-black tabular", b.tone ?? "text-fg")}>{b.value}</div>
+            <div key={i} className="border border-border px-3 py-2">
+              <div className={clsx("font-condensed text-lg tabular", b.tone ?? "text-fg")}>{b.value}</div>
               <div className="text-2xs uppercase tracking-wide text-fg-faint">{b.label}</div>
             </div>
           ))}
@@ -1132,7 +1157,7 @@ function AreasTab() {
     try {
       const n = await viResolveAllAreas();
       qc.invalidateQueries({ queryKey: ["vi_areas"] });
-      toast(`${n}`, "ok");
+      toast(t("venues.resolved_n", { count: n }), "ok");
     } catch (e: any) {
       toast(e?.toString?.() ?? "error", "error");
     } finally {
@@ -1143,7 +1168,7 @@ function AreasTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <div className="text-2xs uppercase tracking-wide text-fg-subtle">
+        <div className="eyebrow text-[10.5px]">
           {t("venues.active_areas", { resolved: resolvedCount, total: areas.length })}
         </div>
         <button className="btn-primary" onClick={resolveAll} disabled={resolvingAll}>
@@ -1176,8 +1201,13 @@ function AreasTab() {
 function AreaRow({ area }: { area: ViArea }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const [id, setId] = useState(area.ra_area_id?.toString() ?? "");
+  const toast = useToast();
+  const saved = area.ra_area_id?.toString() ?? "";
+  const [id, setId] = useState(saved);
   const [busy, setBusy] = useState(false);
+  // Follow the server value (resolve, resolve-all), or blurring the field would
+  // write the stale local copy back over a freshly resolved id.
+  useEffect(() => setId(saved), [saved]);
 
   const resolve = async () => {
     setBusy(true);
@@ -1190,7 +1220,14 @@ function AreaRow({ area }: { area: ViArea }) {
     }
   };
   const saveManual = async () => {
-    await viSaveArea({ ...area, ra_area_id: id ? Number(id) : null });
+    const v = id.trim();
+    if (v === saved) return;
+    if (v && !/^\d+$/.test(v)) {
+      toast(t("venues.area_id_invalid"), "error");
+      setId(saved);
+      return;
+    }
+    await viSaveArea({ ...area, ra_area_id: v ? Number(v) : null });
     qc.invalidateQueries({ queryKey: ["vi_areas"] });
   };
 
@@ -1209,7 +1246,7 @@ function AreaRow({ area }: { area: ViArea }) {
       </td>
       <td className="text-right">
         {area.ra_area_id != null ? (
-          <span className="badge bg-emerald-500/15 text-emerald-500">
+          <span className="badge bg-ok/15 text-ok">
             <MapPin size={11} /> {t("venues.resolved")}
           </span>
         ) : (
@@ -1274,7 +1311,7 @@ function ArtistsTab() {
           <Plus size={15} />
           {t("venues.add_artist")}
         </button>
-        <div className="ml-auto text-2xs uppercase tracking-wide text-fg-subtle">
+        <div className="ml-auto eyebrow text-[10.5px]">
           {t("venues.ref_count", { count: artists.length, active })}
         </div>
       </div>
@@ -1289,7 +1326,7 @@ function ArtistsTab() {
               <span
                 key={a.id}
                 className={clsx(
-                  "group inline-flex items-center gap-1.5 border-2 px-2.5 py-1 text-xs font-semibold transition-colors",
+                  "group inline-flex items-center gap-1.5 border px-2.5 py-1 text-xs font-semibold transition-colors",
                   a.actif ? "border-accent/40 text-fg" : "border-border text-fg-faint line-through"
                 )}
               >

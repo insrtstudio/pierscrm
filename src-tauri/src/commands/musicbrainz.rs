@@ -82,7 +82,8 @@ pub async fn label_homepage(mbid: &str) -> Option<String> {
     pick(true).or_else(|| pick(false))
 }
 
-fn urlencoding(s: &str) -> String {
+/// Percent-encode a query value (UTF-8 bytes; `&`, `#`, accents included).
+pub(crate) fn urlencoding(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),

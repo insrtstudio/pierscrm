@@ -30,13 +30,14 @@ import {
   saveKpi,
 } from "../lib/api";
 import type { Artist, Kpi } from "../lib/types";
-import { Modal, Field, useToast, useConfirm } from "../components/ui";
+import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 import { Loader, ErrorState } from "../components/Layout";
 import { ComposeModal } from "../components/ComposeModal";
 import { StatusBadge } from "../components/StatusBadge";
 
-const LINK_FIELDS: { key: keyof Artist; label: string }[] = [
-  { key: "website", label: "Website" },
+// `label` is a brand name, or an i18n key when `i18n` is set.
+const LINK_FIELDS: { key: keyof Artist; label: string; i18n?: boolean }[] = [
+  { key: "website", label: "artists.website", i18n: true },
   { key: "instagram", label: "Instagram" },
   { key: "soundcloud", label: "SoundCloud" },
   { key: "spotify", label: "Spotify" },
@@ -102,13 +103,16 @@ export function ArtistDetail() {
   const delArtist = useMutation({
     mutationFn: () => deleteArtist(artistId),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["artists"] });
+      // Events and KPIs cascade-delete; linked contacts lose their artist.
+      for (const key of ["artists", "events", "kpis", "contacts", "dashboard"])
+        qc.invalidateQueries({ queryKey: [key] });
       navigate("/artists");
     },
   });
   const delKpiMut = useMutation({
     mutationFn: (kid: number) => deleteKpi(kid),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["kpis", artistId] }),
+    // ["kpis"] prefix also refreshes the global KPIs page.
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["kpis"] }),
   });
 
   if (artistLoading) return <div className="p-8"><Loader /></div>;
@@ -192,7 +196,7 @@ export function ArtistDetail() {
                       e.preventDefault();
                       openUrl(normUrl(artist.mix_url as string)).catch(() => {});
                     }}
-                    className="epk-link inline-flex items-center gap-2 border-2 border-accent px-4 py-2.5 text-sm font-semibold hover:bg-accent hover:text-accent-fg"
+                    className="epk-link inline-flex items-center gap-2 border border-accent px-4 py-2.5 text-sm font-semibold hover:bg-accent hover:text-accent-fg"
                   >
                     <Music2 size={16} /> {t("artists.listen_now")}
                   </a>
@@ -219,7 +223,7 @@ export function ArtistDetail() {
               )}
               {artist.press_quotes && (
                 <Section title={t("artists.press")}>
-                  <p className="whitespace-pre-wrap border-l-2 border-accent pl-3 text-sm italic text-fg-subtle">
+                  <p className="whitespace-pre-wrap border-l border-accent pl-3 text-sm italic text-fg-subtle">
                     {artist.press_quotes}
                   </p>
                 </Section>
@@ -244,7 +248,7 @@ export function ArtistDetail() {
                         ) : (
                           <ExternalLink size={13} />
                         )}
-                        {l.label}
+                        {l.i18n ? t(l.label) : l.label}
                       </a>
                     ))}
                   </div>
@@ -305,7 +309,7 @@ export function ArtistDetail() {
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="text-right">
-                        <span className="text-sm font-bold text-emerald-500">
+                        <span className="text-sm font-bold text-ok">
                           {k.actual || "·"}
                         </span>
                         <span className="text-[11px] text-fg-subtle">
@@ -321,7 +325,7 @@ export function ArtistDetail() {
                           <Pencil size={12} />
                         </button>
                         <button
-                          className="btn-ghost px-1 py-1 text-rose-500"
+                          className="btn-ghost px-1 py-1 text-danger"
                           aria-label={t("common.delete")}
                           onClick={() => confirm(t("common.confirm_delete")) && delKpiMut.mutate(k.id!)}
                         >
@@ -362,7 +366,8 @@ export function ArtistDetail() {
           <button
             className="btn-danger w-full"
             onClick={() => {
-              if (confirm(t("common.confirm_delete"))) delArtist.mutate();
+              if (confirm(t("artists.confirm_delete_cascade", { name: artist.name })))
+                delArtist.mutate();
             }}
           >
             <Trash2 size={15} />
@@ -401,7 +406,7 @@ export function ArtistDetail() {
           onClose={() => setKpiEdit(null)}
           onSaved={() => {
             setKpiEdit(null);
-            qc.invalidateQueries({ queryKey: ["kpis", artistId] });
+            qc.invalidateQueries({ queryKey: ["kpis"] });
           }}
         />
       )}
@@ -481,19 +486,15 @@ export function ArtistModal({
     }
   };
 
-  const save = async () => {
+  const [save, busy] = useSubmit(async () => {
     if (!form.name.trim()) {
       toast(t("artists.name") + " " + t("common.required"), "error");
       return;
     }
-    try {
-      const id = await saveArtist(form);
-      toast(t("common.save"), "ok");
-      onSaved(id);
-    } catch (e: any) {
-      toast(e?.toString?.() ?? "error", "error");
-    }
-  };
+    const id = await saveArtist(form);
+    toast(t("common.save"), "ok");
+    onSaved(id);
+  });
 
   return (
     <Modal
@@ -573,7 +574,7 @@ export function ArtistModal({
           </div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
             {LINK_FIELDS.map((l) => (
-              <Field key={l.key as string} label={l.label}>
+              <Field key={l.key as string} label={l.i18n ? t(l.label) : l.label}>
                 <input {...inp(l.key)} />
               </Field>
             ))}
@@ -601,7 +602,7 @@ export function ArtistModal({
               <input {...inp("audience_cities")} placeholder="Paris, Amsterdam, Berlin, Lyon" />
             </Field>
             <Field label={t("artists.spotify_artist_id")} className="col-span-2">
-              <input {...inp("spotify_artist_id")} placeholder="ID artiste Spotify (22 caractères) ou lien open.spotify.com/artist/..." />
+              <input {...inp("spotify_artist_id")} placeholder={t("artists.spotify_artist_id_ph")} />
             </Field>
           </div>
           <p className="mt-1.5 text-2xs text-fg-subtle">{t("artists.epk_hint")}</p>
@@ -625,7 +626,7 @@ export function ArtistModal({
           <button className="btn-outline" onClick={onClose}>
             {t("common.cancel")}
           </button>
-          <button className="btn-primary" onClick={save}>
+          <button className="btn-primary" onClick={save} disabled={busy}>
             {t("common.save")}
           </button>
         </div>
@@ -650,12 +651,12 @@ function ArtistKpiModal({
     value: (form[k] as string) ?? "",
     onChange: (e: any) => setForm({ ...form, [k]: e.target.value }),
   });
-  const save = async () => {
+  const [save, busy] = useSubmit(async () => {
     await saveKpi(form);
     onSaved();
-  };
+  });
   return (
-    <Modal open onClose={onClose} title={t("kpis.new_kpi")} width="max-w-lg">
+    <Modal open onClose={onClose} title={kpi.id ? t("kpis.edit_kpi") : t("kpis.new_kpi")} width="max-w-lg">
       <div className="space-y-3.5">
         <Field label={t("kpis.goal")}>
           <input {...inp("goal")} />
@@ -675,7 +676,7 @@ function ArtistKpiModal({
           <button className="btn-outline" onClick={onClose}>
             {t("common.cancel")}
           </button>
-          <button className="btn-primary" onClick={save}>
+          <button className="btn-primary" onClick={save} disabled={busy}>
             {t("common.save")}
           </button>
         </div>

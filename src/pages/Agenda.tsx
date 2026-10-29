@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -6,28 +6,31 @@ import { ChevronLeft, ChevronRight, Plus, Trash2, MapPin, Clock } from "lucide-r
 import clsx from "clsx";
 import {
   deleteEvent,
+  getContact,
   listArtists,
   listContacts,
   listEvents,
   saveEvent,
 } from "../lib/api";
-import type { Artist, Event } from "../lib/types";
+import type { Artist, Contact, Event } from "../lib/types";
 import { EVENT_STATUSES } from "../lib/types";
 import { PageHeader } from "../components/Layout";
-import { euro } from "../lib/format";
-import { Modal, Field, useToast, useConfirm } from "../components/ui";
+import { euro, parseDay } from "../lib/format";
+import { useAppIntent } from "../lib/hooks";
+import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 
 // Warm, on-brand ramp (reds → warm neutrals) so artists stay distinguishable
 // without breaking the Modernist red/grey system.
 const ARTIST_COLORS = [
-  "#ec3013", "#ff7a5c", "#e0a458", "#c2603f", "#8a847e",
-  "#b0aaaa", "#a8552f", "#7d5a4a", "#5c5651", "#d98c6a",
+  // insrt.studio ramp: sunset, amber, chrome, smoke
+  "#ff5a1f", "#f2b880", "#6f7782", "#d9430f", "#a9a49b",
+  "#3fb27f", "#8b929c", "#8b5e3c", "#4a4744", "#ffa66b",
 ];
 
 const EVENT_STATUS_COLOR: Record<string, string> = {
-  confirmed: "#ec3013",
-  hold: "#ff7a5c",
-  cancelled: "#6e6862",
+  confirmed: "#ff5a1f",
+  hold: "#f2b880",
+  cancelled: "#8b8680",
 };
 
 function iso(d: Date) {
@@ -81,7 +84,7 @@ export function Agenda() {
   });
 
   const colorFor = (artistId?: number | null) => {
-    if (!artistId) return "#8a847e";
+    if (!artistId) return "#8b929c";
     const idx = artists.findIndex((a) => a.id === artistId);
     return ARTIST_COLORS[(idx < 0 ? 0 : idx) % ARTIST_COLORS.length];
   };
@@ -100,14 +103,10 @@ export function Agenda() {
     },
   });
 
-  // Native menu "New event"
-  useEffect(() => {
-    const h = () => setEditing({ title: "", date: todayIso, status: "confirmed" } as Event);
-    window.addEventListener("app:new", ((e: CustomEvent) => {
-      if (e.detail === "new:event") h();
-    }) as EventListener);
-    return () => window.removeEventListener("app:new", h as EventListener);
-  }, [todayIso]);
+  // Native menu / Dashboard "New event"
+  useAppIntent("new:event", () =>
+    setEditing({ title: "", date: todayIso, status: "confirmed" } as Event)
+  );
 
   const months = t("agenda.months").split("_");
   const dayLabels = t("agenda.days").split("_");
@@ -326,13 +325,13 @@ function EventHoverCard({
   const top = below ? rect.bottom + 6 : rect.top - H - 6;
   const left = Math.min(Math.max(8, rect.left), window.innerWidth - W - 8);
 
-  const d = new Date(ev.date);
-  const fullDate = `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+  const d = parseDay(ev.date);
+  const fullDate = d ? `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}` : ev.date;
   const time = [ev.start_time, ev.end_time].filter(Boolean).join(" – ");
 
   return createPortal(
     <div
-      className="pointer-events-none fixed z-[70] animate-fade-in border-2 border-border bg-elevated p-4 shadow-pop"
+      className="pointer-events-none fixed z-[70] animate-fade-in border border-border bg-elevated p-4 shadow-pop"
       style={{ top, left, width: W, borderTopColor: color }}
     >
       <div className="flex items-start justify-between gap-2">
@@ -388,12 +387,24 @@ function EventModal({
   const { t } = useTranslation();
   const toast = useToast();
   const [form, setForm] = useState<Event>({ ...event });
+  // Only contacts that can plausibly be a booking (confirmed / in discussion),
+  // plus the one currently linked: the full list runs into the thousands.
   const { data: bookings = [] } = useQuery({
-    queryKey: ["contacts", "confirmed-list"],
-    queryFn: () => listContacts({}),
+    queryKey: ["contacts", "booking-options", event.contact_id ?? null],
+    queryFn: async () => {
+      const [confirmed, discussing, linked] = await Promise.all([
+        listContacts({ status: "confirmed" }),
+        listContacts({ status: "in_discussion" }),
+        event.contact_id ? getContact(event.contact_id) : Promise.resolve(null),
+      ]);
+      const byId = new Map<number, Contact>();
+      for (const c of [...confirmed, ...discussing, ...(linked ? [linked] : [])])
+        if (c.id != null) byId.set(c.id, c);
+      return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+    },
   });
   const set = (k: keyof Event, v: any) => setForm((f) => ({ ...f, [k]: v }));
-  const save = async () => {
+  const [save, busy] = useSubmit(async () => {
     if (!form.title.trim() || !form.date) {
       toast(t("common.required"), "error");
       return;
@@ -401,7 +412,7 @@ function EventModal({
     await saveEvent(form);
     toast(t("common.save"), "ok");
     onSaved();
-  };
+  });
   return (
     <Modal
       open
@@ -529,7 +540,7 @@ function EventModal({
             <button className="btn-outline" onClick={onClose}>
               {t("common.cancel")}
             </button>
-            <button className="btn-primary" onClick={save}>
+            <button className="btn-primary" onClick={save} disabled={busy}>
               {t("common.save")}
             </button>
           </div>

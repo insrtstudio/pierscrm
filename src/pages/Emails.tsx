@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
@@ -34,43 +34,44 @@ import {
 import type { Campaign, Followup, Template } from "../lib/types";
 import { CAMPAIGN_STATUSES } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
-import { Modal, Field, useToast, useConfirm } from "../components/ui";
+import { Modal, Field, useToast, useConfirm, useSubmit, errorMessage } from "../components/ui";
+import { useAppIntent } from "../lib/hooks";
 import { BulkSend } from "./BulkSend";
 import { ComposeModal, renderTemplate } from "../components/ComposeModal";
-import { formatDateTime } from "../lib/format";
+import { daysUntil, formatDateTime } from "../lib/format";
 
 const LINK_FIELDS = ["mix", "listen", "onepager", "epk"] as const;
 
 type Tab = "compose" | "bulk" | "followups" | "campaigns" | "templates" | "log";
 
 const CAMPAIGN_COLORS = [
-  "#6366f1", "#10b981", "#f59e0b", "#ec4899", "#0ea5e9", "#8b5cf6", "#ef4444", "#14b8a6",
+  "#ff5a1f", "#f2b880", "#6f7782", "#3fb27f", "#d9430f", "#8b929c", "#4a4744", "#ffa66b",
 ];
 
 const CAMPAIGN_STATUS_STYLE: Record<string, string> = {
-  active: "bg-emerald-500/10 text-emerald-500",
-  scheduled: "bg-blue-500/10 text-blue-500",
-  done: "bg-slate-500/10 text-slate-500",
-  archived: "bg-zinc-500/10 text-zinc-400",
+  active: "bg-ok/10 text-ok",
+  scheduled: "bg-chrome-dark/10 text-chrome-dark",
+  done: "bg-fg-faint/10 text-fg-faint",
+  archived: "bg-fg-faint/10 text-fg-faint",
 };
 
-export function Emails() {
-  const { t } = useTranslation();
-  const [tab, setTab] = useState<Tab>("compose");
-  const tabs: Tab[] = ["compose", "bulk", "followups", "campaigns", "templates", "log"];
-  const tabLabel = (tb: Tab) => (tb === "bulk" ? t("bulk.tab") : t(`emails.tab_${tb}`));
+/// The former Emails page is split in two sections of the nav:
+/// "campaigns" (campaigns + bulk send) and "outbox" (follow-ups, compose,
+/// history, templates). Both render this component with their own tabs.
+const SECTIONS: Record<"campaigns" | "outbox", Tab[]> = {
+  campaigns: ["campaigns", "bulk"],
+  outbox: ["followups", "compose", "log", "templates"],
+};
 
-  useEffect(() => {
-    const h = (e: Event) => {
-      if ((e as CustomEvent).detail === "new:campaign") setTab("campaigns");
-    };
-    window.addEventListener("app:new", h);
-    return () => window.removeEventListener("app:new", h);
-  }, []);
+export function Emails({ section = "outbox" }: { section?: "campaigns" | "outbox" }) {
+  const { t } = useTranslation();
+  const tabs = SECTIONS[section];
+  const [tab, setTab] = useState<Tab>(tabs[0]);
+  const tabLabel = (tb: Tab) => (tb === "bulk" ? t("bulk.tab") : t(`emails.tab_${tb}`));
 
   return (
     <div>
-      <PageHeader title={t("emails.title")} subtitle={t("emails.subtitle")} />
+      <PageHeader title={t(`emails.title_${section}`)} subtitle={t(`emails.subtitle_${section}`)} />
       <div className="px-8 py-6">
         <div className="segmented mb-6">
           {tabs.map((tb) => (
@@ -110,6 +111,7 @@ function ComposeTab() {
   const [campaignId, setCampaignId] = useState<number | "">("");
   const [links, setLinks] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
+  const [templateId, setTemplateId] = useState("");
 
   const linkVars = Object.fromEntries(
     Object.entries(links).filter(([, v]) => v.trim())
@@ -131,6 +133,7 @@ function ComposeTab() {
         setSubject("");
         setBody("");
         setLinks({});
+        setTemplateId("");
         qc.invalidateQueries({ queryKey: ["emails"] });
         qc.invalidateQueries({ queryKey: ["campaigns"] });
         qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -150,7 +153,9 @@ function ComposeTab() {
         <Field label={t("emails.template")}>
           <select
             className="input"
+            value={templateId}
             onChange={(e) => {
+              setTemplateId(e.target.value);
               const tpl = templates?.find((x) => x.id === Number(e.target.value));
               if (tpl) {
                 setSubject(tpl.subject);
@@ -231,11 +236,6 @@ function ComposeTab() {
 
 // ---------------- Campaigns ----------------
 
-function daysDiff(dateStr: string): number {
-  const d = new Date(dateStr);
-  return Math.round((d.getTime() - Date.now()) / 86400000);
-}
-
 // ---------------- Follow-ups (booking cadence) ----------------
 
 function FollowupsTab() {
@@ -279,7 +279,7 @@ function FollowupsTab() {
                   </td>
                   <td>
                     {f.opened ? (
-                      <span className="badge bg-emerald-500/15 text-emerald-500">{t("emails.opened_yes")}</span>
+                      <span className="badge bg-ok/15 text-ok">{t("emails.opened_yes")}</span>
                     ) : (
                       <span className="badge bg-muted text-fg-subtle">{t("emails.opened_no")}</span>
                     )}
@@ -339,6 +339,10 @@ function CampaignsTab() {
   const { data: campaigns = [] } = useQuery({ queryKey: ["campaigns"], queryFn: listCampaigns });
   const { data: artists = [] } = useQuery({ queryKey: ["artists"], queryFn: listArtists });
   const [editing, setEditing] = useState<Campaign | null>(null);
+  // Menu "Nouvelle campagne" lands here (Campaigns is the section's first tab).
+  useAppIntent("new:campaign", () =>
+    setEditing({ name: "", status: "active", color: CAMPAIGN_COLORS[0] } as Campaign)
+  );
 
   const delMut = useMutation({
     mutationFn: (id: number) => deleteCampaign(id),
@@ -367,14 +371,15 @@ function CampaignsTab() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {campaigns.map((c) => {
             const rate = c.sent_count ? Math.round((c.opened_count / c.sent_count) * 100) : 0;
-            const dd = c.target_date ? daysDiff(c.target_date) : null;
+            // Calendar days: the old ms diff rounded "tomorrow, before noon" to 0.
+            const dd = daysUntil(c.target_date);
             return (
               <div key={c.id} className="card group overflow-hidden p-5">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <span
                       className="h-3 w-3 shrink-0 rounded-full"
-                      style={{ background: c.color ?? "#6366f1" }}
+                      style={{ background: c.color ?? "#ff5a1f" }}
                     />
                     <span className="truncate font-semibold">{c.name}</span>
                   </div>
@@ -417,7 +422,7 @@ function CampaignsTab() {
                     <Pencil size={14} />
                   </button>
                   <button
-                    className="btn-ghost px-2 py-1.5 text-rose-500"
+                    className="btn-ghost px-2 py-1.5 text-danger"
                     onClick={() => confirm(t("common.confirm_delete")) && delMut.mutate(c.id!)}
                   >
                     <Trash2 size={14} />
@@ -447,10 +452,10 @@ function CampaignsTab() {
 function Stat({ label, value, accent }: { label: string; value: any; accent?: boolean }) {
   return (
     <div>
-      <div className={clsx("text-base font-semibold tabular", accent && "text-accent")}>
-        {value}
+      <div className={clsx("font-condensed text-2xl tabular", accent && "text-accent-2")}>
+        {value ?? 0}
       </div>
-      <div className="text-2xs text-fg-subtle">{label}</div>
+      <div className="eyebrow mt-1 text-[10px]">{label}</div>
     </div>
   );
 }
@@ -470,15 +475,15 @@ function CampaignModal({
   const toast = useToast();
   const [form, setForm] = useState<Campaign>({ ...campaign });
   const set = (k: keyof Campaign, v: any) => setForm((f) => ({ ...f, [k]: v }));
-  const save = async () => {
+  const [save, saving] = useSubmit(async () => {
     if (!form.name.trim()) {
-      toast(t("common.required"), "error");
+      toast(t("campaigns.name") + " " + t("common.required"), "error");
       return;
     }
     await saveCampaign(form);
     toast(t("common.save"), "ok");
     onSaved();
-  };
+  });
   return (
     <Modal
       open
@@ -568,7 +573,7 @@ function CampaignModal({
           <button className="btn-outline" onClick={onClose}>
             {t("common.cancel")}
           </button>
-          <button className="btn-primary" onClick={save}>
+          <button className="btn-primary" onClick={() => save()} disabled={saving}>
             {t("common.save")}
           </button>
         </div>
@@ -611,7 +616,7 @@ function TemplatesTab() {
                   <Pencil size={14} />
                 </button>
                 <button
-                  className="btn-ghost px-2 py-1.5 text-rose-500"
+                  className="btn-ghost px-2 py-1.5 text-danger"
                   onClick={() => confirm(t("common.confirm_delete")) && delMut.mutate(tpl.id!)}
                 >
                   <Trash2 size={14} />
@@ -650,14 +655,23 @@ function TemplateModal({
   onSaved: () => void;
 }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [form, setForm] = useState<Template>({ ...template });
-  const save = async () => {
-    if (!form.name.trim()) return;
+  const [save, saving] = useSubmit(async () => {
+    if (!form.name.trim()) {
+      toast(t("emails.template_name") + " " + t("common.required"), "error");
+      return;
+    }
     await saveTemplate(form);
     onSaved();
-  };
+  });
   return (
-    <Modal open onClose={onClose} title={t("emails.new_template")} width="max-w-2xl">
+    <Modal
+      open
+      onClose={onClose}
+      title={template.id ? t("emails.edit_template") : t("emails.new_template")}
+      width="max-w-2xl"
+    >
       <div className="space-y-3.5">
         <Field label={t("emails.template_name")}>
           <input
@@ -685,7 +699,7 @@ function TemplateModal({
           <button className="btn-outline" onClick={onClose}>
             {t("common.cancel")}
           </button>
-          <button className="btn-primary" onClick={save}>
+          <button className="btn-primary" onClick={() => save()} disabled={saving}>
             {t("common.save")}
           </button>
         </div>
@@ -704,14 +718,16 @@ function LogTab() {
   const { data: emails = [] } = useQuery({ queryKey: ["emails"], queryFn: () => listEmails() });
 
   const syncOpens = async () => {
-    const base = (await getSetting("tracking_base_url"))?.trim().replace(/\/$/, "");
-    if (!base) {
-      toast(t("emails.no_tracking"), "error");
-      return;
-    }
     setSyncing(true);
     try {
+      const base = (await getSetting("tracking_base_url"))?.trim().replace(/\/$/, "");
+      if (!base) {
+        toast(t("emails.no_tracking"), "error");
+        return;
+      }
       const res = await fetch(`${base}/opens.json`, { cache: "no-store" });
+      // A 404/500 page is not JSON: report the status rather than a parse error.
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const opens = Array.isArray(data)
         ? data
@@ -725,7 +741,7 @@ function LogTab() {
       qc.invalidateQueries({ queryKey: ["campaigns"] });
       toast(t("emails.sync_done", { count: n }), "ok");
     } catch (e: any) {
-      toast(`${t("emails.send_failed")}: ${e?.toString?.() ?? e}`, "error");
+      toast(`${t("emails.sync_failed")}: ${errorMessage(e)}`, "error");
     } finally {
       setSyncing(false);
     }
@@ -765,8 +781,8 @@ function LogTab() {
                       className={clsx(
                         "badge",
                         e.status === "sent"
-                          ? "bg-emerald-500/10 text-emerald-500"
-                          : "bg-rose-500/10 text-rose-500"
+                          ? "bg-ok/10 text-ok"
+                          : "bg-danger/10 text-danger"
                       )}
                     >
                       {e.status === "sent" ? t("emails.status_sent") : t("emails.status_failed")}
@@ -775,7 +791,7 @@ function LogTab() {
                   <td>
                     {e.opened_at ? (
                       <span
-                        className="inline-flex items-center gap-1 text-xs font-medium text-emerald-500"
+                        className="inline-flex items-center gap-1 text-xs font-medium text-ok"
                         title={`${formatDateTime(e.opened_at)}${e.open_count > 1 ? ` · ${e.open_count}×` : ""}`}
                       >
                         <Eye size={13} />

@@ -6,7 +6,7 @@ import clsx from "clsx";
 import { deleteTask, listTasks, saveTask } from "../lib/api";
 import type { Task } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
-import { Modal, Field, useToast, useConfirm } from "../components/ui";
+import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 
 export function Timeline() {
   const { t } = useTranslation();
@@ -58,7 +58,7 @@ export function Timeline() {
           </button>
         }
       />
-      <div className="space-y-6 px-8 pb-10">
+      <div className="space-y-6 px-8 pb-10 pt-6">
         {groups.length === 0 && (
           <div className="card">
             <EmptyState icon={ListChecks} title={t("common.empty")} />
@@ -82,7 +82,7 @@ export function Timeline() {
                     type="checkbox"
                     checked={task.done}
                     onChange={() => toggleMut.mutate(task)}
-                    className="h-4 w-4 accent-emerald-500"
+                    className="h-4 w-4 accent-ok"
                   />
                   <div className="min-w-0 flex-1">
                     <div
@@ -107,7 +107,7 @@ export function Timeline() {
                       <Pencil size={14} />
                     </button>
                     <button
-                      className="btn-ghost px-2 py-1.5 text-rose-500"
+                      className="btn-ghost px-2 py-1.5 text-danger"
                       onClick={() =>
                         confirm(t("common.confirm_delete")) && delMut.mutate(task.id!)
                       }
@@ -148,14 +148,14 @@ function TaskModal({
   const { t } = useTranslation();
   const toast = useToast();
   const [form, setForm] = useState<Task>({ ...task });
-  const save = async () => {
+  const [save, busy] = useSubmit(async () => {
     if (!form.title.trim()) return;
     await saveTask(form);
     toast(t("common.save"), "ok");
     onSaved();
-  };
+  });
   return (
-    <Modal open onClose={onClose} title={t("timeline.new_task")} width="max-w-lg">
+    <Modal open onClose={onClose} title={task.id ? t("timeline.edit_task") : t("timeline.new_task")} width="max-w-lg">
       <div className="space-y-3.5">
         <Field label={t("timeline.task")}>
           <textarea
@@ -192,7 +192,7 @@ function TaskModal({
         <button className="btn-outline" onClick={onClose}>
           {t("common.cancel")}
         </button>
-        <button className="btn-primary" onClick={save}>
+        <button className="btn-primary" onClick={save} disabled={busy}>
           {t("common.save")}
         </button>
       </div>

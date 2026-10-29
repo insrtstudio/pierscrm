@@ -228,10 +228,7 @@ impl Spotify {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<SearchPlaylist>, SpotifyError> {
-        let q: String = query
-            .chars()
-            .map(|c| if c == ' ' { "%20".to_string() } else { c.to_string() })
-            .collect();
+        let q = crate::commands::musicbrainz::urlencoding(query);
         let url = format!(
             "{}/search?q={}&type=playlist&limit={}&offset={}",
             API,

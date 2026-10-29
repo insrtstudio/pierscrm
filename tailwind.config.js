@@ -20,12 +20,20 @@ export default {
         "accent-soft": "rgb(var(--accent-soft) / <alpha-value>)",
         "accent-2": "rgb(var(--accent-2) / <alpha-value>)",
         "accent-ink": "rgb(var(--accent-ink) / <alpha-value>)",
+        chrome: "rgb(var(--chrome) / <alpha-value>)",
+        "chrome-dark": "rgb(var(--chrome-dark) / <alpha-value>)",
+        ok: "rgb(var(--ok) / <alpha-value>)",
+        warn: "rgb(var(--warn) / <alpha-value>)",
+        danger: "rgb(var(--danger) / <alpha-value>)",
       },
       fontFamily: {
-        // Archivo everywhere — the Modernist system's single family
-        sans: ["Archivo Variable", "Archivo", "system-ui", "sans-serif"],
-        heading: ["Archivo Variable", "Archivo", "system-ui", "sans-serif"],
-        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        // insrt.studio type roles: Overused Grotesk (UI), Archivo (display),
+        // Geist Mono (eyebrows, labels, buttons), Anton (big numbers)
+        sans: ["Overused Grotesk", "Helvetica Neue", "Arial", "sans-serif"],
+        heading: ["Overused Grotesk", "Helvetica Neue", "Arial", "sans-serif"],
+        display: ["Archivo Variable", "Arial Black", "sans-serif"],
+        mono: ["Geist Mono Variable", "ui-monospace", "Menlo", "monospace"],
+        condensed: ["Anton", "Impact", "sans-serif"],
       },
       fontSize: {
         "2xs": ["0.6875rem", { lineHeight: "1rem" }],
@@ -33,24 +41,14 @@ export default {
       letterSpacing: {
         tightest: "-0.05em",
       },
-      borderRadius: {
-        none: "0",
-        sm: "0",
-        DEFAULT: "0",
-        md: "0",
-        lg: "0",
-        xl: "0",
-        "2xl": "0",
-        "3xl": "0",
-        full: "0",
-      },
       boxShadow: {
-        xs: "0 1px 2px color-mix(in srgb, #000 40%, transparent)",
-        soft: "0 1px 2px color-mix(in srgb, #000 30%, transparent)",
-        card: "0 3px 14px color-mix(in srgb, #000 40%, transparent)",
-        pop: "0 12px 40px color-mix(in srgb, #000 55%, transparent)",
-        glow: "0 0 24px rgb(var(--accent) / 0.35)",
-        "glow-strong": "0 0 30px rgb(var(--accent) / 0.55)",
+        xs: "0 1px 2px rgb(0 0 0 / 0.06)",
+        soft: "0 1px 3px rgb(0 0 0 / 0.08)",
+        card: "0 4px 18px rgb(0 0 0 / 0.10)",
+        pop: "0 16px 48px rgb(0 0 0 / 0.22)",
+        // the old red glow, neutralised
+        glow: "none",
+        "glow-strong": "none",
       },
       keyframes: {
         "fade-in": {
@@ -73,7 +71,7 @@ export default {
       animation: {
         "fade-in": "fade-in 0.22s cubic-bezier(0.16,1,0.3,1)",
         "scale-in": "scale-in 0.16s cubic-bezier(0.16,1,0.3,1)",
-        ticker: "ticker 30s linear infinite",
+        ticker: "ticker 60s linear infinite",
         livepulse: "livepulse 1.4s ease-in-out infinite",
       },
     },

@@ -1,11 +1,16 @@
 import { lazy, Suspense } from "react";
-import { HashRouter, Route, Routes } from "react-router-dom";
+import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
-import { Dashboard } from "./pages/Dashboard";
+
+import { Home } from "./pages/Home";
 
 // Lazy-load secondary routes so the initial payload stays tiny and each screen's
-// code is fetched on demand — faster cold start, lower memory footprint.
-const Agenda = lazy(() => import("./pages/Agenda").then((m) => ({ default: m.Agenda })));
+// code is fetched on demand: faster cold start, lower memory footprint. The
+// multi-page sections share one chunk (Sections.tsx).
+const AgendaSection = lazy(() =>
+  import("./pages/Sections").then((m) => ({ default: m.AgendaSection }))
+);
+const Discovery = lazy(() => import("./pages/Sections").then((m) => ({ default: m.Discovery })));
 const Artists = lazy(() => import("./pages/Artists").then((m) => ({ default: m.Artists })));
 const ArtistDetail = lazy(() =>
   import("./pages/ArtistDetail").then((m) => ({ default: m.ArtistDetail }))
@@ -14,142 +19,54 @@ const Contacts = lazy(() => import("./pages/Contacts").then((m) => ({ default: m
 const Import = lazy(() => import("./pages/Import").then((m) => ({ default: m.Import })));
 const Emails = lazy(() => import("./pages/Emails").then((m) => ({ default: m.Emails })));
 const Budget = lazy(() => import("./pages/Budget").then((m) => ({ default: m.Budget })));
-const Timeline = lazy(() => import("./pages/Timeline").then((m) => ({ default: m.Timeline })));
-const Kpis = lazy(() => import("./pages/Kpis").then((m) => ({ default: m.Kpis })));
 const Visa = lazy(() => import("./pages/Visa").then((m) => ({ default: m.Visa })));
-const Venues = lazy(() => import("./pages/Venues").then((m) => ({ default: m.Venues })));
 const Pulse = lazy(() => import("./pages/Pulse").then((m) => ({ default: m.Pulse })));
-const Radar = lazy(() => import("./pages/Radar").then((m) => ({ default: m.Radar })));
 const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
 
 function Fallback() {
   return (
     <div className="flex h-full items-center justify-center">
-      <div className="h-1 w-24 overflow-hidden bg-muted">
+      <div className="h-0.5 w-24 overflow-hidden rounded-full bg-muted">
         <div className="h-full w-1/2 animate-ticker bg-accent" />
       </div>
     </div>
   );
 }
 
+/// Former URLs, kept so old links and muscle memory still land somewhere.
+const REDIRECTS: [string, string][] = [
+  ["kpis", "/?tab=goals"],
+  ["timeline", "/agenda?tab=planning"],
+  ["venues", "/discovery"],
+  ["radar", "/discovery?tab=curators"],
+  ["pulse", "/audience"],
+  ["emails", "/outbox"],
+];
+
+const page = (el: React.ReactNode) => <Suspense fallback={<Fallback />}>{el}</Suspense>;
+
 export function App() {
   return (
     <HashRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route index element={<Dashboard />} />
-          <Route
-            path="agenda"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <Agenda />
-              </Suspense>
-            }
-          />
-          <Route
-            path="artists"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <Artists />
-              </Suspense>
-            }
-          />
-          <Route
-            path="artists/:id"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <ArtistDetail />
-              </Suspense>
-            }
-          />
-          <Route
-            path="contacts"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <Contacts />
-              </Suspense>
-            }
-          />
-          <Route
-            path="import"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <Import />
-              </Suspense>
-            }
-          />
-          <Route
-            path="emails"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <Emails />
-              </Suspense>
-            }
-          />
-          <Route
-            path="budget"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <Budget />
-              </Suspense>
-            }
-          />
-          <Route
-            path="timeline"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <Timeline />
-              </Suspense>
-            }
-          />
-          <Route
-            path="kpis"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <Kpis />
-              </Suspense>
-            }
-          />
-          <Route
-            path="visa"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <Visa />
-              </Suspense>
-            }
-          />
-          <Route
-            path="radar"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <Radar />
-              </Suspense>
-            }
-          />
-          <Route
-            path="pulse"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <Pulse />
-              </Suspense>
-            }
-          />
-          <Route
-            path="venues"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <Venues />
-              </Suspense>
-            }
-          />
-          <Route
-            path="settings"
-            element={
-              <Suspense fallback={<Fallback />}>
-                <Settings />
-              </Suspense>
-            }
-          />
+          <Route index element={page(<Home />)} />
+          <Route path="agenda" element={page(<AgendaSection />)} />
+          <Route path="artists" element={page(<Artists />)} />
+          <Route path="artists/:id" element={page(<ArtistDetail />)} />
+          <Route path="audience" element={page(<Pulse />)} />
+          <Route path="contacts" element={page(<Contacts />)} />
+          <Route path="import" element={page(<Import />)} />
+          <Route path="discovery" element={page(<Discovery />)} />
+          <Route path="campaigns" element={page(<Emails section="campaigns" />)} />
+          <Route path="outbox" element={page(<Emails section="outbox" />)} />
+          <Route path="budget" element={page(<Budget />)} />
+          <Route path="visa" element={page(<Visa />)} />
+          <Route path="settings" element={page(<Settings />)} />
+          {REDIRECTS.map(([from, to]) => (
+            <Route key={from} path={from} element={<Navigate to={to} replace />} />
+          ))}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
     </HashRouter>

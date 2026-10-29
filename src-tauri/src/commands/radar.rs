@@ -61,6 +61,77 @@ fn mine_text(text: &str) -> (Vec<(String, i64)>, Option<String>) {
     (scored, site)
 }
 
+/// Corporate domains of the streaming platforms themselves. An address sitting
+/// here is on the platform's own domain, which is what separates a real
+/// editorial contact from the "spotify.promo@gmail.com" pitch scams that plague
+/// playlist submission.
+///
+/// This checks the domain and nothing else: it does not prove the mailbox
+/// exists, that it accepts submissions, or that anyone reads it. The UI must say
+/// "official domain", never "verified".
+///
+/// Bare youtube.com is deliberately absent. A YouTube channel is an ordinary
+/// curator like any other; only YouTube Music is a platform.
+const PLATFORM_DOMAINS: &[&str] = &[
+    "spotify.com",
+    "deezer.com",
+    "apple.com",
+    "amazon.com",
+    "music.youtube.com",
+    "youtubemusic.com",
+    "tidal.com",
+    "soundcloud.com",
+    "beatport.com",
+    "audiomack.com",
+    "anghami.com",
+    "boomplay.com",
+];
+
+/// Mailboxes that are never a route to a human who books music: compliance,
+/// support and automated addresses.
+///
+/// This is not cosmetic. Platforms publish these in the footer of every page, so
+/// crawling a Deezer-hosted playlist harvested `privacy@deezer.com`,
+/// `support@deezer.com` and `dsa-authorities@deezer.com` and filed them as that
+/// curator's contact: 117 such rows here, and for 17 curators it was the only
+/// address on file. They inflated the "reachable" count and would have been
+/// promoted straight into an email campaign.
+const NON_PITCH_LOCALS: &[&str] = &[
+    "privacy", "legal", "support", "help", "dsa", "dpo", "gdpr", "abuse", "security", "noreply",
+    "no-reply", "donotreply", "webmaster", "postmaster", "copyright", "dmca", "compliance",
+    "billing", "invoice", "unsubscribe",
+];
+
+/// SQL boolean over `col`, true when the address could plausibly reach someone
+/// who listens to submissions.
+fn pitchable_sql(col: &str) -> String {
+    let parts: Vec<String> = NON_PITCH_LOCALS
+        .iter()
+        // Exact local part plus `dsa-authorities@`, `privacy.team@`, `no_reply@`...
+        .map(|l| {
+            format!(
+                "lower({col}) LIKE '{l}@%' OR lower({col}) LIKE '{l}-%@%' \
+                 OR lower({col}) LIKE '{l}.%@%' OR lower({col}) LIKE '{l}\\_%@%' ESCAPE '\\'"
+            )
+        })
+        .collect();
+    format!("NOT ({})", parts.join(" OR "))
+}
+
+/// SQL boolean over `col`, true when the address sits on a platform domain or
+/// any subdomain of one, and is not one of the compliance mailboxes above.
+/// Matching on '%@domain' or '%.domain' means `a@mail.spotify.com` counts while
+/// `a@notspotify.com` does not, and `a@youtube.com` stays out while
+/// `a@music.youtube.com` gets in.
+fn official_domain_sql(col: &str) -> String {
+    let mut parts = Vec::with_capacity(PLATFORM_DOMAINS.len() * 2);
+    for d in PLATFORM_DOMAINS {
+        parts.push(format!("lower({col}) LIKE '%@{d}'"));
+        parts.push(format!("lower({col}) LIKE '%.{d}'"));
+    }
+    format!("(({}) AND {})", parts.join(" OR "), pitchable_sql(col))
+}
+
 fn store_email(conn: &rusqlite::Connection, curator_id: i64, email: &str, score: i64, src: &str, method: &str) {
     let (_, role) = score_email(email, false);
     let _ = conn.execute(
@@ -195,16 +266,19 @@ pub async fn process_harvest_task(pool: &DbPool, payload: &str) -> Result<(), Ra
 fn upsert_label(pool: &DbPool, mbid: &str, name: &str, country: Option<&str>, genre: &str, site: Option<&str>) {
     let Ok(conn) = pool.get() else { return };
     let norm = normalise(name);
+    // Stored under the same name the UI uses for this source. It used to be
+    // written as 'musicbrainz' while the source filter offered 'labels', so that
+    // filter could never match a single row.
     let _ = conn.execute(
         "INSERT INTO radar_curators (source, external_id, kind, nom, nom_normalise, pays, genre, site_web, editorial)
-         VALUES ('musicbrainz',?1,'label',?2,?3,?4,?5,?6,0)
+         VALUES ('labels',?1,'label',?2,?3,?4,?5,?6,0)
          ON CONFLICT(source, external_id) DO UPDATE SET
             site_web=COALESCE(radar_curators.site_web, excluded.site_web),
             pays=COALESCE(radar_curators.pays, excluded.pays), updated_at=datetime('now')",
         params![mbid, name, norm, country, genre, site],
     );
     if let Ok(cid) = conn.query_row(
-        "SELECT id FROM radar_curators WHERE source='musicbrainz' AND external_id=?1",
+        "SELECT id FROM radar_curators WHERE source='labels' AND external_id=?1",
         params![mbid],
         |r| r.get::<_, i64>(0),
     ) {
@@ -225,6 +299,13 @@ fn upsert_curator(
     description: Option<&str>,
     editorial: bool,
 ) {
+    // Editorial playlists belong to Spotify/Deezer themselves: there is nobody to
+    // email, so they are noise for a booking pipeline. Dropping them at the scan
+    // means the counters and the list agree instead of the counters promising
+    // results the list then filters away.
+    if editorial {
+        return;
+    }
     let Ok(conn) = pool.get() else { return };
     let norm = normalise(name);
     let (mined, site) = description.map(mine_text).unwrap_or_default();
@@ -255,11 +336,14 @@ fn upsert_curator(
 
 fn qualify_one(conn: &rusqlite::Connection, cid: i64) {
     let _ = conn.execute(
+        // SQLite keeps whatever type the expression produced, so without this cast
+        // the column holds REAL for every row the MIN() does not clamp to 100,
+        // and anything reading it as an integer fails on those rows.
         "UPDATE radar_curators SET
-            score = MIN(100,
+            score = CAST(MIN(100,
                 CAST(COALESCE(followers,0) AS REAL) / 500
                 + CASE WHEN EXISTS(SELECT 1 FROM radar_contacts c WHERE c.curator_id=radar_curators.id AND c.type='email') THEN 40 ELSE 0 END
-                + CASE WHEN editorial=1 THEN 0 ELSE 10 END),
+                + CASE WHEN editorial=1 THEN 0 ELSE 10 END) AS INTEGER),
             statut = CASE
                 WHEN statut IN ('valide','archive','rejete') THEN statut
                 WHEN editorial=1 THEN 'candidat'
@@ -340,7 +424,15 @@ pub async fn process_enrich_task(pool: &DbPool, payload: &str) -> Result<(), RaE
                     Err(_) => continue,
                 }
             };
-            let body = if body.len() > 300_000 { body[..300_000].to_string() } else { body };
+            let mut body = body;
+            if body.len() > 300_000 {
+                // Cut on a char boundary: slicing mid-codepoint panics the worker.
+                let mut cut = 300_000;
+                while !body.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                body.truncate(cut);
+            }
             let (emails, _) = extract_contacts(&body);
             if let Ok(conn) = pool.get() {
                 for (email, from_mailto) in emails {
@@ -402,6 +494,46 @@ pub async fn radar_harvest(
     Ok(run_id)
 }
 
+/// Queue an email hunt for every curator the scan just brought in, inside the
+/// run that is already open. Finding a curator without an address is useless, so
+/// the two phases are one operation from the user's point of view; keeping them
+/// in a single run also means one progress bar instead of two buttons whose
+/// order the user had to know. Returns how many tasks were queued.
+pub fn queue_enrich_tasks(pool: &DbPool, run_id: i64) -> i64 {
+    let Ok(conn) = pool.get() else { return 0 };
+    let ids: Vec<i64> = {
+        let Ok(mut stmt) = conn.prepare(&format!(
+            "SELECT id FROM radar_curators
+             WHERE editorial=0 AND statut != 'rejete' AND enriched_at IS NULL
+               AND NOT EXISTS(SELECT 1 FROM radar_contacts x WHERE x.curator_id=radar_curators.id
+                              AND x.type='email' AND {})
+             ORDER BY followers DESC LIMIT 400",
+            pitchable_sql("x.valeur")
+        )) else {
+            return 0;
+        };
+        let Ok(rows) = stmt.query_map([], |r| r.get::<_, i64>(0)) else {
+            return 0;
+        };
+        rows.flatten().collect()
+    };
+    let Ok(mut stmt) = conn
+        .prepare("INSERT INTO vi_tasks (run_id, type, payload, statut) VALUES (?1,'radar_enrich',?2,'en_attente')")
+    else {
+        return 0;
+    };
+    let mut n = 0;
+    for id in &ids {
+        if stmt
+            .execute(params![run_id, json!({ "curator_id": id }).to_string()])
+            .is_ok()
+        {
+            n += 1;
+        }
+    }
+    n
+}
+
 #[tauri::command]
 pub async fn radar_enrich(app: AppHandle, state: State<'_, AppState>, force: Option<bool>) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
@@ -447,6 +579,12 @@ pub async fn radar_enrich(app: AppHandle, state: State<'_, AppState>, force: Opt
 
 // ---------------- Reads ----------------
 
+/// Only what the list actually shows. `score`, `statut`, `editorial`,
+/// `nb_tracks` and `site_web` used to travel here unused, and `score` was typed
+/// i64 while qualify_one stores a REAL whenever the value is not clamped to 100.
+/// rusqlite refuses that conversion, so a single unclamped row anywhere in the
+/// page made the whole command return Err and the list render empty, whatever
+/// the filters were set to.
 #[derive(Serialize)]
 pub struct CuratorRow {
     pub id: i64,
@@ -455,50 +593,56 @@ pub struct CuratorRow {
     pub owner_name: Option<String>,
     pub url: Option<String>,
     pub followers: Option<i64>,
-    pub nb_tracks: Option<i64>,
     pub genre: Option<String>,
-    pub statut: String,
-    pub score: i64,
-    pub editorial: bool,
-    pub site_web: Option<String>,
     pub best_email: Option<String>,
     pub nb_emails: i64,
+    /// `best_email` sits on a streaming platform's own domain. See PLATFORM_DOMAINS.
+    pub official: bool,
     pub enriched: bool,
     pub in_pipeline: bool,
 }
 
+/// One list, one filter. `filter` is "all" (default), "email" (has an address we
+/// can write to) or "pipeline" (already promoted into contacts). Status, source,
+/// genre and the editorial flag are no longer exposed: they described the
+/// module's internals rather than anything the user acts on, and the status
+/// filter in particular defaulted to a state a fresh scan cannot produce, so the
+/// list looked empty while the counters climbed.
 #[tauri::command(async)]
 pub fn radar_list(
     state: State<'_, AppState>,
-    statut: Option<String>,
-    source: Option<String>,
-    genre: Option<String>,
+    filter: Option<String>,
     search: Option<String>,
-    has_email: Option<bool>,
-    hide_editorial: Option<bool>,
     limit: Option<i64>,
 ) -> Result<Vec<CuratorRow>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
-    let mut sql = String::from(
-        "SELECT c.id, c.source, c.nom, c.owner_name, c.url, c.followers, c.nb_tracks, c.genre, c.statut, c.score, c.editorial, c.site_web,
-                (SELECT valeur FROM radar_contacts x WHERE x.curator_id=c.id AND x.type='email' ORDER BY x.score DESC LIMIT 1),
-                (SELECT COUNT(*) FROM radar_contacts x WHERE x.curator_id=c.id AND x.type='email'),
+    let official = official_domain_sql("x.valeur");
+    // Compliance mailboxes are not contacts, so they are excluded everywhere an
+    // address is counted or surfaced rather than only hidden from the badge.
+    let usable = format!("x.type='email' AND {}", pitchable_sql("x.valeur"));
+    // A platform address outranks anything else, so when a curator exposes both a
+    // gmail and an @deezer.com the official one is the one surfaced.
+    let mut sql = format!(
+        "SELECT c.id, c.source, c.nom, c.owner_name, c.url, CAST(c.followers AS INTEGER), c.genre,
+                (SELECT valeur FROM radar_contacts x WHERE x.curator_id=c.id AND {usable}
+                 ORDER BY {official} DESC, x.score DESC LIMIT 1),
+                (SELECT COUNT(*) FROM radar_contacts x WHERE x.curator_id=c.id AND {usable}),
+                EXISTS(SELECT 1 FROM radar_contacts x WHERE x.curator_id=c.id AND {usable} AND {official}),
                 (c.enriched_at IS NOT NULL),
                 (c.crm_contact_id IS NOT NULL)
-         FROM radar_curators c WHERE 1=1",
+         FROM radar_curators c
+         WHERE c.editorial=0 AND c.statut != 'rejete'"
     );
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    if let Some(s) = statut.filter(|s| !s.is_empty() && s != "all") {
-        sql.push_str(" AND c.statut=?");
-        args.push(Box::new(s));
-    }
-    if let Some(s) = source.filter(|s| !s.is_empty() && s != "all") {
-        sql.push_str(" AND c.source=?");
-        args.push(Box::new(s));
-    }
-    if let Some(g) = genre.filter(|s| !s.is_empty() && s != "all") {
-        sql.push_str(" AND c.genre=?");
-        args.push(Box::new(g));
+    match filter.as_deref() {
+        Some("email") => sql.push_str(&format!(
+            " AND EXISTS(SELECT 1 FROM radar_contacts x WHERE x.curator_id=c.id AND {usable})"
+        )),
+        Some("official") => sql.push_str(&format!(
+            " AND EXISTS(SELECT 1 FROM radar_contacts x WHERE x.curator_id=c.id AND {usable} AND {official})"
+        )),
+        Some("pipeline") => sql.push_str(" AND c.crm_contact_id IS NOT NULL"),
+        _ => {}
     }
     if let Some(q) = search.filter(|s| !s.trim().is_empty()) {
         sql.push_str(" AND (c.nom LIKE ? OR c.owner_name LIKE ?)");
@@ -506,13 +650,13 @@ pub fn radar_list(
         args.push(Box::new(like.clone()));
         args.push(Box::new(like));
     }
-    if has_email == Some(true) {
-        sql.push_str(" AND EXISTS(SELECT 1 FROM radar_contacts x WHERE x.curator_id=c.id AND x.type='email')");
-    }
-    if hide_editorial == Some(true) {
-        sql.push_str(" AND c.editorial=0");
-    }
-    sql.push_str(" ORDER BY c.score DESC, c.followers DESC");
+    // Platform addresses first, then anyone else reachable: that ordering matches
+    // the order in which these leads are worth working.
+    sql.push_str(&format!(
+        " ORDER BY EXISTS(SELECT 1 FROM radar_contacts x WHERE x.curator_id=c.id AND {usable} AND {official}) DESC,
+                   EXISTS(SELECT 1 FROM radar_contacts x WHERE x.curator_id=c.id AND {usable}) DESC,
+                   c.followers DESC, c.nom COLLATE NOCASE"
+    ));
     sql.push_str(&format!(" LIMIT {}", limit.unwrap_or(400).clamp(1, 1000)));
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -526,16 +670,12 @@ pub fn radar_list(
                 owner_name: r.get(3)?,
                 url: r.get(4)?,
                 followers: r.get(5)?,
-                nb_tracks: r.get(6)?,
-                genre: r.get(7)?,
-                statut: r.get(8)?,
-                score: r.get(9)?,
-                editorial: r.get::<_, i64>(10)? != 0,
-                site_web: r.get(11)?,
-                best_email: r.get(12)?,
-                nb_emails: r.get(13)?,
-                enriched: r.get::<_, i64>(14)? != 0,
-                in_pipeline: r.get::<_, i64>(15)? != 0,
+                genre: r.get(6)?,
+                best_email: r.get(7)?,
+                nb_emails: r.get(8)?,
+                official: r.get::<_, i64>(9)? != 0,
+                enriched: r.get::<_, i64>(10)? != 0,
+                in_pipeline: r.get::<_, i64>(11)? != 0,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -549,32 +689,35 @@ pub fn radar_list(
 #[derive(Serialize)]
 pub struct RadarStats {
     pub total: i64,
-    pub qualifie: i64,
     pub with_email: i64,
-    pub editorial: i64,
+    pub official: i64,
     pub in_pipeline: i64,
-    pub genres: Vec<(String, i64)>,
 }
 
+/// Every counter is scoped to exactly what the list can show, so a number on
+/// screen always corresponds to rows you can actually reach. The old `total`
+/// counted editorial and rejected rows the list then hid, which is what made a
+/// scan look like it had found hundreds of curators and returned none.
 #[tauri::command(async)]
 pub fn radar_stats(state: State<'_, AppState>) -> Result<RadarStats, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
+    const VISIBLE: &str = "editorial=0 AND statut != 'rejete'";
+    let usable = format!("x.type='email' AND {}", pitchable_sql("x.valeur"));
     let one = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
-    let mut genres = Vec::new();
-    if let Ok(mut s) = conn.prepare(
-        "SELECT COALESCE(genre,'?'), COUNT(*) n FROM radar_curators GROUP BY genre ORDER BY n DESC LIMIT 10",
-    ) {
-        if let Ok(rows) = s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
-            genres = rows.filter_map(|r| r.ok()).collect();
-        }
-    }
     Ok(RadarStats {
-        total: one("SELECT COUNT(*) FROM radar_curators"),
-        qualifie: one("SELECT COUNT(*) FROM radar_curators WHERE statut='qualifie'"),
-        with_email: one("SELECT COUNT(DISTINCT curator_id) FROM radar_contacts WHERE type='email'"),
-        editorial: one("SELECT COUNT(*) FROM radar_curators WHERE editorial=1"),
-        in_pipeline: one("SELECT COUNT(*) FROM radar_curators WHERE crm_contact_id IS NOT NULL"),
-        genres,
+        total: one(&format!("SELECT COUNT(*) FROM radar_curators WHERE {VISIBLE}")),
+        with_email: one(&format!(
+            "SELECT COUNT(*) FROM radar_curators c WHERE {VISIBLE}
+             AND EXISTS(SELECT 1 FROM radar_contacts x WHERE x.curator_id=c.id AND {usable})"
+        )),
+        official: one(&format!(
+            "SELECT COUNT(*) FROM radar_curators c WHERE {VISIBLE}
+             AND EXISTS(SELECT 1 FROM radar_contacts x WHERE x.curator_id=c.id AND {usable} AND {})",
+            official_domain_sql("x.valeur")
+        )),
+        in_pipeline: one(&format!(
+            "SELECT COUNT(*) FROM radar_curators WHERE {VISIBLE} AND crm_contact_id IS NOT NULL"
+        )),
     })
 }
 
@@ -603,7 +746,12 @@ fn promote_curator_inner(conn: &rusqlite::Connection, id: i64) -> Result<i64, St
         .map_err(|e| e.to_string())?;
     let email: Option<String> = conn
         .query_row(
-            "SELECT valeur FROM radar_contacts WHERE curator_id=?1 AND type='email' ORDER BY score DESC LIMIT 1",
+            &format!(
+                "SELECT valeur FROM radar_contacts x WHERE x.curator_id=?1 AND x.type='email' AND {}
+                 ORDER BY {} DESC, x.score DESC LIMIT 1",
+                pitchable_sql("x.valeur"),
+                official_domain_sql("x.valeur")
+            ),
             params![id],
             |r| r.get(0),
         )
@@ -627,8 +775,13 @@ pub fn radar_promote_bulk(state: State<'_, AppState>) -> Result<i64, String> {
     let ids: Vec<i64> = {
         let mut stmt = conn
             .prepare(
-                "SELECT id FROM radar_curators WHERE crm_contact_id IS NULL AND editorial=0
-                 AND EXISTS(SELECT 1 FROM radar_contacts c WHERE c.curator_id=radar_curators.id AND c.type='email')",
+                &format!(
+                    "SELECT id FROM radar_curators WHERE crm_contact_id IS NULL AND editorial=0
+                     AND statut != 'rejete'
+                     AND EXISTS(SELECT 1 FROM radar_contacts x WHERE x.curator_id=radar_curators.id
+                                AND x.type='email' AND {})",
+                    pitchable_sql("x.valeur")
+                ),
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt.query_map([], |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())?;

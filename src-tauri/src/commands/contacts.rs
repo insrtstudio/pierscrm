@@ -165,13 +165,14 @@ pub fn list_followups(state: State<'_, AppState>) -> Result<Vec<Followup>, Strin
     let mut stmt = conn
         .prepare(
             "SELECT c.id, c.name, c.email, c.venue, c.area, c.status,
-                    MAX(e.created_at) AS last_email,
+                    MAX(e.sent_at) AS last_email,
                     COUNT(e.id) AS cnt,
                     MAX(CASE WHEN e.opened_at IS NOT NULL THEN 1 ELSE 0 END) AS opened,
-                    CAST(julianday('now') - julianday(MAX(e.created_at)) AS INTEGER) AS days
+                    CAST(julianday('now') - julianday(MAX(e.sent_at)) AS INTEGER) AS days
              FROM contacts c
              JOIN emails e ON e.contact_id = c.id AND e.status = 'sent'
              WHERE COALESCE(c.followup_dismissed, 0) = 0
+               AND c.status NOT IN ('confirmed', 'declined')
              GROUP BY c.id
              HAVING days >= 7 AND cnt < 3
              ORDER BY days DESC

@@ -5,7 +5,7 @@ import { Plus, Pencil, Trash2, Target } from "lucide-react";
 import { deleteKpi, listKpis, saveKpi } from "../lib/api";
 import type { Kpi } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
-import { Modal, Field, useToast, useConfirm } from "../components/ui";
+import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 
 export function Kpis() {
   const { t } = useTranslation();
@@ -37,7 +37,7 @@ export function Kpis() {
           </button>
         }
       />
-      <div className="px-8 pb-10">
+      <div className="px-8 pb-10 pt-6">
         {kpis.length === 0 ? (
           <div className="card">
             <EmptyState icon={Target} title={t("common.empty")} />
@@ -58,7 +58,7 @@ export function Kpis() {
                       <Pencil size={13} />
                     </button>
                     <button
-                      className="btn-ghost px-1.5 py-1 text-rose-500"
+                      className="btn-ghost px-1.5 py-1 text-danger"
                       onClick={() =>
                         confirm(t("common.confirm_delete")) && delMut.mutate(k.id!)
                       }
@@ -75,7 +75,7 @@ export function Kpis() {
                   </div>
                   <div className="text-right">
                     <div className="text-xs text-fg-subtle">{t("kpis.actual")}</div>
-                    <div className="text-lg font-bold text-emerald-500">
+                    <div className="text-lg font-bold text-ok">
                       {k.actual || "·"}
                     </div>
                   </div>
@@ -112,18 +112,18 @@ function KpiModal({
   const { t } = useTranslation();
   const toast = useToast();
   const [form, setForm] = useState<Kpi>({ ...kpi });
-  const save = async () => {
+  const [save, busy] = useSubmit(async () => {
     await saveKpi(form);
     toast(t("common.save"), "ok");
     onSaved();
-  };
+  });
   const inp = (k: keyof Kpi) => ({
     className: "input",
     value: (form[k] as string) ?? "",
     onChange: (e: any) => setForm({ ...form, [k]: e.target.value }),
   });
   return (
-    <Modal open onClose={onClose} title={t("kpis.new_kpi")} width="max-w-lg">
+    <Modal open onClose={onClose} title={kpi.id ? t("kpis.edit_kpi") : t("kpis.new_kpi")} width="max-w-lg">
       <div className="space-y-3.5">
         <Field label={t("kpis.goal")}>
           <input {...inp("goal")} />
@@ -144,7 +144,7 @@ function KpiModal({
         <button className="btn-outline" onClick={onClose}>
           {t("common.cancel")}
         </button>
-        <button className="btn-primary" onClick={save}>
+        <button className="btn-primary" onClick={save} disabled={busy}>
           {t("common.save")}
         </button>
       </div>

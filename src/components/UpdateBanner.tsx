@@ -1,15 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { Download, RefreshCw, X } from "lucide-react";
 import type { Update } from "@tauri-apps/plugin-updater";
-import { checkForUpdate, installAndRelaunch } from "../lib/updater";
+import { checkForUpdate, installAndRelaunch, isInstalling, subscribeInstalling } from "../lib/updater";
+import { errorMessage, useToast } from "./ui";
 
 /** Silent auto-check on launch; shows a banner if an update is available. */
 export function UpdateBanner() {
   const { t } = useTranslation();
+  const toast = useToast();
   const [update, setUpdate] = useState<Update | null>(null);
   const [dismissed, setDismissed] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [localBusy, setBusy] = useState(false);
+  // Also busy while Settings is installing the same update.
+  const busy = useSyncExternalStore(subscribeInstalling, isInstalling) || localBusy;
   const [pct, setPct] = useState<number | null>(null);
 
   useEffect(() => {
@@ -30,8 +34,10 @@ export function UpdateBanner() {
         if (p.phase === "downloading" && p.total)
           setPct(Math.round((p.downloaded / p.total) * 100));
       });
-    } catch {
+    } catch (e) {
       setBusy(false);
+      setPct(null);
+      toast(`${t("update.error")}: ${errorMessage(e)}`, "error");
     }
   };
 

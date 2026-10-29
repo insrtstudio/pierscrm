@@ -408,7 +408,15 @@ pub async fn process_enrich_task(
                     Err(_) => continue,
                 }
             };
-            let body = if body.len() > 300_000 { body[..300_000].to_string() } else { body };
+            let mut body = body;
+            if body.len() > 300_000 {
+                // Cut on a char boundary: slicing mid-codepoint panics the worker.
+                let mut cut = 300_000;
+                while !body.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                body.truncate(cut);
+            }
             let (emails, phone) = extract_contacts(&body);
 
             if url != &base && !emails.is_empty() && contact_page.is_none() {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
@@ -14,7 +14,7 @@ import {
 import type { BulkProgress, BulkResult, Campaign, Contact } from "../lib/types";
 import { STATUSES } from "../lib/types";
 import { CATEGORIES } from "../lib/constants";
-import { Field, useToast, useConfirm, Modal } from "../components/ui";
+import { Field, useToast, useConfirm, Modal, errorMessage } from "../components/ui";
 
 const VARS = ["name", "venue", "event", "artist", "date", "promoter", "city", "target_date"] as const;
 const LINK_FIELDS = ["mix", "listen", "onepager", "epk"] as const;
@@ -40,6 +40,30 @@ function renderPreview(
     ...links,
   };
   return str.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => map[k] ?? `{{${k}}}`);
+}
+
+/// In-flight send state lives outside the component: the send keeps running in
+/// the backend when the user switches tab, and coming back must show its progress
+/// instead of an idle form inviting a second send.
+type BulkState = { sending: boolean; progress: BulkProgress | null; result: BulkResult | null };
+let bulkState: BulkState = { sending: false, progress: null, result: null };
+const bulkSubs = new Set<() => void>();
+function setBulk(patch: Partial<BulkState>) {
+  bulkState = { ...bulkState, ...patch };
+  bulkSubs.forEach((f) => f());
+}
+let bulkListening = false;
+function subscribeBulk(f: () => void) {
+  if (!bulkListening) {
+    bulkListening = true;
+    listen<BulkProgress>("bulk-progress", (e) => setBulk({ progress: e.payload })).catch(() => {
+      bulkListening = false;
+    });
+  }
+  bulkSubs.add(f);
+  return () => {
+    bulkSubs.delete(f);
+  };
 }
 
 export function BulkSend() {
@@ -129,29 +153,32 @@ export function BulkSend() {
   const artistName = artist?.name ?? "";
   const firstRecipient = contacts.find((c) => selected.has(c.id!));
 
-  // Prefill empty link fields from the campaign's artist profile.
+  // Prefill link fields from the campaign's artist profile. What was filled in
+  // automatically is remembered, so switching campaign replaces the previous
+  // artist's links (they used to stick) while anything typed by hand stays.
+  const autoLinks = useRef<Partial<Record<LinkKey, string>>>({});
   useEffect(() => {
-    if (!artist) return;
-    setLinks((l) => ({
-      mix: l.mix || artist.soundcloud || "",
-      listen: l.listen || artist.spotify || "",
-      onepager: l.onepager || artist.website || "",
-      epk: l.epk,
-    }));
+    const next: Partial<Record<LinkKey, string>> = {
+      mix: artist?.soundcloud || "",
+      listen: artist?.spotify || "",
+      onepager: artist?.website || "",
+    };
+    setLinks((l) => {
+      const out = { ...l };
+      for (const k of Object.keys(next) as LinkKey[]) {
+        if (!l[k] || l[k] === autoLinks.current[k]) out[k] = next[k] ?? "";
+      }
+      return out;
+    });
+    autoLinks.current = next;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaignId]);
+  }, [campaignId, artist?.id]);
 
   // Sending
-  const [sending, setSending] = useState(false);
-  const [progress, setProgress] = useState<BulkProgress | null>(null);
-  const [result, setResult] = useState<BulkResult | null>(null);
-
-  useEffect(() => {
-    const un = listen<BulkProgress>("bulk-progress", (e) => setProgress(e.payload));
-    return () => {
-      un.then((f) => f());
-    };
-  }, []);
+  const { sending, progress: liveProgress, result } = useSyncExternalStore(subscribeBulk, () => bulkState);
+  // A send started elsewhere (or before a reload) still streams progress events.
+  const progress =
+    sending || (liveProgress && liveProgress.done < liveProgress.total) ? liveProgress : null;
 
   const doSend = async () => {
     const ids = contacts.filter((c) => selected.has(c.id!) && c.email?.trim()).map((c) => c.id!);
@@ -159,8 +186,11 @@ export function BulkSend() {
     if (!subject.trim() || !body.trim()) return toast(t("bulk.need_message"), "error");
     if (!confirm(t("bulk.confirm", { count: ids.length }))) return;
 
-    setSending(true);
-    setProgress({ done: 0, total: ids.length, sent: 0, failed: 0, skipped: 0 });
+    setBulk({
+      sending: true,
+      result: null,
+      progress: { done: 0, total: ids.length, sent: 0, failed: 0, skipped: 0 },
+    });
     try {
       const extra_vars = Object.fromEntries(
         Object.entries(links).filter(([, v]) => v.trim())
@@ -172,16 +202,16 @@ export function BulkSend() {
         body,
         extra_vars,
       });
-      setResult(res);
+      setBulk({ result: res });
       qc.invalidateQueries({ queryKey: ["contacts"] });
       qc.invalidateQueries({ queryKey: ["emails"] });
       qc.invalidateQueries({ queryKey: ["campaigns"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     } catch (e: any) {
-      toast(e?.toString?.() ?? "error", "error");
+      // Includes the backend refusing a second concurrent send.
+      toast(errorMessage(e), "error");
     } finally {
-      setSending(false);
-      setProgress(null);
+      setBulk({ sending: false, progress: null });
     }
   };
 
@@ -396,7 +426,7 @@ export function BulkSend() {
 
         {/* Send bar */}
         <div className="mt-5 flex items-center gap-4 border-t border-border pt-4">
-          {sending && progress ? (
+          {progress ? (
             <div className="flex-1">
               <div className="mb-1 flex justify-between text-xs text-fg-subtle">
                 <span>{t("bulk.sending", { done: progress.done, total: progress.total })}</span>
@@ -420,7 +450,7 @@ export function BulkSend() {
           )}
           <button
             className="btn-primary"
-            disabled={sending || selectedCount === 0 || !subject.trim() || !body.trim()}
+            disabled={sending || !!progress || selectedCount === 0 || !subject.trim() || !body.trim()}
             onClick={doSend}
           >
             <Send size={15} />
@@ -431,24 +461,24 @@ export function BulkSend() {
 
       {/* Result modal */}
       {result && (
-        <Modal open onClose={() => setResult(null)} title={t("bulk.done_title")} width="max-w-md">
+        <Modal open onClose={() => setBulk({ result: null })} title={t("bulk.done_title")} width="max-w-md">
           <div className="grid grid-cols-3 gap-3">
-            <ResultTile label={t("bulk.r_sent")} value={result.sent} tone="text-emerald-500" />
-            <ResultTile label={t("bulk.r_failed")} value={result.failed} tone="text-rose-500" />
+            <ResultTile label={t("bulk.r_sent")} value={result.sent} tone="text-ok" />
+            <ResultTile label={t("bulk.r_failed")} value={result.failed} tone="text-danger" />
             <ResultTile label={t("bulk.r_skipped")} value={result.skipped} tone="text-fg-subtle" />
           </div>
           {result.errors.length > 0 && (
             <div className="mt-4 max-h-40 overflow-y-auto rounded-lg bg-muted p-3 text-2xs text-fg-subtle">
               {result.errors.slice(0, 30).map((e, i) => (
                 <div key={i} className="flex items-start gap-1.5">
-                  <X size={11} className="mt-0.5 shrink-0 text-rose-500" />
+                  <X size={11} className="mt-0.5 shrink-0 text-danger" />
                   {e}
                 </div>
               ))}
             </div>
           )}
           <div className="mt-5 flex justify-end">
-            <button className="btn-primary" onClick={() => setResult(null)}>
+            <button className="btn-primary" onClick={() => setBulk({ result: null })}>
               {t("bulk.close")}
             </button>
           </div>

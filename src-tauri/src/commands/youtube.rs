@@ -63,10 +63,7 @@ fn http() -> reqwest::Client {
 
 /// Channel ids surfaced by a genre query (music curators / promo channels).
 pub async fn search_channel_ids(key: &str, query: &str, max: i64) -> Result<Vec<String>, String> {
-    let q: String = query
-        .bytes()
-        .map(|b| if b == b' ' { "%20".to_string() } else { (b as char).to_string() })
-        .collect();
+    let q = crate::commands::musicbrainz::urlencoding(query);
     let url = format!(
         "{}/search?part=snippet&type=channel&maxResults={}&q={}&key={}",
         API,

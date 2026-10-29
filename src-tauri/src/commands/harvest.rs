@@ -23,7 +23,24 @@ use tauri::{AppHandle, Emitter, State};
 const PAGE_SIZE: i64 = 100;
 const POLITENESS_MS: u64 = 1500;
 const WINDOW_DAYS: i64 = 90;
-const STALE_LOCK_SECS: i64 = 300;
+
+/// Runs that currently have live workers. Guards against a second set of workers
+/// on the same run (double-click on Resume, Resume before Stop has drained), which
+/// would process in-flight tasks twice.
+static ACTIVE_RUNS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<i64>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn run_is_active(run_id: i64) -> bool {
+    ACTIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).contains(&run_id)
+}
+
+/// Removes the run from ACTIVE_RUNS when the coordinator ends, even on panic.
+struct ActiveRunGuard(i64);
+impl Drop for ActiveRunGuard {
+    fn drop(&mut self) {
+        ACTIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
+}
 
 // ---------------- Progress event ----------------
 
@@ -236,6 +253,9 @@ pub async fn vi_resume_run(
     state: State<'_, AppState>,
     run_id: i64,
 ) -> Result<(), String> {
+    if run_is_active(run_id) {
+        return Err("Cette collecte tourne encore, attends qu'elle soit arrêtée.".into());
+    }
     // Clear any stale stop flag first, otherwise the resumed run would inherit the
     // cancel and immediately exit doing nothing.
     state
@@ -275,7 +295,9 @@ fn setting_i64(conn: &rusqlite::Connection, key: &str) -> Option<i64> {
 /// A run's completion stats, stored as JSON in vi_runs.stats and shown as a bento.
 /// "new" counts use created_at >= started_at (one run at a time in practice).
 fn run_final_stats(pool: &DbPool, run_id: i64) -> String {
-    let conn = pool.get().unwrap();
+    let Ok(conn) = pool.get() else {
+        return "{}".into();
+    };
     let one = |sql: &str, p: &[&dyn rusqlite::ToSql]| -> i64 {
         conn.query_row(sql, p, |r| r.get(0)).unwrap_or(0)
     };
@@ -352,18 +374,23 @@ async fn drain(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i64, po
                 continue;
             }
         };
-        let task: Option<(i64, String, String, i64, i64)> = conn
+        let task: rusqlite::Result<(i64, String, String, i64, i64)> = conn
             .query_row(
                 "UPDATE vi_tasks SET statut='en_cours', locked_at=datetime('now'), updated_at=datetime('now')
                  WHERE id = (SELECT id FROM vi_tasks WHERE run_id=?1 AND statut='en_attente' ORDER BY id LIMIT 1)
                  RETURNING id, type, payload, tentatives, max_tentatives",
                 params![run_id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-            )
-            .ok();
+            );
         drop(conn);
-        let Some((task_id, task_type, payload, tentatives, max_tentatives)) = task else {
-            break; // no more pending tasks
+        let (task_id, task_type, payload, tentatives, max_tentatives) = match task {
+            Ok(t) => t,
+            Err(rusqlite::Error::QueryReturnedNoRows) => break, // no more pending tasks
+            // SQLITE_BUSY under write contention is not "queue empty": retry.
+            Err(_) => {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                continue;
+            }
         };
 
         // Tell the UI exactly what this worker is doing right now.
@@ -416,30 +443,71 @@ async fn drain(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i64, po
 /// Spawn the run: N concurrent workers (setting `vi_workers`, default 3) drain the
 /// task queue, then a single finalisation marks the run and stores its stats.
 pub fn spawn_worker(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i64) {
+    if !ACTIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).insert(run_id) {
+        return; // workers already draining this run
+    }
     tauri::async_runtime::spawn(async move {
+        let _active = ActiveRunGuard(run_id);
         emit(&app, &pool, run_id, Some("Démarrage".into()));
-        let (workers, politeness) = {
-            let conn = pool.get().unwrap();
-            let w = setting_i64(&conn, "vi_workers").unwrap_or(3).clamp(1, 6);
-            let p = setting_i64(&conn, "vi_politeness_ms").unwrap_or(1000).clamp(200, 5000) as u64;
-            (w, p)
+        let (workers, politeness) = match pool.get() {
+            Ok(conn) => (
+                setting_i64(&conn, "vi_workers").unwrap_or(3).clamp(1, 6),
+                setting_i64(&conn, "vi_politeness_ms").unwrap_or(1000).clamp(200, 5000) as u64,
+            ),
+            Err(_) => (3, 1000),
         };
 
-        let mut handles = Vec::new();
-        for _ in 0..workers {
-            let (pool, cancels, app) = (pool.clone(), cancels.clone(), app.clone());
-            handles.push(tauri::async_runtime::spawn(drain(
-                pool, cancels, app, run_id, politeness,
-            )));
-        }
-        for h in handles {
+        let spawn_drains = || {
+            let mut handles = Vec::new();
+            for _ in 0..workers {
+                let (pool, cancels, app) = (pool.clone(), cancels.clone(), app.clone());
+                handles.push(tauri::async_runtime::spawn(drain(
+                    pool, cancels, app, run_id, politeness,
+                )));
+            }
+            handles
+        };
+
+        for h in spawn_drains() {
             let _ = h.await;
+        }
+
+        // A Radar scan chains straight into the email hunt: a curator with no
+        // address is not actionable, so the second phase is queued into the same
+        // run and drained by a second pass rather than left to a separate button.
+        let is_radar_scan = pool
+            .get()
+            .ok()
+            .and_then(|c| {
+                c.query_row("SELECT type FROM vi_runs WHERE id=?1", params![run_id], |r| {
+                    r.get::<_, String>(0)
+                })
+                .ok()
+            })
+            .as_deref()
+            == Some("radar_harvest");
+        let stopped = || cancels.lock().unwrap_or_else(|e| e.into_inner()).contains(&run_id);
+        if is_radar_scan && !stopped() {
+            let queued = crate::commands::radar::queue_enrich_tasks(&pool, run_id);
+            if queued > 0 {
+                emit(&app, &pool, run_id, Some(format!("Recherche d'emails ({queued})")));
+                for h in spawn_drains() {
+                    let _ = h.await;
+                }
+            }
         }
 
         let cancelled = cancels.lock().unwrap_or_else(|e| e.into_inner()).remove(&run_id);
 
         qualify(&pool);
-        let conn = pool.get().unwrap();
+        // Finalisation must not panic on a starved pool, or the run would stay
+        // 'en_cours' forever: wait for a connection instead.
+        let conn = loop {
+            match pool.get() {
+                Ok(c) => break c,
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(500)).await,
+            }
+        };
         let remaining: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM vi_tasks WHERE run_id=?1 AND statut IN ('en_attente','en_cours')",

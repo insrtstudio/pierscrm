@@ -273,8 +273,11 @@ fn render_template(input: &str, vars: &HashMap<String, String>) -> String {
                 continue;
             }
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        // Push the whole char, not a single byte: `bytes[i] as char` turned every
+        // accented letter into mojibake ("é" -> "Ã©").
+        let ch = input[i..].chars().next().unwrap_or('\u{FFFD}');
+        out.push(ch);
+        i += ch.len_utf8();
     }
     out
 }
@@ -323,6 +326,29 @@ fn message_body(
         .singlepart(SinglePart::html(html))
 }
 
+/// Sender as a structured mailbox: formatting "Name <addr>" by hand broke (and
+/// silently dropped the name) when the display name held a comma or quotes.
+fn sender_mailbox(cfg: &SmtpConfig) -> Result<Mailbox, String> {
+    let addr = cfg
+        .from_email
+        .trim()
+        .parse()
+        .map_err(|_| "Invalid sender email address".to_string())?;
+    let name = cfg.from_name.trim();
+    Ok(Mailbox::new(if name.is_empty() { None } else { Some(name.to_string()) }, addr))
+}
+
+/// Only one bulk send at a time: a second one (page left and re-opened mid-send)
+/// would mail the same recipients twice.
+static BULK_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+struct BulkGuard;
+impl Drop for BulkGuard {
+    fn drop(&mut self) {
+        BULK_RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+
 fn build_message(
     from: &Mailbox,
     to: &Mailbox,
@@ -336,6 +362,7 @@ fn build_message(
         .from(from.clone())
         .to(to.clone())
         .subject(subject.to_string())
+        .message_id(None)
         .multipart(message_body(body, signature, tracking_base, token))
         .map_err(|e| e.to_string())
 }
@@ -386,10 +413,7 @@ pub fn send_email(
         return Err("Sender email is not configured (Settings → Email).".into());
     }
 
-    let from_mbox: Mailbox = format!("{} <{}>", cfg.from_name, cfg.from_email)
-        .parse()
-        .or_else(|_| cfg.from_email.parse())
-        .map_err(|_| "Invalid sender email address".to_string())?;
+    let from_mbox = sender_mailbox(&cfg)?;
     let to_mbox: Mailbox = to
         .trim()
         .parse()
@@ -407,6 +431,7 @@ pub fn send_email(
         .from(from_mbox)
         .to(to_mbox)
         .subject(subject.clone())
+        .message_id(None)
         .multipart(message_body(&body, &signature, &tracking_base, &token))
         .map_err(|e| e.to_string())?;
 
@@ -536,14 +561,15 @@ pub fn send_bulk(
     body: String,
     extra_vars: Option<HashMap<String, String>>,
 ) -> Result<BulkResult, String> {
+    if BULK_RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("Un envoi groupé est déjà en cours.".into());
+    }
+    let _bulk = BulkGuard;
     let cfg = load_smtp(&state)?;
     if cfg.from_email.trim().is_empty() {
         return Err("Sender email is not configured (Settings → Email).".into());
     }
-    let from_mbox: Mailbox = format!("{} <{}>", cfg.from_name, cfg.from_email)
-        .parse()
-        .or_else(|_| cfg.from_email.parse())
-        .map_err(|_| "Invalid sender email address".to_string())?;
+    let from_mbox = sender_mailbox(&cfg)?;
     let transport = build_transport(&cfg)?;
 
     let conn = state.pool.get().map_err(|e| e.to_string())?;
@@ -600,6 +626,9 @@ pub fn send_bulk(
     let total = contact_ids.len();
     let (mut sent, mut failed, mut skipped) = (0usize, 0usize, 0usize);
     let mut errors: Vec<String> = Vec::new();
+    // Several contacts can share one address (a promoter booking two venues):
+    // mail it once per batch.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (idx, cid) in contact_ids.iter().enumerate() {
         let row = conn
@@ -653,6 +682,12 @@ pub fn send_bulk(
         let subj = render_template(&subject, &vars);
         let bod = render_template(&body, &vars);
 
+        if !seen.insert(email.trim().to_lowercase()) {
+            skipped += 1;
+            emit(idx + 1, sent, failed, skipped, Some(email.clone()));
+            continue;
+        }
+
         let to_mbox: Mailbox = match email.trim().parse() {
             Ok(m) => m,
             Err(_) => {
@@ -664,7 +699,16 @@ pub fn send_bulk(
         };
 
         let token = gen_token();
-        let msg = build_message(&from_mbox, &to_mbox, &subj, &bod, &signature, &tracking_base, &token)?;
+        // One malformed message must not abort the batch (and hide what was sent).
+        let msg = match build_message(&from_mbox, &to_mbox, &subj, &bod, &signature, &tracking_base, &token) {
+            Ok(m) => m,
+            Err(e) => {
+                failed += 1;
+                errors.push(format!("{}: {}", email, e));
+                emit(idx + 1, sent, failed, skipped, Some(email.clone()));
+                continue;
+            }
+        };
         let (status, err) = match transport.send(&msg) {
             Ok(_) => ("sent", None),
             Err(e) => ("failed", Some(e.to_string())),

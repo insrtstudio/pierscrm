@@ -28,6 +28,27 @@ pub fn run() {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
 
+            // Window placement. `center` + `maximized` in tauri.conf.json raced on macOS
+            // (the window could land offset from the screen's center), so the window
+            // starts hidden and we fit it to the work area of the screen it opens on
+            // (menu bar and Dock excluded) before showing it.
+            if let Some(win) = app.get_webview_window("main") {
+                let monitor = win
+                    .current_monitor()
+                    .ok()
+                    .flatten()
+                    .or_else(|| win.primary_monitor().ok().flatten());
+                if let Some(m) = monitor {
+                    let area = m.work_area();
+                    let _ = win.set_size(area.size);
+                    let _ = win.set_position(area.position);
+                } else {
+                    let _ = win.center();
+                }
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+
             // Native menu bar (macOS) — forwards clicks to the frontend.
             let menu = menu::build(app.handle())?;
             app.set_menu(menu)?;

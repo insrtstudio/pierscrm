@@ -69,9 +69,11 @@ export function Import() {
       ],
     });
     if (!selected || typeof selected !== "string") return;
-    setPath(selected);
     try {
       const p = await previewFile(selected);
+      // Only switch to the new file once it parsed: setting the path first left
+      // the previous file's preview and mapping paired with an unreadable path.
+      setPath(selected);
       setPreview(p);
       setSheetIdx(0);
       applyGuess(p, 0);
@@ -139,11 +141,11 @@ export function Import() {
   return (
     <div>
       <PageHeader title={t("import.title")} subtitle={t("import.subtitle")} />
-      <div className="px-8 pb-10">
+      <div className="px-8 pb-10 pt-6">
         {!preview ? (
           <button
             onClick={pickFile}
-            className="card flex w-full flex-col items-center justify-center gap-3 border-2 border-dashed border-border py-20 text-center transition-colors hover:border-accent hover:bg-muted/40"
+            className="card flex w-full flex-col items-center justify-center gap-3 border border-dashed border-border py-20 text-center transition-colors hover:border-accent hover:bg-muted/40"
           >
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent/10 text-accent">
               <Upload size={24} />
@@ -284,7 +286,7 @@ export function Import() {
             {/* Run */}
             <div className="flex items-center justify-end gap-3">
               {!hasName && (
-                <span className="text-xs text-amber-500">
+                <span className="text-xs text-warn">
                   {t("import.need_name")}
                 </span>
               )}

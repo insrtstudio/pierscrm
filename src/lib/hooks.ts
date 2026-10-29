@@ -28,3 +28,31 @@ export function useElementHeight<T extends HTMLElement>() {
   }, []);
   return { ref, height };
 }
+
+/// App-level intents from the native menu ("new:event", "check-updates"...).
+/// The menu navigates first, and a lazy page may not be mounted yet when the
+/// intent fires, so the last one is parked here and consumed on mount.
+let pendingIntent: string | null = null;
+
+export function emitIntent(id: string) {
+  pendingIntent = id;
+  window.dispatchEvent(new CustomEvent("app:intent", { detail: id }));
+}
+
+export function useAppIntent(id: string, handler: () => void) {
+  const ref = useRef(handler);
+  ref.current = handler;
+  useEffect(() => {
+    if (pendingIntent === id) {
+      pendingIntent = null;
+      ref.current();
+    }
+    const h = (e: Event) => {
+      if ((e as CustomEvent).detail !== id) return;
+      pendingIntent = null;
+      ref.current();
+    };
+    window.addEventListener("app:intent", h);
+    return () => window.removeEventListener("app:intent", h);
+  }, [id]);
+}

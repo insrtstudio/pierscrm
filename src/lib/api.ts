@@ -259,22 +259,11 @@ export const radarHarvest = (genres: string[], sources: string[], limit?: number
   invoke<number>("radar_harvest", { genres, sources, limit: limit ?? null });
 export const radarEnrich = (force?: boolean) =>
   invoke<number>("radar_enrich", { force: force ?? false });
-export const radarList = (p: {
-  statut?: string;
-  source?: string;
-  genre?: string;
-  search?: string;
-  has_email?: boolean;
-  hide_editorial?: boolean;
-  limit?: number;
-}) =>
+/// `filter` is "all", "email" (addressable) or "pipeline" (already promoted).
+export const radarList = (p: { filter?: string; search?: string; limit?: number }) =>
   invoke<CuratorRow[]>("radar_list", {
-    statut: p.statut,
-    source: p.source,
-    genre: p.genre,
+    filter: p.filter,
     search: p.search,
-    hasEmail: p.has_email,
-    hideEditorial: p.hide_editorial,
     limit: p.limit,
   });
 export const radarStats = () => invoke<RadarStats>("radar_stats");

@@ -28,7 +28,7 @@ import {
 import type { PulsePoint } from "../lib/types";
 import { PageHeader, EmptyState, Loader } from "../components/Layout";
 import { Field, useToast } from "../components/ui";
-import { euro } from "../lib/format";
+import { euro, parseDay, toDay, today } from "../lib/format";
 
 type Tab = "overview" | "playlists" | "planner";
 
@@ -38,7 +38,7 @@ export function Pulse() {
   const tabs: Tab[] = ["overview", "playlists", "planner"];
   return (
     <div>
-      <PageHeader kicker="PULSE" title={t("pulse.title")} subtitle={t("pulse.subtitle")} />
+      <PageHeader title={t("pulse.title")} subtitle={t("pulse.subtitle")} />
       <div className="px-8 py-6">
         <div className="segmented mb-6">
           {tabs.map((tb) => (
@@ -119,7 +119,7 @@ function OverviewTab() {
 
   const delta = (d?: number | null) =>
     d == null ? null : (
-      <span className={clsx("text-2xs font-bold tabular", d > 0 ? "text-emerald-500" : d < 0 ? "text-accent" : "text-fg-faint")}>
+      <span className={clsx("text-2xs font-bold tabular", d > 0 ? "text-ok" : d < 0 ? "text-accent" : "text-fg-faint")}>
         {d > 0 ? "+" : ""}
         {d}
       </span>
@@ -157,7 +157,7 @@ function OverviewTab() {
         <div className="segmented">
           {[30, 90, 180].map((d) => (
             <button key={d} data-active={days === d} className="segmented-item" onClick={() => setDays(d)}>
-              {d}j
+              {t("pulse.days_short", { count: d })}
             </button>
           ))}
         </div>
@@ -177,32 +177,32 @@ function OverviewTab() {
         <Loader />
       ) : (
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-          <div className="border-2 border-border px-4 py-3">
+          <div className="border border-border px-4 py-3">
             <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-black tabular text-accent">{kpis?.artist_popularity ?? "·"}</span>
+              <span className="font-condensed text-2xl tabular text-accent-2">{kpis?.artist_popularity ?? "·"}</span>
               {delta(kpis?.artist_delta7)}
             </div>
             <div className="text-2xs uppercase tracking-wide text-fg-faint">{t("pulse.k_artist_pop")}</div>
           </div>
-          <div className="border-2 border-border px-4 py-3">
+          <div className="border border-border px-4 py-3">
             <div className="flex items-baseline gap-2">
-              <span className="truncate text-sm font-black">{kpis?.best_track_name ?? "·"}</span>
-              <span className="text-2xl font-black tabular text-accent-2">{kpis?.best_track_popularity ?? ""}</span>
+              <span className="truncate text-sm font-semibold">{kpis?.best_track_name ?? "·"}</span>
+              <span className="font-condensed text-2xl tabular text-accent-2">{kpis?.best_track_popularity ?? ""}</span>
               {delta(kpis?.best_track_delta7)}
             </div>
             <div className="text-2xs uppercase tracking-wide text-fg-faint">{t("pulse.k_best_track")}</div>
           </div>
-          <div className="border-2 border-border px-4 py-3">
-            <div className="text-2xl font-black tabular">{euro(kpis?.spend_30d ?? 0)}</div>
+          <div className="border border-border px-4 py-3">
+            <div className="font-condensed text-2xl tabular">{euro(kpis?.spend_30d ?? 0)}</div>
             <div className="text-2xs uppercase tracking-wide text-fg-faint">{t("pulse.k_spend30")}</div>
           </div>
-          <div className="border-2 border-border px-4 py-3">
+          <div className="border border-border px-4 py-3">
             <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-black tabular">
+              <span className="font-condensed text-2xl tabular">
                 {kpis?.cpr_7d != null ? kpis.cpr_7d.toFixed(2) : "·"}
               </span>
               <span className="text-2xs text-fg-subtle">
-                {t("pulse.vs")} {kpis?.cpr_30d != null ? kpis.cpr_30d.toFixed(2) : "·"} (30j)
+                {t("pulse.vs")} {kpis?.cpr_30d != null ? kpis.cpr_30d.toFixed(2) : "·"} ({t("pulse.days_short", { count: 30 })})
               </span>
             </div>
             <div className="text-2xs uppercase tracking-wide text-fg-faint">{t("pulse.k_cpr")}</div>
@@ -223,13 +223,13 @@ function OverviewTab() {
             <span className="inline-block h-0.5 w-5 bg-accent" /> {t("pulse.legend_artist")}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="inline-block h-0.5 w-5 bg-emerald-500" /> {t("pulse.legend_track")}
+            <span className="inline-block h-0.5 w-5 bg-ok" /> {t("pulse.legend_track")}
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="inline-block h-2.5 w-2.5 bg-accent-2/40" /> {t("pulse.legend_spend")}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="inline-block h-3 w-0.5 border-l-2 border-dashed border-fg-subtle" /> {t("pulse.legend_release")}
+            <span className="inline-block h-3 w-0.5 border-l border-dashed border-fg-subtle" /> {t("pulse.legend_release")}
           </span>
         </div>
       </div>
@@ -259,14 +259,14 @@ function OverviewTab() {
               <span
                 key={x.id}
                 className={clsx(
-                  "inline-flex items-center gap-2 border-2 px-2.5 py-1 text-xs font-semibold",
+                  "inline-flex items-center gap-2 border px-2.5 py-1 text-xs font-semibold",
                   x.is_active ? "border-border" : "border-border text-fg-faint line-through"
                 )}
               >
                 <Music2 size={12} className="text-accent-2" />
                 {x.name || x.track_spotify_id}
                 {x.latest_popularity != null && (
-                  <span className="tabular font-black text-accent">{x.latest_popularity}</span>
+                  <span className="font-condensed tabular text-accent-2">{x.latest_popularity}</span>
                 )}
                 <button
                   className="text-fg-faint hover:text-accent"
@@ -362,7 +362,7 @@ function OverlayChart({ points, releases }: { points: PulsePoint[]; releases: [s
           ))}
           {/* popularity lines (left axis 0-100) */}
           <path d={line((p) => p.artist_pop)} fill="none" className="stroke-accent" strokeWidth={2} />
-          <path d={line((p) => p.track_pop)} fill="none" className="stroke-emerald-500" strokeWidth={2} />
+          <path d={line((p) => p.track_pop)} fill="none" className="stroke-ok" strokeWidth={2} />
         </svg>
         {/* left/right axis hints */}
         <div className="pointer-events-none absolute left-1 top-1 text-2xs tabular text-fg-faint">100</div>
@@ -424,7 +424,7 @@ function PlaylistsTab() {
     d == null ? (
       <span className="text-fg-faint">·</span>
     ) : (
-      <span className={clsx("font-bold tabular", d > 0 ? "text-emerald-500" : d < 0 ? "text-accent" : "text-fg-faint")}>
+      <span className={clsx("font-bold tabular", d > 0 ? "text-ok" : d < 0 ? "text-accent" : "text-fg-faint")}>
         {d > 0 ? "+" : ""}
         {d.toLocaleString()}
       </span>
@@ -459,8 +459,8 @@ function PlaylistsTab() {
               <tr>
                 <th>{t("pulse.w_name")}</th>
                 <th className="text-right">{t("pulse.w_followers")}</th>
-                <th className="text-right">Δ 7j</th>
-                <th className="text-right">Δ 30j</th>
+                <th className="text-right">{t("pulse.delta_days", { count: 7 })}</th>
+                <th className="text-right">{t("pulse.delta_days", { count: 30 })}</th>
                 <th>{t("pulse.w_trend")}</th>
                 <th></th>
               </tr>
@@ -472,7 +472,7 @@ function PlaylistsTab() {
                     <div className="font-semibold">
                       {r.name || r.playlist_spotify_id}
                       {r.contains_our_track && (
-                        <span className="badge ml-2 bg-emerald-500/15 text-emerald-500">{t("pulse.w_ours")}</span>
+                        <span className="badge ml-2 bg-ok/15 text-ok">{t("pulse.w_ours")}</span>
                       )}
                     </div>
                     {r.owner_name && <div className="text-2xs text-fg-subtle">{r.owner_name}</div>}
@@ -538,16 +538,18 @@ function PlannerTab() {
   const toast = useToast();
   const [budget, setBudget] = useState(300);
   const [days, setDays] = useState(14);
-  const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [startDate, setStartDate] = useState(today);
 
   const alloc = useMemo(() => frontLoad(budget, days), [budget, days]);
   const maxA = Math.max(1, ...alloc);
   const dates = useMemo(
     () =>
       alloc.map((_, i) => {
-        const d = new Date(startDate + "T00:00:00");
+        // Local calendar days throughout: toISOString() printed the UTC day,
+        // one day early east of Greenwich. A cleared date field falls back to today.
+        const d = parseDay(startDate) ?? parseDay(today())!;
         d.setDate(d.getDate() + i);
-        return d.toISOString().slice(0, 10);
+        return toDay(d);
       }),
     [alloc, startDate]
   );

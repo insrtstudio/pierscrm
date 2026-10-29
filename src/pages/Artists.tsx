@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -7,6 +7,7 @@ import { listArtists } from "../lib/api";
 import type { Artist } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
 import { ArtistModal } from "./ArtistDetail";
+import { useAppIntent } from "../lib/hooks";
 
 export function Artists() {
   const { t } = useTranslation();
@@ -18,13 +19,7 @@ export function Artists() {
   });
   const [creating, setCreating] = useState(false);
 
-  useEffect(() => {
-    const h = (e: Event) => {
-      if ((e as CustomEvent).detail === "new:artist") setCreating(true);
-    };
-    window.addEventListener("app:new", h);
-    return () => window.removeEventListener("app:new", h);
-  }, []);
+  useAppIntent("new:artist", () => setCreating(true));
 
   return (
     <div>
@@ -38,7 +33,7 @@ export function Artists() {
           </button>
         }
       />
-      <div className="px-8 pb-10">
+      <div className="px-8 pb-10 pt-6">
         {artists.length === 0 ? (
           <div className="card">
             <EmptyState

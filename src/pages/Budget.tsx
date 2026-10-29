@@ -10,7 +10,7 @@ import {
 import type { BudgetItem } from "../lib/types";
 import { euro } from "../lib/format";
 import { PageHeader } from "../components/Layout";
-import { Modal, Field, useToast, useConfirm } from "../components/ui";
+import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 
 export function Budget() {
   const { t } = useTranslation();
@@ -64,32 +64,32 @@ export function Budget() {
           </button>
         }
       />
-      <div className="space-y-6 px-8 pb-10">
+      <div className="space-y-6 px-8 pb-10 pt-6">
         {/* Summary */}
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <Summary
             icon={TrendingDown}
             label={t("budget.total_expense")}
             value={`${euro(totals.min)} – ${euro(totals.max)}`}
-            tone="text-rose-500"
+            tone="text-danger"
           />
           <Summary
             icon={TrendingDown}
             label={t("budget.actual")}
             value={euro(totals.spent)}
-            tone="text-rose-500"
+            tone="text-danger"
           />
           <Summary
             icon={TrendingUp}
             label={t("budget.total_revenue")}
             value={euro(totals.rev)}
-            tone="text-emerald-500"
+            tone="text-ok"
           />
           <Summary
             icon={TrendingUp}
             label={t("budget.net_estimate")}
             value={euro(totals.net)}
-            tone={totals.net >= 0 ? "text-emerald-500" : "text-rose-500"}
+            tone={totals.net >= 0 ? "text-ok" : "text-danger"}
           />
         </div>
 
@@ -162,18 +162,18 @@ function BudgetTable({
   if (rows.length === 0) return null;
   return (
     <div className="card overflow-hidden">
-      <div className="border-b border-border px-5 py-3 text-sm font-semibold">
+      <div className="eyebrow border-b border-border px-5 py-3 text-fg">
         {title}
       </div>
       <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-border text-left text-xs text-fg-subtle">
-            <th className="px-5 py-2 font-medium">{t("budget.item")}</th>
-            {!revenue && <th className="px-3 py-2 text-right font-medium">{t("budget.min")}</th>}
-            {!revenue && <th className="px-3 py-2 text-right font-medium">{t("budget.max")}</th>}
-            <th className="px-3 py-2 text-right font-medium">{t("budget.actual")}</th>
-            <th className="px-5 py-2 font-medium">{t("budget.notes")}</th>
+          <tr className="border-b border-border text-left font-mono text-[10.5px] uppercase tracking-[0.14em] text-fg-subtle">
+            <th className="px-5 py-2 font-normal">{t("budget.item")}</th>
+            {!revenue && <th className="px-3 py-2 text-right font-normal">{t("budget.min")}</th>}
+            {!revenue && <th className="px-3 py-2 text-right font-normal">{t("budget.max")}</th>}
+            <th className="px-3 py-2 text-right font-normal">{t("budget.actual")}</th>
+            <th className="px-5 py-2 font-normal">{t("budget.notes")}</th>
             <th className="w-20 px-3 py-2"></th>
           </tr>
         </thead>
@@ -208,7 +208,7 @@ function BudgetTable({
                     <Pencil size={14} />
                   </button>
                   <button
-                    className="btn-ghost px-2 py-1.5 text-rose-500"
+                    className="btn-ghost px-2 py-1.5 text-danger"
                     onClick={() => onDelete(i.id!)}
                   >
                     <Trash2 size={14} />
@@ -237,14 +237,14 @@ function BudgetModal({
   const toast = useToast();
   const [form, setForm] = useState<BudgetItem>({ ...item });
   const num = (v: string) => (v === "" ? 0 : parseFloat(v));
-  const save = async () => {
+  const [save, busy] = useSubmit(async () => {
     if (!form.item.trim()) return;
     await saveBudgetItem(form);
     toast(t("common.save"), "ok");
     onSaved();
-  };
+  });
   return (
-    <Modal open onClose={onClose} title={t("budget.new_item")} width="max-w-lg">
+    <Modal open onClose={onClose} title={item.id ? t("budget.edit_item") : t("budget.new_item")} width="max-w-lg">
       <div className="grid grid-cols-2 gap-x-4 gap-y-3">
         <Field label={t("budget.item")} className="col-span-2">
           <input
@@ -317,7 +317,7 @@ function BudgetModal({
         <button className="btn-outline" onClick={onClose}>
           {t("common.cancel")}
         </button>
-        <button className="btn-primary" onClick={save}>
+        <button className="btn-primary" onClick={save} disabled={busy}>
           {t("common.save")}
         </button>
       </div>

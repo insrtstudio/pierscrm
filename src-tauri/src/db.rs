@@ -76,7 +76,16 @@ pub fn init_pool(db_path: &Path) -> Result<DbPool, String> {
 /// planner statistics only for tables that changed enough to need it, which is
 /// what makes the query planner pick the new composite indexes instead of a
 /// full scan. Both are best-effort: a failure here must never block startup.
+///
+/// Crash recovery: nothing can be running at launch, so a run still 'en_cours'
+/// was cut short by a quit or crash. It is marked 'arrete' (resumable) and its
+/// claimed tasks go back to the queue, otherwise the UI shows it running forever.
 fn maintenance(conn: &rusqlite::Connection) {
+    let _ = conn.execute_batch(
+        "UPDATE vi_runs SET statut='arrete', finished_at=COALESCE(finished_at, datetime('now'))
+           WHERE statut='en_cours';
+         UPDATE vi_tasks SET statut='en_attente', locked_at=NULL WHERE statut='en_cours';",
+    );
     let _ = conn.execute_batch(
         "PRAGMA wal_checkpoint(TRUNCATE);
          PRAGMA analysis_limit = 1000;
@@ -593,6 +602,22 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     ] {
         let _ = conn.execute(stmt, []);
     }
+
+    // Labels used to be stored under the source name 'musicbrainz' while the UI
+    // called that source 'labels', so filtering on it never matched anything.
+    // Align the existing rows with the name the app uses everywhere else.
+    let _ = conn.execute(
+        "UPDATE radar_curators SET source='labels' WHERE source='musicbrainz'",
+        [],
+    );
+
+    // The curator score was computed as a REAL and stored as such in an INTEGER
+    // column (SQLite keeps the expression's type). Readers that expect an integer
+    // error out on those rows. Normalise the ones already written.
+    let _ = conn.execute(
+        "UPDATE radar_curators SET score = CAST(score AS INTEGER) WHERE typeof(score) != 'integer'",
+        [],
+    );
 
     // Fresh indexes are invisible to the planner until it has statistics for
     // them, and this database had never been ANALYZEd. Run it once, recorded in
