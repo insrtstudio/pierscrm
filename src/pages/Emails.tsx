@@ -3,6 +3,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { NewResidencyModal } from "./Residency";
+import { ReplyDeskTab } from "../components/ReplyDesk";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Plus,
@@ -72,7 +73,7 @@ import { daysUntil, formatDateTime } from "../lib/format";
 
 const LINK_FIELDS = ["mix", "listen", "onepager", "epk"] as const;
 
-type Tab = "compose" | "bulk" | "followups" | "campaigns" | "templates" | "log" | "guardrails";
+type Tab = "replies" | "compose" | "bulk" | "followups" | "campaigns" | "templates" | "log" | "guardrails";
 
 const CAMPAIGN_COLORS = [
   "#ff5a1f", "#f2b880", "#6f7782", "#3fb27f", "#d9430f", "#8b929c", "#4a4744", "#ffa66b",
@@ -90,7 +91,7 @@ const CAMPAIGN_STATUS_STYLE: Record<string, string> = {
 /// history, templates). Both render this component with their own tabs.
 const SECTIONS: Record<"campaigns" | "outbox", Tab[]> = {
   campaigns: ["campaigns", "bulk"],
-  outbox: ["followups", "compose", "log", "templates", "guardrails"],
+  outbox: ["replies", "followups", "compose", "log", "templates", "guardrails"],
 };
 
 export function Emails({ section = "outbox" }: { section?: "campaigns" | "outbox" }) {
@@ -99,6 +100,11 @@ export function Emails({ section = "outbox" }: { section?: "campaigns" | "outbox
   // `?tab=` lets other pages deep-link (Agenda › Actions opens the bulk send).
   const [params] = useSearchParams();
   const [selTab, setTab] = useState<Tab>(() => (params.get("tab") as Tab) || tabs[0]);
+  // Follow later deep links too (a notification opens ?tab=replies&item=…).
+  const paramTab = params.get("tab") as Tab | null;
+  useEffect(() => {
+    if (paramTab) setTab(paramTab);
+  }, [paramTab, params]);
   // /campaigns and /outbox render this same component at the same spot, so React
   // keeps the state across them: a tab of the other section rendered a blank page.
   const tab = tabs.includes(selTab) ? selTab : tabs[0];
@@ -121,6 +127,7 @@ export function Emails({ section = "outbox" }: { section?: "campaigns" | "outbox
           ))}
         </div>
 
+        {tab === "replies" && <ReplyDeskTab />}
         {tab === "compose" && <ComposeTab />}
         {tab === "bulk" && <BulkSend />}
         {tab === "followups" && <FollowupsTab />}

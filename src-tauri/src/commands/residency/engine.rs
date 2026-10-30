@@ -517,6 +517,9 @@ fn classify_now(pool: &DbPool) {
     if let Ok(conn) = pool.get() {
         let llm = super::claude::client(&conn);
         super::replies::classify_pending(&conn, llm.as_deref(), chrono::Local::now().date_naive());
+        // Then the reply desk: drafts for interested replies and stalled
+        // threads, native notification (commands/reply_desk.rs).
+        crate::commands::reply_desk::run_and_deliver(&conn, llm.as_deref());
     }
     CLASSIFY_RUNNING.store(false, Ordering::SeqCst);
 }
@@ -630,6 +633,7 @@ fn notify(app: &tauri::AppHandle, n: usize) {
 
 /// Start the autopilot thread. First pass 20 s after launch (catch-up).
 pub fn start(pool: DbPool, app: tauri::AppHandle) {
+    crate::commands::reply_desk::set_app(app.clone());
     std::thread::Builder::new()
         .name("residency-autopilot".into())
         .spawn(move || {

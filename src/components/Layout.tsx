@@ -28,6 +28,7 @@ import {
 import { listArtists, listEvents } from "../lib/api";
 import { getTheme, toggleTheme, type Theme } from "../lib/theme";
 import { UpdateBanner } from "./UpdateBanner";
+import { DeskBadge } from "./ReplyDesk";
 import { emitIntent } from "../lib/hooks";
 import { parseDay, today } from "../lib/format";
 import logoBlack from "../assets/brand/insrt-logo-black.png";
@@ -229,7 +230,7 @@ export function Layout() {
 
   const item = (isActive: boolean) =>
     clsx(
-      "flex items-center rounded py-1.5 text-[13.5px] transition-colors outline-none",
+      "relative flex items-center rounded py-1.5 text-[13.5px] transition-colors outline-none",
       "focus-visible:ring-2 focus-visible:ring-accent",
       collapsed ? "justify-center px-0 py-2" : "gap-2.5 px-3",
       isActive ? "bg-surface-2 font-medium text-fg" : "text-fg-subtle hover:bg-surface-2 hover:text-fg"
@@ -285,6 +286,7 @@ export function Layout() {
                       >
                         <Icon size={collapsed ? 17 : 15} strokeWidth={1.75} className="shrink-0" />
                         {!collapsed && t(`nav.${key}`)}
+                        {key === "outbox" && <DeskBadge collapsed={collapsed} />}
                       </NavLink>
                     </li>
                   ))}

@@ -771,6 +771,11 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // push. Additive, see commands/insrt_gigs.rs.
     crate::commands::insrt_gigs::migrate(conn);
 
+    // ---- Réponses à traiter (reply desk) ----
+    // reply_desk: replies awaiting Thibault and stalled threads, with their
+    // drafts. Additive, see commands/reply_desk.rs.
+    crate::commands::reply_desk::migrate(conn);
+
     Ok(())
 }
 

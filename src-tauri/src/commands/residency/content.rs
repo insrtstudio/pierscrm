@@ -119,7 +119,26 @@ pub fn render_step(cfg: &Config, idx: usize, lang: &str, vars: &HashMap<String, 
 
 // ---------------- Claude first email ----------------
 
-const DRAFT_SYSTEM: &str = "You write the first email from a DJ/producer to a club, proposing a residency. \
+/// Thibault's house voice: the "sound human" rule and the AI tells he never
+/// writes. Shared by every text the agent writes under his name (first emails
+/// here, reply drafts in commands/reply_desk.rs), so the banned list lives once.
+macro_rules! house_voice {
+    () => {
+        "- Sound human: vary sentence length, use spoken turns (\"honnêtement\", \"pas mal\", \"juste\"), contractions in English. \
+At most one exclamation mark, none is fine.
+- Never use these (AI tells): \"Je me permets\", \"N'hésitez pas\", \"à taille humaine\", \"correspond parfaitement\", \
+\"L'idée :\", \"passionné\", \"univers\", \"synergie\", \"collaboration fructueuse\", \"je serais ravi de\", \"Cordialement\", \
+\"I hope this email finds you well\", \"I'm reaching out\", \"excited\", \"thrilled\", \"passionate\", \"vibrant\", \"elevate\", \
+\"resonate\", \"journey\", \"unique opportunity\". No colon used to introduce an explanation, no neat three-part structure, \
+no em dashes or en dashes.
+"
+    };
+}
+
+/// The same rules as a plain string, for prompts built outside this module.
+pub const HOUSE_VOICE: &str = house_voice!();
+
+const DRAFT_SYSTEM: &str = concat!("You write the first email from a DJ/producer to a club, proposing a residency. \
 It goes out under the artist's own name to the club's booking or programming team, so it must read like \
 the artist typed it himself between two studio sessions: warm, direct, a bit casual, confident without selling.
 
@@ -153,17 +172,10 @@ said the way a DJ would say it. Never invent a fact, a name or a number. If no f
 - Mention PIERS FM and that each date becomes an episode. Mention Vol. 4 as the latest mix.
 - The press link exactly once, copied verbatim, on its own line.
 - End with one simple, relaxed question.
-- Sound human: vary sentence length, use spoken turns (\"honnêtement\", \"pas mal\", \"juste\"), contractions in English. \
-At most one exclamation mark, none is fine.
-- Never use these (AI tells): \"Je me permets\", \"N'hésitez pas\", \"à taille humaine\", \"correspond parfaitement\", \
-\"L'idée :\", \"passionné\", \"univers\", \"synergie\", \"collaboration fructueuse\", \"je serais ravi de\", \"Cordialement\", \
-\"I hope this email finds you well\", \"I'm reaching out\", \"excited\", \"thrilled\", \"passionate\", \"vibrant\", \"elevate\", \
-\"resonate\", \"journey\", \"unique opportunity\". No colon used to introduce an explanation, no neat three-part structure, \
-no em dashes or en dashes.
-- Subject: under 60 characters, lowercase feel, like \"<club> x <artist>, une idée de résidence\". No clickbait.
+", house_voice!(), "- Subject: under 60 characters, lowercase feel, like \"<club> x <artist>, une idée de résidence\". No clickbait.
 - Write in the language requested.
 
-Answer with JSON only: {\"subject\": \"...\", \"body\": \"...\"}.";
+Answer with JSON only: {\"subject\": \"...\", \"body\": \"...\"}.");
 
 fn draft_schema() -> serde_json::Value {
     json!({
