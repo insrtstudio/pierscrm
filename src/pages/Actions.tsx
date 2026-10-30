@@ -5,6 +5,8 @@ import { useNavigate } from "react-router-dom";
 import clsx from "clsx";
 import {
   Bot,
+  Banknote,
+  ClipboardCheck,
   Flame,
   UserX,
   CalendarCheck,
@@ -36,13 +38,35 @@ import { ComposeModal, quotaQuery } from "../components/ComposeModal";
 import { useToast } from "../components/ui";
 import { markHandled, residencyActions, utcDate } from "../lib/residency";
 import { IntentBadge } from "./Residency";
+import { DraftCompose } from "../components/Offers";
+import {
+  advancingEmailDraft,
+  listAdvancing,
+  listOfferPayments,
+  money,
+  offerEmailDraft,
+  setAdvancingItem,
+  type EmailDraft,
+} from "../lib/offers";
 
 /// How far ahead the list looks. Further out, nothing is actionable yet.
 const HORIZON_DAYS = 14;
 /// Replies older than this are assumed handled.
 const REPLY_DAYS = 10;
 
-type Kind = "followup" | "reply" | "campaign" | "deadline" | "task" | "gig" | "visa" | "agent" | "hot" | "wrong";
+type Kind =
+  | "followup"
+  | "reply"
+  | "campaign"
+  | "deadline"
+  | "task"
+  | "gig"
+  | "visa"
+  | "agent"
+  | "hot"
+  | "wrong"
+  | "payment"
+  | "advancing";
 
 type Action = {
   key: string;
@@ -71,10 +95,25 @@ const KIND_ICON: Record<Kind, LucideIcon> = {
   agent: Bot,
   hot: Flame,
   wrong: UserX,
+  payment: Banknote,
+  advancing: ClipboardCheck,
 };
 
 // Most urgent kind first within a day: a reply waiting beats a task.
-const KIND_ORDER: Kind[] = ["reply", "hot", "wrong", "followup", "agent", "visa", "campaign", "gig", "deadline", "task"];
+const KIND_ORDER: Kind[] = [
+  "reply",
+  "hot",
+  "wrong",
+  "payment",
+  "followup",
+  "agent",
+  "visa",
+  "advancing",
+  "campaign",
+  "gig",
+  "deadline",
+  "task",
+];
 
 /// Agenda › Actions: what to do, day by day, gathered from every module
 /// (follow-ups due, replies to answer, planned campaign sends, tasks, gigs,
@@ -85,6 +124,8 @@ export function Actions() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [compose, setCompose] = useState<ComposeState | null>(null);
+  // Booking drafts (invoice reminder, advancing email), attachments included.
+  const [draft, setDraft] = useState<{ d: EmailDraft; eventId?: number } | null>(null);
 
   const today = todayDay();
   const horizon = toDay(new Date(Date.now() + HORIZON_DAYS * 86_400_000));
@@ -106,6 +147,11 @@ export function Actions() {
     queryFn: () => listEventVisas({ from: today, to: horizon }),
   });
   const { data: dossiers = [] } = useQuery({ queryKey: ["dossiers"], queryFn: listDossiers });
+  const { data: payments = [] } = useQuery({ queryKey: ["offer_payments"], queryFn: listOfferPayments });
+  const { data: advancing = [] } = useQuery({
+    queryKey: ["advancing", "actions", horizon],
+    queryFn: () => listAdvancing(horizon),
+  });
   const { data: quota } = useQuery(quotaQuery);
   const { data: agent = [] } = useQuery({
     queryKey: ["residency_actions"],
@@ -132,6 +178,14 @@ export function Actions() {
   const openCompose = async (contactId: number, prefill?: Omit<ComposeState, "contact">) => {
     const c = await getContact(contactId);
     if (c) setCompose({ contact: c, ...prefill });
+  };
+
+  const openDraft = async (load: () => Promise<EmailDraft>, eventId?: number) => {
+    try {
+      setDraft({ d: await load(), eventId });
+    } catch (e) {
+      toast(String(e), "error");
+    }
   };
 
   const actions = useMemo(() => {
@@ -230,6 +284,55 @@ export function Actions() {
           kind: "visa",
           title: t("actions.visa_missing", { title: ev.title, country: v.country_name ?? v.country_code }),
           cta: { label: t("actions.visa_cta"), run: () => navigate(`/visa?event=${ev.id}`) },
+        });
+      }
+    }
+
+    // Booking money: deposits / balances overdue (sorted to today) or due
+    // within the horizon; the CTA drafts the invoice email again.
+    for (const p of payments) {
+      if (p.paid_at || !p.due) continue;
+      const day = p.overdue ? today : clampDay(p.due);
+      if (day > horizon) continue;
+      out.push({
+        key: `p${p.offer_id}${p.part}`,
+        day,
+        kind: "payment",
+        title: t(p.overdue ? "offers.action_overdue" : "offers.action_due", {
+          part: t(`offers.part_${p.part}`),
+          title: p.title,
+          amount: money(p.amount, p.currency, i18n.language),
+        }),
+        detail: [p.invoice_number, t("offers.due_on", { date: formatDate(p.due) })].filter(Boolean).join(" · "),
+        cta: {
+          label: t("offers.action_invoice_cta"),
+          run: () => openDraft(() => offerEmailDraft(p.offer_id, p.part === "deposit" ? "invoice_deposit" : "invoice_balance")),
+        },
+      });
+    }
+
+    // Advancing: the J-14 email to the venue, then what is still open and due.
+    for (const g of advancing) {
+      if (!g.email_sent_at && g.email_due <= horizon) {
+        out.push({
+          key: `ae${g.event_id}`,
+          day: g.email_due < today ? today : g.email_due,
+          kind: "advancing",
+          title: t("offers.action_adv_email", { title: g.title }),
+          detail: [g.venue, g.city, formatDate(g.date)].filter(Boolean).join(" · "),
+          cta: { label: t("offers.action_adv_email_cta"), run: () => openDraft(() => advancingEmailDraft(g.event_id), g.event_id) },
+        });
+      }
+      const due = g.items.filter((i) => !i.state && i.due <= horizon);
+      if (due.length) {
+        const first = due.reduce((a, b) => (a.due < b.due ? a : b));
+        out.push({
+          key: `ai${g.event_id}`,
+          day: first.due < today ? today : first.due,
+          kind: "advancing",
+          title: t("offers.action_adv_items", { title: g.title, count: due.length }),
+          detail: due.map((i) => t(`offers.adv_${i.key}`)).join(", "),
+          cta: { label: t("actions.gig_cta"), run: () => navigate("/agenda") },
         });
       }
     }
@@ -352,7 +455,7 @@ export function Actions() {
 
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [followups, replies, campaigns, tasks, events, visas, dossiers, quota, agent, today, horizon, i18n.language]);
+  }, [followups, replies, campaigns, tasks, events, visas, dossiers, payments, advancing, quota, agent, today, horizon, i18n.language]);
 
   // Overdue first (one bucket), then today, then each upcoming day that has something.
   const groups = useMemo(() => {
@@ -448,6 +551,19 @@ export function Actions() {
             </section>
           ))}
         </div>
+      )}
+
+      {draft && (
+        <DraftCompose
+          draft={draft.d}
+          onClose={() => setDraft(null)}
+          onSent={() => {
+            if (draft.eventId != null)
+              setAdvancingItem(draft.eventId, "email", "done").then(() =>
+                qc.invalidateQueries({ queryKey: ["advancing"] })
+              );
+          }}
+        />
       )}
 
       {compose && (

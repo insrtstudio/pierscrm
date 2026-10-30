@@ -70,7 +70,9 @@ pub fn save_event(state: State<'_, AppState>, event: Event) -> Result<i64, Strin
     Ok(saved)
 }
 
-fn save_event_row(conn: &rusqlite::Connection, event: &Event) -> Result<i64, String> {
+/// Insert or update an event row and realign its budget line (also used by
+/// commands/offers, which applies its own pipeline transitions).
+pub(crate) fn save_event_row(conn: &rusqlite::Connection, event: &Event) -> Result<i64, String> {
     match event.id {
         Some(id) => {
             conn.execute(

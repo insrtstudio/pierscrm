@@ -444,13 +444,39 @@ fn build_message(
     token: &str,
     message_id: &str,
 ) -> Result<Message, String> {
+    build_message_with(from, to, subject, body, signature, tracking_base, token, message_id, &[])
+}
+
+/// `build_message` plus file attachments (generated booking documents, see
+/// commands/offers/docs.rs): multipart/mixed around the usual alternative body.
+#[allow(clippy::too_many_arguments)]
+fn build_message_with(
+    from: &Mailbox,
+    to: &Mailbox,
+    subject: &str,
+    body: &str,
+    signature: &Option<SignatureData>,
+    tracking_base: &Option<String>,
+    token: &str,
+    message_id: &str,
+    attachments: &[(String, Vec<u8>)],
+) -> Result<Message, String> {
+    let alt = message_body(body, signature, tracking_base, token);
+    let content = if attachments.is_empty() {
+        alt
+    } else {
+        let pdf = lettre::message::header::ContentType::parse("application/pdf").map_err(|e| e.to_string())?;
+        attachments.iter().fold(MultiPart::mixed().multipart(alt), |m, (name, bytes)| {
+            m.singlepart(lettre::message::Attachment::new(name.clone()).body(bytes.clone(), pdf.clone()))
+        })
+    };
     Message::builder()
         .from(from.clone())
         .to(to.clone())
         .subject(subject.to_string())
         .message_id(Some(message_id.to_string()))
         .header(outbox::list_unsubscribe(&from.email.to_string()))
-        .multipart(message_body(body, signature, tracking_base, token))
+        .multipart(content)
         .map_err(|e| e.to_string())
 }
 
@@ -510,14 +536,22 @@ pub struct SendResult {
 
 #[tauri::command(async)]
 pub fn send_email(
+    app: AppHandle,
     state: State<'_, AppState>,
     contact_id: Option<i64>,
     campaign_id: Option<i64>,
     to: String,
     subject: String,
     body: String,
+    attachments: Option<Vec<String>>,
 ) -> Result<SendResult, String> {
-    send_one(&state.pool, contact_id, campaign_id, &to, &subject, &body).map(|(r, _)| r)
+    // Only documents PiersCRM generated (app data dir) can be attached.
+    let files = attachments
+        .unwrap_or_default()
+        .iter()
+        .map(|p| super::offers::docs::load_attachment(&app, p))
+        .collect::<Result<Vec<_>, _>>()?;
+    send_one_with(&state.pool, contact_id, campaign_id, &to, &subject, &body, &files).map(|(r, _)| r)
 }
 
 /// One email through every guardrail (suppression list, daily cap), with our
@@ -531,6 +565,19 @@ pub(crate) fn send_one(
     to: &str,
     subject: &str,
     body: &str,
+) -> Result<(SendResult, Option<i64>), String> {
+    send_one_with(pool, contact_id, campaign_id, to, subject, body, &[])
+}
+
+/// `send_one` with file attachments (name, bytes).
+pub(crate) fn send_one_with(
+    pool: &crate::db::DbPool,
+    contact_id: Option<i64>,
+    campaign_id: Option<i64>,
+    to: &str,
+    subject: &str,
+    body: &str,
+    attachments: &[(String, Vec<u8>)],
 ) -> Result<(SendResult, Option<i64>), String> {
     let cfg = load_smtp_from(pool)?;
     if cfg.from_email.trim().is_empty() {
@@ -576,8 +623,8 @@ pub(crate) fn send_one(
     let tracked = tracking_base.is_some();
     let message_id = outbox::gen_message_id(&cfg.from_email);
 
-    let email = build_message(
-        &from_mbox, &to_mbox, subject, body, &signature, &tracking_base, &token, &message_id,
+    let email = build_message_with(
+        &from_mbox, &to_mbox, subject, body, &signature, &tracking_base, &token, &message_id, attachments,
     )?;
 
     let transport = build_transport(&cfg)?;

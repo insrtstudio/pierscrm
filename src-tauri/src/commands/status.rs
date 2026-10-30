@@ -256,6 +256,29 @@ pub fn on_event_cancelled(conn: &Connection, contact_id: i64) {
     );
 }
 
+/// An offer went out (commands/offers): the booking is being negotiated. Any
+/// earlier stage moves to "in discussion"; confirmed and declined stay.
+pub fn on_offer_sent(conn: &Connection, contact_id: i64) {
+    let _ = conn.execute(
+        "UPDATE contacts SET status = 'in_discussion', follow_up = NULL, updated_at = datetime('now')
+         WHERE id = ?1 AND status IN ('to_contact','to_evaluate','low_priority','contacted','followed_up','no_answer')",
+        params![contact_id],
+    );
+}
+
+/// An offer was declined. The contact closes as "declined" only when nothing
+/// else is still running with it: no other offer sent or accepted, no
+/// confirmed gig. Only "in discussion" (the stage an offer sets) is changed.
+pub fn on_offer_declined(conn: &Connection, contact_id: i64) {
+    let _ = conn.execute(
+        "UPDATE contacts SET status = 'declined', follow_up = NULL, updated_at = datetime('now')
+         WHERE id = ?1 AND status = 'in_discussion'
+           AND NOT EXISTS (SELECT 1 FROM offers o WHERE o.contact_id = ?1 AND o.status IN ('sent','accepted'))
+           AND NOT EXISTS (SELECT 1 FROM events e WHERE e.contact_id = ?1 AND e.status = 'confirmed')",
+        params![contact_id],
+    );
+}
+
 /// Close cold sequences that ran dry: NO_ANSWER_AFTER_EMAILS sent emails, none
 /// replied to, the last one more than NO_ANSWER_GRACE_DAYS old, and the contact
 /// still waiting (contacted / followed_up). Returns how many contacts moved.

@@ -16,6 +16,7 @@ pub mod pulse;
 pub mod spotify;
 pub mod status;
 pub mod outbox;
+pub mod offers;
 pub mod organisations;
 pub mod youtube;
 pub mod ra;

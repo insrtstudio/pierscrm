@@ -771,6 +771,10 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // push. Additive, see commands/insrt_gigs.rs.
     crate::commands::insrt_gigs::migrate(conn);
 
+    // ---- Offers, documents, payments, advancing (commands/offers) ----
+    // offers, invoices, advancing. Additive and idempotent.
+    crate::commands::offers::migrate(conn);
+
     Ok(())
 }
 

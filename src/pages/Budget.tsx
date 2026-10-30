@@ -15,6 +15,7 @@ import type { BudgetItem, Event } from "../lib/types";
 import { euro } from "../lib/format";
 import { PageHeader } from "../components/Layout";
 import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
+import { PaymentsPanel } from "../components/Offers";
 
 export function Budget() {
   const { t } = useTranslation();
@@ -138,6 +139,9 @@ export function Budget() {
             tone={totals.net >= 0 ? "text-ok" : "text-danger"}
           />
         </div>
+
+        {/* Booking money: deposits and balances expected vs received. */}
+        <PaymentsPanel />
 
         <BudgetTable
           title={t("budget.expense")}
