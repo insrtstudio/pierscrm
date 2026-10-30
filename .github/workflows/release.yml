@@ -63,7 +63,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "PiersCRM ${{ github.ref_name }}"
-          releaseBody: "Mise à jour automatique — l'app se met à jour seule au démarrage."
+          releaseBody: "Mise à jour automatique : l'app se met à jour seule au démarrage."
           releaseDraft: false
           prerelease: false
           # Build universel : un seul DMG pour Mac Intel ET Apple Silicon.
