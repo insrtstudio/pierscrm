@@ -159,6 +159,9 @@ export const restoreFollowup = (contactId: number) =>
   invoke<void>("restore_followup", { contactId });
 export const listDismissedFollowups = () =>
   invoke<DismissedFollowup[]>("list_dismissed_followups");
+/// Stop the running bulk send before its next email.
+export const cancelBulkSend = () => invoke<boolean>("cancel_bulk_send");
+
 export const sendBulk = (p: {
   campaign_id?: number | null;
   contact_ids: number[];

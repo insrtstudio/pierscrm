@@ -15,7 +15,6 @@ use crate::commands::status;
 use crate::db::DbPool;
 use crate::models::EmailLog;
 use crate::AppState;
-use lettre::message::header::{Header, HeaderName, HeaderValue};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -50,28 +49,8 @@ pub fn gen_message_id(from_email: &str) -> String {
     format!("<{:x}.{:x}.{:016x}@{}>", ts, n, h.finish(), domain)
 }
 
-/// `List-Unsubscribe: <mailto:from?subject=unsubscribe>`. Gmail and Outlook show
-/// an "unsubscribe" link for it, which is far better for the sender's reputation
-/// than a spam report. The resulting email lands in our inbox and the reply sync
-/// turns it into a suppression.
-#[derive(Clone)]
-pub struct ListUnsubscribe(String);
-
-impl Header for ListUnsubscribe {
-    fn name() -> HeaderName {
-        HeaderName::new_from_ascii_str("List-Unsubscribe")
-    }
-    fn parse(s: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(Self(s.to_string()))
-    }
-    fn display(&self) -> HeaderValue {
-        HeaderValue::new(Self::name(), self.0.clone())
-    }
-}
-
-pub fn list_unsubscribe(from_email: &str) -> ListUnsubscribe {
-    ListUnsubscribe(format!("<mailto:{}?subject=unsubscribe>", from_email.trim()))
-}
+// List-Unsubscribe (mailto, plus RFC 8058 one-click) lives in
+// commands/deliverability (`with_unsubscribe`).
 
 // ---------------- Suppressions ----------------
 

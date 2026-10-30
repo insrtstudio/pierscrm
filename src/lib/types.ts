@@ -515,6 +515,8 @@ export interface BulkProgress {
   failed: number;
   skipped: number;
   current?: string | null;
+  /// Waiting for the anti-spam spacing until this UTC time ("YYYY-MM-DD HH:MM:SS").
+  waiting_until?: string | null;
 }
 
 export interface BulkResult {
@@ -531,6 +533,10 @@ export interface BulkResult {
   cap: number;
   /// Skipped: their organisation was already mailed (also counted in skipped).
   grouped?: number;
+  /// Skipped for today: their domain already had its daily share (also in skipped).
+  throttled?: string[];
+  /// Why the batch stopped early (cancel, sending budget, health pause).
+  stop_reason?: string | null;
 }
 
 export interface VisaCountry {

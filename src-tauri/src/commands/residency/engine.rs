@@ -315,6 +315,10 @@ pub fn pick_next(conn: &Connection, now: DateTime<Utc>) -> Option<DueMsg> {
     if quota.remaining <= 0 {
         return None;
     }
+    // Shared sending budget and sender health (deliverability).
+    if crate::commands::deliverability::automated_block(conn, now).is_some() {
+        return None;
+    }
     let mut cfgs: HashMap<i64, Config> = HashMap::new();
     for m in due_messages(conn, now) {
         if let Some(reason) = stop_reason(conn, m.campaign_id, m.contact_id) {
@@ -329,6 +333,10 @@ pub fn pick_next(conn: &Connection, now: DateTime<Utc>) -> Option<DueMsg> {
             continue;
         }
         if !cfg.window.contains(tz_of(conn, m.contact_id, &cfg), now) {
+            continue;
+        }
+        // Its domain had its share today: another venue may go instead.
+        if crate::commands::deliverability::domain_capped(conn, &m.to, now) {
             continue;
         }
         // Template variables must all be resolved.
@@ -399,6 +407,7 @@ pub fn send_picked(conn: &Connection, mailer: &dyn Mailer, m: &DueMsg, now: Date
         }
         Ok((r, _)) => match r.code.as_deref() {
             Some("quota") => Sent::Wait,
+            Some(c) if c.starts_with("budget_") => Sent::Wait,
             Some("suppressed") => {
                 skip_remaining(conn, m.campaign_id, m.contact_id, "adresse en liste de suppression");
                 Sent::Skipped
@@ -566,6 +575,8 @@ fn tick(pool: &DbPool, app: &tauri::AppHandle, now: DateTime<Utc>) {
     }
     let Ok(conn) = pool.get() else { return };
     apply_gates(&conn, smtp_ok(pool), now);
+    // Sender health (auto-pause) and one-click unsubscribes.
+    crate::commands::deliverability::on_tick(&conn, now);
     drop(conn);
     let Ok(conn) = pool.get() else { return };
 

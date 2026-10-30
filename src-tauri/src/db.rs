@@ -771,6 +771,11 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // push. Additive, see commands/insrt_gigs.rs.
     crate::commands::insrt_gigs::migrate(conn);
 
+    // ---- Deliverability (sending budget, sender health) ----
+    // emails.from_addr: the sending address of each email. Additive, see
+    // commands/deliverability/mod.rs.
+    crate::commands::deliverability::migrate(conn);
+
     Ok(())
 }
 
