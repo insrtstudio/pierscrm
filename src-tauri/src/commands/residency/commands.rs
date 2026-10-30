@@ -212,6 +212,10 @@ pub fn residency_set_autopilot(state: State<'_, AppState>, campaign_id: i64, on:
     let conn = conn(&state)?;
     require(&conn, campaign_id)?;
     if on {
+        // SPF or DKIM failing on the sending domain, or a health pause.
+        if let Some(reason) = crate::commands::deliverability::autopilot_block(&conn) {
+            return Err(reason);
+        }
         conn.execute(
             "UPDATE residency_campaigns SET autopilot = 1, paused_reason = NULL, paused_kind = NULL,
                     autopilot_confirmed_at = COALESCE(autopilot_confirmed_at, datetime('now')), updated_at = datetime('now')

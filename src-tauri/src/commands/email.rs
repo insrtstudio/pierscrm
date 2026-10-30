@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, State};
 
-use super::{campaigns, organisations, outbox, status};
+use super::{campaigns, deliverability, organisations, outbox, status};
 
 static TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -424,6 +424,19 @@ pub(crate) fn sole_artist(conn: &rusqlite::Connection) -> Option<String> {
 /// would mail the same recipients twice.
 static BULK_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Set by `cancel_bulk_send`: the running batch stops before its next send.
+static BULK_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Stop the running bulk send before its next email (what was sent stays sent).
+#[tauri::command]
+pub fn cancel_bulk_send() -> bool {
+    let running = BULK_RUNNING.load(Ordering::SeqCst);
+    if running {
+        BULK_CANCEL.store(true, Ordering::SeqCst);
+    }
+    running
+}
+
 struct BulkGuard;
 impl Drop for BulkGuard {
     fn drop(&mut self) {
@@ -443,8 +456,9 @@ fn build_message(
     tracking_base: &Option<String>,
     token: &str,
     message_id: &str,
+    unsubscribe_base: Option<&str>,
 ) -> Result<Message, String> {
-    build_message_in_thread(from, to, subject, body, signature, tracking_base, token, message_id, None)
+    build_message_in_thread(from, to, subject, body, signature, tracking_base, token, message_id, unsubscribe_base, None)
 }
 
 /// Where an answer sits in an existing conversation: the Message-ID it answers
@@ -466,6 +480,7 @@ fn build_message_in_thread(
     tracking_base: &Option<String>,
     token: &str,
     message_id: &str,
+    unsubscribe_base: Option<&str>,
     thread: Option<&ThreadRef>,
 ) -> Result<Message, String> {
     let mut b = Message::builder()
@@ -481,7 +496,9 @@ fn build_message_in_thread(
             b = b.references(t.references.join(" "));
         }
     }
-    b.header(outbox::list_unsubscribe(&from.email.to_string()))
+    // List-Unsubscribe (mailto, plus the HTTPS one-click link and
+    // List-Unsubscribe-Post when an endpoint is configured).
+    deliverability::with_unsubscribe(b, &from.email.to_string(), unsubscribe_base, token)
         .multipart(message_body(body, signature, tracking_base, token))
         .map_err(|e| e.to_string())
 }
@@ -590,7 +607,7 @@ pub(crate) fn send_one_in_thread(
 
     // Guardrails first: a suppressed address is never mailed, and the daily cap
     // holds for single sends too.
-    let (tracking_base, signature) = {
+    let (tracking_base, signature, unsub_base) = {
         let conn = pool.get().map_err(|e| e.to_string())?;
         if let Some(reason) = outbox::suppression_reason(&conn, &addr) {
             return Ok((
@@ -615,15 +632,20 @@ pub(crate) fn send_one_in_thread(
                 None,
             ));
         }
+        // The shared sending budget (warm-up ramp, hourly cap, per-domain cap).
+        if let Some((code, reason)) = deliverability::send_block(&conn, &addr, chrono::Utc::now()) {
+            return Ok((SendResult { ok: false, error: Some(reason), tracked: false, code: Some(code) }, None));
+        }
         // Open-tracking: only if a public tracking base URL is configured.
-        (setting(&conn, "tracking_base_url"), load_signature(&conn))
+        (setting(&conn, "tracking_base_url"), load_signature(&conn), deliverability::unsubscribe_base(&conn))
     };
     let token = gen_token();
     let tracked = tracking_base.is_some();
     let message_id = outbox::gen_message_id(&cfg.from_email);
 
     let email = build_message_in_thread(
-        &from_mbox, &to_mbox, subject, body, &signature, &tracking_base, &token, &message_id, thread,
+        &from_mbox, &to_mbox, subject, body, &signature, &tracking_base, &token, &message_id,
+        unsub_base.as_deref(), thread,
     )?;
 
     let transport = build_transport(&cfg)?;
@@ -644,6 +666,7 @@ pub(crate) fn send_one_in_thread(
     )
     .map_err(|e| e.to_string())?;
     let email_id = conn.last_insert_rowid();
+    deliverability::record_send(&conn, Some(email_id), &cfg.from_email, &addr, outcome == "sent");
 
     if outcome == "sent" {
         status::on_email_sent(&conn, contact_id, &addr);
@@ -714,6 +737,9 @@ pub struct BulkProgress {
     pub failed: usize,
     pub skipped: usize,
     pub current: Option<String>,
+    /// Waiting for the anti-spam spacing until this UTC time (shared budget).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_until: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -732,6 +758,11 @@ pub struct BulkResult {
     /// Skipped because their organisation was already mailed (in this batch,
     /// or earlier in the same campaign). Counted in `skipped` too.
     pub grouped: usize,
+    /// Left for another day: their domain had its daily share (shared
+    /// sending budget). Counted in `skipped` too.
+    pub throttled: Vec<String>,
+    /// Why the batch stopped early (sending budget, health pause), if it did.
+    pub stop_reason: Option<String>,
 }
 
 /// {{date}} / {{target_date}} for humans: an ISO day ("2026-10-21") becomes
@@ -799,6 +830,7 @@ fn send_bulk_blocking(
         return Err("Un envoi groupé est déjà en cours.".into());
     }
     let _bulk = BulkGuard;
+    BULK_CANCEL.store(false, Ordering::SeqCst);
     let cfg = load_smtp_from(pool)?;
     if cfg.from_email.trim().is_empty() {
         return Err("Sender email is not configured (Settings → Email).".into());
@@ -817,15 +849,22 @@ fn send_bulk_blocking(
         ));
     }
     let mut budget = quota.remaining;
+    // Sender health: above the bounce / complaint thresholds every automated
+    // send is paused until the user resumes (banner).
+    if let Some(p) = deliverability::health::refresh(&conn, chrono::Utc::now()) {
+        return Err(format!("Envois automatiques en pause : {}", p.reason));
+    }
+    let unsub_base = deliverability::unsubscribe_base(&conn);
+    let mut throttled: Vec<String> = Vec::new();
+    let mut stop_reason: Option<String> = None;
     let tracking_base = setting(&conn, "tracking_base_url");
     let signature = load_signature(&conn);
-    // Throttle between sends: spreading mail out is the single biggest lever for
-    // staying out of spam and under the mailbox rate limit. Default 1.2s, tunable
-    // via the `bulk_delay_ms` setting (0 disables, capped at 60s).
-    let delay_ms: u64 = setting(&conn, "bulk_delay_ms")
-        .and_then(|s| s.trim().parse().ok())
-        .filter(|&v| v <= 60_000)
-        .unwrap_or(1200);
+    // Spacing between sends: spreading mail out is the single biggest lever
+    // for staying out of spam. A bulk send the user started uses the shorter
+    // `bulk_spacing_*` gap of the sending budget (20 to 60 s by default); the
+    // residency autopilot keeps the longer shared gap.
+    let budget_cfg = deliverability::budget::load_config(&conn);
+    let mut next_bulk_at: Option<chrono::DateTime<chrono::Utc>> = None;
 
     // Campaign-level variables ({{event}}, {{artist}}, {{target_date}}) plus any
     // per-send link variables the user supplied ({{mix}}, {{listen}}, …).
@@ -888,7 +927,7 @@ fn send_bulk_blocking(
             deferred = total - idx;
             let _ = app.emit(
                 "bulk-progress",
-                BulkProgress { done: total, total, sent, failed, skipped, current: None },
+                BulkProgress { done: total, total, sent, failed, skipped, current: None, waiting_until: None },
             );
             break;
         }
@@ -915,7 +954,7 @@ fn send_bulk_blocking(
         let emit = |done, sent, failed, skipped, current| {
             let _ = app.emit(
                 "bulk-progress",
-                BulkProgress { done, total, sent, failed, skipped, current },
+                BulkProgress { done, total, sent, failed, skipped, current, waiting_until: None },
             );
         };
 
@@ -997,11 +1036,65 @@ fn send_bulk_blocking(
             }
         }
 
+        // The shared sending budget (deliverability): health pause, daily and
+        // hourly caps, per-domain cap, and the random spacing between sends.
+        let mut skip_domain = false;
+        loop {
+            if BULK_CANCEL.load(Ordering::SeqCst) {
+                stop_reason = Some("Envoi annulé.".into());
+                break;
+            }
+            if let Some(p) = deliverability::health::current_pause(&conn) {
+                stop_reason = Some(p.reason);
+                break;
+            }
+            // Bulk spacing (shorter than the autopilot's), waited in 1 s steps
+            // so a cancel takes effect at once.
+            if let Some(until) = next_bulk_at.filter(|t| *t > chrono::Utc::now()) {
+                let _ = app.emit(
+                    "bulk-progress",
+                    BulkProgress {
+                        done: idx, total, sent, failed, skipped,
+                        current: Some(email.clone()),
+                        waiting_until: Some(deliverability::fmt(until)),
+                    },
+                );
+                while chrono::Utc::now() < until && !BULK_CANCEL.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+                continue;
+            }
+            match deliverability::budget::check(&conn, &email, chrono::Utc::now(), false) {
+                deliverability::budget::Decision::Allow => break,
+                deliverability::budget::Decision::Wait { reason, .. }
+                | deliverability::budget::Decision::Defer { reason, .. } => {
+                    stop_reason = Some(reason);
+                    break;
+                }
+                deliverability::budget::Decision::SkipDomain { .. } => {
+                    skip_domain = true;
+                    break;
+                }
+            }
+        }
+        if stop_reason.is_some() {
+            deferred = total - idx;
+            emit(total, sent, failed, skipped, None);
+            break;
+        }
+        if skip_domain {
+            throttled.push(email.clone());
+            skipped += 1;
+            emit(idx + 1, sent, failed, skipped, Some(email.clone()));
+            continue;
+        }
+
         let token = gen_token();
         let message_id = outbox::gen_message_id(&cfg.from_email);
         // One malformed message must not abort the batch (and hide what was sent).
         let msg = match build_message(
             &from_mbox, &to_mbox, &subj, &bod, &signature, &tracking_base, &token, &message_id,
+            unsub_base.as_deref(),
         ) {
             Ok(m) => m,
             Err(e) => {
@@ -1015,11 +1108,18 @@ fn send_bulk_blocking(
         if outcome == "sent" {
             outbox::save_to_sent(pool, &cfg, msg.formatted());
         }
-        let _ = conn.execute(
+        let inserted = conn.execute(
             "INSERT INTO emails (contact_id, campaign_id, to_addr, subject, body, status, error, track_token, message_id)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![cid, campaign_id, email, subj, bod, outcome, err, token,
                 (outcome == "sent").then_some(&message_id)],
+        );
+        deliverability::record_send(
+            &conn,
+            inserted.is_ok().then(|| conn.last_insert_rowid()),
+            &cfg.from_email,
+            &email,
+            outcome == "sent",
         );
         if outcome == "sent" {
             sent += 1;
@@ -1043,13 +1143,13 @@ fn send_bulk_blocking(
         }
         emit(idx + 1, sent, failed, skipped, Some(email.clone()));
 
-        // Space out the next send (skip after the very last one).
-        if delay_ms > 0 && idx + 1 < total {
-            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-        }
+        // Space out the next send.
+        next_bulk_at = Some(chrono::Utc::now() + chrono::Duration::seconds(deliverability::budget::bulk_gap_secs(&budget_cfg)));
     }
 
-    Ok(BulkResult { sent, failed, skipped, errors, suppressed, bounced, deferred, cap: quota.cap, grouped })
+    Ok(BulkResult {
+        sent, failed, skipped, errors, suppressed, bounced, deferred, cap: quota.cap, grouped, throttled, stop_reason,
+    })
 }
 
 /// Apply a batch of open events (fetched by the frontend from the tracking
@@ -1095,11 +1195,11 @@ mod body_html_tests {
         let from: lettre::message::Mailbox = "Thibault <booking@insrt.fr>".parse().unwrap();
         let to: lettre::message::Mailbox = "booking@club.fr".parse().unwrap();
         let t = ThreadRef { in_reply_to: Some("<r1@club.fr>".into()), references: vec!["<s1@insrt.fr>".into(), "<r1@club.fr>".into()] };
-        let m = build_message_in_thread(&from, &to, "Re: date", "Hello", &None, &None, "tok", "<n1@insrt.fr>", Some(&t)).unwrap();
+        let m = build_message_in_thread(&from, &to, "Re: date", "Hello", &None, &None, "tok", "<n1@insrt.fr>", None, Some(&t)).unwrap();
         let raw = String::from_utf8(m.formatted()).unwrap();
         assert!(raw.contains("In-Reply-To: <r1@club.fr>"));
         assert!(raw.contains("References: <s1@insrt.fr> <r1@club.fr>"));
-        let plain = build_message_in_thread(&from, &to, "s", "b", &None, &None, "tok", "<n2@insrt.fr>", None).unwrap();
+        let plain = build_message_in_thread(&from, &to, "s", "b", &None, &None, "tok", "<n2@insrt.fr>", None, None).unwrap();
         assert!(!String::from_utf8(plain.formatted()).unwrap().contains("In-Reply-To"));
     }
 }

@@ -29,6 +29,7 @@ import { listArtists, listEvents } from "../lib/api";
 import { getTheme, toggleTheme, type Theme } from "../lib/theme";
 import { UpdateBanner } from "./UpdateBanner";
 import { DeskBadge } from "./ReplyDesk";
+import { DeliverabilityBanner } from "./Deliverability";
 import { emitIntent } from "../lib/hooks";
 import { parseDay, today } from "../lib/format";
 import logoBlack from "../assets/brand/insrt-logo-black.png";
@@ -334,6 +335,7 @@ export function Layout() {
 
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-bg">
           <UpdateBanner />
+          <DeliverabilityBanner />
           <div className="flex-1 overflow-y-auto">
             <Outlet />
           </div>

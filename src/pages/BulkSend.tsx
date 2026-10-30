@@ -26,7 +26,9 @@ import {
   listSuppressions,
   listTemplates,
   sendBulk,
+  cancelBulkSend,
 } from "../lib/api";
+import { utcToLocal } from "../lib/deliverability";
 import type { BulkProgress, BulkResult, Contact } from "../lib/types";
 import { STATUSES } from "../lib/types";
 import { CATEGORIES } from "../lib/constants";
@@ -615,7 +617,21 @@ export function BulkSend() {
           {progress ? (
             <div className="flex-1">
               <div className="mb-1 flex justify-between text-xs text-fg-subtle">
-                <span>{t("bulk.sending", { done: progress.done, total: progress.total })}</span>
+                <span>
+                  {t("bulk.sending", { done: progress.done, total: progress.total })}
+                  {progress.waiting_until && (
+                    <>
+                      {" · "}
+                      {t("bulk.waiting_until", {
+                        time: utcToLocal(progress.waiting_until).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          second: "2-digit",
+                        }),
+                      })}
+                    </>
+                  )}
+                </span>
                 <span className="tabular">
                   ✓{progress.sent} ✕{progress.failed} ⊘{progress.skipped}
                 </span>
@@ -641,6 +657,19 @@ export function BulkSend() {
               )}
             </div>
           )}
+          {progress && (
+            <button
+              className="btn-outline"
+              onClick={() =>
+                cancelBulkSend()
+                  .then(() => toast(t("bulk.cancelling"), "ok"))
+                  .catch((e) => toast(errorMessage(e), "error"))
+              }
+            >
+              <X size={15} />
+              {t("bulk.cancel")}
+            </button>
+          )}
           <button
             className="btn-primary"
             disabled={sending || !!progress || selectedCount === 0 || !subject.trim() || !body.trim()}
@@ -663,7 +692,15 @@ export function BulkSend() {
           {result.deferred > 0 && (
             <p className="mt-4 flex items-start gap-1.5 text-xs font-medium text-danger">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-              {t("bulk.r_deferred", { count: result.deferred, cap: result.cap })}
+              {result.stop_reason
+                ? t("bulk.r_stopped", { count: result.deferred, reason: result.stop_reason })
+                : t("bulk.r_deferred", { count: result.deferred, cap: result.cap })}
+            </p>
+          )}
+          {(result.throttled?.length ?? 0) > 0 && (
+            <p className="mt-3 text-2xs text-fg-subtle">
+              {t("bulk.r_throttled", { list: result.throttled!.slice(0, 20).join(", ") })}
+              {result.throttled!.length > 20 && " …"}
             </p>
           )}
           {(result.grouped ?? 0) > 0 && (

@@ -131,6 +131,7 @@ pub fn run() {
             commands::email::test_smtp,
             commands::email::send_email,
             commands::email::send_bulk,
+            commands::email::cancel_bulk_send,
             commands::email::list_emails,
             commands::email::apply_opens,
             // campaigns
@@ -149,6 +150,11 @@ pub fn run() {
             commands::outbox::list_emails_page,
             commands::outbox::sync_replies,
             commands::outbox::reply_sync_status,
+            commands::deliverability::deliverability_status,
+            commands::deliverability::deliverability_check_dns,
+            commands::deliverability::deliverability_save_budget,
+            commands::deliverability::deliverability_save_thresholds,
+            commands::deliverability::deliverability_resume,
             // residency campaigns (autopilot)
             commands::residency::commands::residency_presets,
             commands::residency::commands::residency_create,

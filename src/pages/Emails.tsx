@@ -58,6 +58,7 @@ import { Modal, Field, useToast, useConfirm, useSubmit, errorMessage } from "../
 import { useAppIntent, useDebounced } from "../lib/hooks";
 import { runReplySync } from "../components/ReplySync";
 import { BulkSend } from "./BulkSend";
+import { BudgetSummary } from "../components/Deliverability";
 import {
   ComposeModal,
   invalidateAfterSend,
@@ -1234,6 +1235,10 @@ function GuardrailsTab() {
           <SectionTitle>{t("emails.quota_title")}</SectionTitle>
           <p className="text-2xs text-fg-subtle">{t("emails.quota_hint")}</p>
           <QuotaControl />
+        </div>
+        <div className="card space-y-2 p-5">
+          <SectionTitle>{t("deliverability.budget_title")}</SectionTitle>
+          <BudgetSummary withLink />
         </div>
         <ReplyDetectionCard />
       </div>

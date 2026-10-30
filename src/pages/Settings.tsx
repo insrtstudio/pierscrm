@@ -20,6 +20,7 @@ import { PageHeader } from "../components/Layout";
 import clsx from "clsx";
 import { Field, errorMessage, useSubmit, useToast } from "../components/ui";
 import { ResidencySettingsCard } from "../components/ResidencySettings";
+import { DeliverabilityPanel } from "../components/Deliverability";
 
 type SignatureFields = {
   name: string;
@@ -42,7 +43,7 @@ const EMPTY_SIG: SignatureFields = {
   soundcloud: "",
 };
 
-const SETTINGS_TABS = ["general", "email", "integrations"] as const;
+const SETTINGS_TABS = ["general", "email", "deliverability", "integrations"] as const;
 
 /// Secret fields (password, API keys) come back from the backend as a masked
 /// placeholder, never the real value; saving the untouched mask keeps the
@@ -541,6 +542,7 @@ export function Settings() {
 
         </>
         )}
+        {tab === "deliverability" && <DeliverabilityPanel />}
         {tab === "integrations" && (
         <>
         {/* Venue website resolution (Serper) */}
