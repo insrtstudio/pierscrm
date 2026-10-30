@@ -263,6 +263,18 @@ pub fn run() {
             // venue intelligence (J5, enrichment)
             commands::enrich::vi_start_enrich,
             commands::enrich::vi_venue_detail,
+            // promoters / collectives, fit score, comparable artists
+            commands::promoters::vi_list_promoters,
+            commands::promoters::vi_count_promoters,
+            commands::promoters::vi_promoter_detail,
+            commands::promoters::vi_promote_promoter,
+            commands::promoters::vi_start_promoter_enrich,
+            commands::fit::fit_recompute,
+            commands::fit::fit_list_comparables,
+            commands::fit::fit_add_comparable,
+            commands::fit::fit_delete_comparable,
+            commands::fit::fit_suggest_comparables,
+            commands::fit::fit_seed_comparables,
             // templates
             commands::data::list_templates,
             commands::data::save_template,

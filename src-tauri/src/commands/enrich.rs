@@ -661,7 +661,7 @@ pub(crate) const RETRY_PATHS: &[&str] = &[
 
 /// GET a page and return its HTML (capped at 300 KB), or None on any failure or
 /// a non-HTML response.
-async fn fetch_html(client: &reqwest::Client, url: &str) -> Option<String> {
+pub(crate) async fn fetch_html(client: &reqwest::Client, url: &str) -> Option<String> {
     let resp = client.get(url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;

@@ -330,6 +330,10 @@ export const viListVenues = (p: {
   target_cities?: string[];
   /** Only venues in target_cities. */
   target_only?: boolean;
+  /** Only venues whose fit score is at least this. */
+  fit_min?: number;
+  /** "fit": best "books artists like ours" first. */
+  sort?: "fit";
   limit?: number;
   offset?: number;
 }) =>
@@ -348,9 +352,11 @@ export const viListVenues = (p: {
     targetOnly: p.target_only,
     limit: p.limit,
     offset: p.offset,
+    fitMin: p.fit_min,
+    sort: p.sort,
   });
 // Same filters as viListVenues, so the count is the size of that list.
-export const viCountVenues = (p: Omit<Parameters<typeof viListVenues>[0], "limit" | "offset">) =>
+export const viCountVenues = (p: Omit<Parameters<typeof viListVenues>[0], "limit" | "offset" | "sort">) =>
   invoke<number>("vi_count_venues", {
     statut: p.statut,
     pays: p.pays,
@@ -362,6 +368,7 @@ export const viCountVenues = (p: Omit<Parameters<typeof viListVenues>[0], "limit
     played: p.played,
     targetCities: p.target_cities,
     targetOnly: p.target_only,
+    fitMin: p.fit_min,
   });
 export const viVenueStats = () => invoke<ViVenueStats>("vi_venue_stats");
 export const viRepairContacts = () => invoke<number>("vi_repair_contacts");

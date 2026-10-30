@@ -293,19 +293,33 @@ fn due_messages(conn: &Connection, now: DateTime<Utc>) -> Vec<DueMsg> {
     ) else {
         return Vec::new();
     };
-    st.query_map(params![fmt(now)], |r| {
-        Ok(DueMsg {
-            id: r.get(0)?,
-            campaign_id: r.get(1)?,
-            contact_id: r.get(2)?,
-            step: r.get(3)?,
-            subject: r.get(4)?,
-            body: r.get(5)?,
-            to: r.get(6)?,
+    let mut due: Vec<DueMsg> = st
+        .query_map(params![fmt(now)], |r| {
+            Ok(DueMsg {
+                id: r.get(0)?,
+                campaign_id: r.get(1)?,
+                contact_id: r.get(2)?,
+                step: r.get(3)?,
+                subject: r.get(4)?,
+                body: r.get(5)?,
+                to: r.get(6)?,
+            })
         })
-    })
-    .map(|it| it.flatten().collect())
-    .unwrap_or_default()
+        .map(|it| it.flatten().collect())
+        .unwrap_or_default();
+    // Soft priority (timing.rs): among first emails only, targets whose
+    // "bon moment pour écrire" is now go before off-season ones, then by fit.
+    // Follow-ups keep their slot; nothing is held back or dropped.
+    let today = now.date_naive();
+    let mut prio: HashMap<i64, (u8, i64)> = HashMap::new();
+    for m in due.iter().filter(|m| m.step == 1) {
+        prio.entry(m.contact_id)
+            .or_insert_with(|| crate::commands::timing::contact_priority(conn, m.contact_id, today));
+    }
+    crate::commands::timing::reorder_firsts(&mut due, |m| m.step == 1, |m| {
+        prio.get(&m.contact_id).copied().unwrap_or((1, 0))
+    });
+    due
 }
 
 /// The next message that may go out right now, or None. Messages whose
@@ -770,6 +784,29 @@ pub(crate) mod tests {
             .unwrap();
         }
         c
+    }
+
+    /// Soft priority: a first email to a room programming now goes before one
+    /// to an off-season room, a follow-up keeps its slot.
+    #[test]
+    fn first_emails_follow_the_right_moment() {
+        let c = setup();
+        c.execute_batch(
+            "UPDATE contacts SET area = 'Paris' WHERE id = 11;
+             UPDATE vi_venues SET ville = 'Paris', pays = 'FR', month_profile = '3,3,3,3,3,3,3,3,3,3,3,3',
+                lead_weeks = 10, fit_score = 80 WHERE crm_contact_id = 11;
+             INSERT INTO vi_venues (nom, nom_normalise, ville, pays, statut, crm_contact_id, month_profile, lead_weeks)
+                VALUES ('Club A', 'cluba', 'Paris', 'FR', 'valide', 10, '0,0,0,0,0,0,9,0,0,0,0,0', 10);",
+        )
+        .unwrap();
+        let t = utc("2026-11-02 09:30:00");
+        // Club A (July only) waits behind Club B (year-round), though queued first.
+        assert_eq!(pick_next(&c, t).unwrap().contact_id, 11);
+        let order: Vec<i64> = due_messages(&c, t).iter().map(|m| m.contact_id).collect();
+        assert_eq!(order, vec![11, 10]);
+        // Nothing is held back: with B gone, A is next.
+        c.execute("UPDATE campaign_messages SET status = 'skipped' WHERE contact_id = 11", []).unwrap();
+        assert_eq!(pick_next(&c, t).unwrap().contact_id, 10);
     }
 
     #[test]

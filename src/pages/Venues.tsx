@@ -78,8 +78,10 @@ import { PageHeader, EmptyState } from "../components/Layout";
 import { Field, Modal, useToast, useConfirm } from "../components/ui";
 import { useDebounced } from "../lib/hooks";
 import { AddToCampaign } from "../components/BulkActions";
+import { PromotersTab } from "../components/Promoters";
+import { FitScore, TimingBadge } from "../components/FitTiming";
 
-type Tab = "venues" | "runs" | "areas" | "artists";
+type Tab = "venues" | "promoters" | "runs" | "areas" | "artists";
 
 /// One page of venues per round-trip. The list is virtualised, so a page only
 /// has to cover more than a viewport's worth of rows; the rest streams in as the
@@ -101,7 +103,7 @@ const VENUE_STATUS_STYLE: Record<string, string> = {
 export function Venues() {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>("venues");
-  const tabs: Tab[] = ["venues", "runs", "areas", "artists"];
+  const tabs: Tab[] = ["venues", "promoters", "runs", "areas", "artists"];
   return (
     <div>
       <PageHeader title={t("venues.title")} subtitle={t("venues.subtitle")} />
@@ -114,6 +116,7 @@ export function Venues() {
           ))}
         </div>
         {tab === "venues" && <VenuesTab />}
+        {tab === "promoters" && <PromotersTab />}
         {tab === "runs" && <RunsTab />}
         {tab === "areas" && <AreasTab />}
         {tab === "artists" && <ArtistsTab />}
@@ -138,6 +141,9 @@ function VenuesTab() {
   const [hasWebsite, setHasWebsite] = useState(false);
   const [contactedF, setContactedF] = useState(false);
   const [playedF, setPlayedF] = useState(false);
+  // "Books artists like ours": sort on the fit score, or keep the good fits only.
+  const [sortFit, setSortFit] = useState(false);
+  const [fitOnly, setFitOnly] = useState(false);
   // The enrich run being followed; restored from the runs table on mount, since
   // leaving the tab used to forget a run that was still going.
   const [enrichRunId, setEnrichRunId] = useState<number | null>(null);
@@ -180,6 +186,8 @@ function VenuesTab() {
       playedF,
       targetCities,
       targetOnly,
+      sortFit,
+      fitOnly,
     ],
     queryFn: ({ pageParam }) =>
       viListVenues({
@@ -193,6 +201,8 @@ function VenuesTab() {
         played: playedF || undefined,
         target_cities: targetCities,
         target_only: (targetOnly && !!targetCities) || undefined,
+        fit_min: fitOnly ? 40 : undefined,
+        sort: sortFit ? "fit" : undefined,
         limit: PAGE_SIZE,
         offset: pageParam,
       }),
@@ -218,6 +228,7 @@ function VenuesTab() {
     played: playedF || undefined,
     target_cities: targetCities,
     target_only: (targetOnly && !!targetCities) || undefined,
+    fit_min: fitOnly ? 40 : undefined,
   };
   // Rows are paged in on scroll, so the real size of the result set comes from
   // its own count query rather than from what happens to be loaded.
@@ -231,7 +242,7 @@ function VenuesTab() {
     total != null && total > venues.length
       ? t("venues.count_partial", { shown: venues.length, count: total })
       : t("venues.count_total", { count: total ?? venues.length });
-  const anyChip = hasEmail || hasPhone || hasWebsite || contactedF || playedF;
+  const anyChip = hasEmail || hasPhone || hasWebsite || contactedF || playedF || fitOnly;
   const filtered = anyChip || statut !== "actif" || pays !== "all" || dSearch.trim() !== "";
   const resetFilters = () => {
     setStatut("actif");
@@ -242,6 +253,7 @@ function VenuesTab() {
     setHasWebsite(false);
     setContactedF(false);
     setPlayedF(false);
+    setFitOnly(false);
   };
   const { data: stats } = useQuery({
     queryKey: ["vi_venue_stats"],
@@ -263,7 +275,7 @@ function VenuesTab() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   useEffect(
     () => setSelected(new Set()),
-    [statut, pays, dSearch, hasEmail, hasPhone, hasWebsite, contactedF, playedF, targetCities, targetOnly]
+    [statut, pays, dSearch, hasEmail, hasPhone, hasWebsite, contactedF, playedF, targetCities, targetOnly, fitOnly]
   );
   const selectable = (v: (typeof venues)[number]) => !!v.crm_contact_id || !!v.best_email;
   const selectableVenues = venues.filter(selectable);
@@ -339,6 +351,8 @@ function VenuesTab() {
     playedF,
     targetCities,
     targetOnly,
+    sortFit,
+    fitOnly,
     resetScroll,
   ]);
 
@@ -553,6 +567,15 @@ function VenuesTab() {
             </option>
           ))}
         </select>
+        <select
+          className="input w-auto"
+          value={sortFit ? "fit" : "score"}
+          onChange={(e) => setSortFit(e.target.value === "fit")}
+          title={t("fit.sort_hint")}
+        >
+          <option value="score">{t("fit.sort_score")}</option>
+          <option value="fit">{t("fit.sort_fit")}</option>
+        </select>
         <button
           className="btn-outline ml-auto"
           onClick={() => promoteBulk.mutate()}
@@ -589,6 +612,7 @@ function VenuesTab() {
             { on: hasWebsite, set: setHasWebsite, label: t("venues.f_website"), icon: Globe },
             { on: contactedF, set: setContactedF, label: t("venues.s_contacted"), icon: CheckCheck },
             { on: playedF, set: setPlayedF, label: t("venues.s_played"), icon: Disc3 },
+            { on: fitOnly, set: setFitOnly, label: t("fit.chip"), icon: Target },
           ] as const
         ).map((c, i) => {
           const Icon = c.icon;
@@ -672,10 +696,11 @@ function VenuesTab() {
         <div ref={scrollRef} className="card max-h-[calc(100vh-360px)] overflow-auto">
           {/* Fixed layout: the virtualiser swaps rows in and out, so columns must
               not resize based on whichever slice happens to be mounted. */}
-          <table className="tbl" style={{ tableLayout: "fixed", minWidth: 900 }}>
+          <table className="tbl" style={{ tableLayout: "fixed", minWidth: 960 }}>
             <colgroup>
               <col style={{ width: 36 }} />
               <col style={{ width: 64 }} />
+              <col style={{ width: 56 }} />
               <col />
               <col style={{ width: 170 }} />
               <col style={{ width: 130 }} />
@@ -698,6 +723,7 @@ function VenuesTab() {
                   />
                 </th>
                 <th className="text-right">{t("venues.score")}</th>
+                <th className="text-right" title={t("fit.col_hint")}>{t("fit.col")}</th>
                 <th>{t("venues.name")}</th>
                 <th>{t("venues.city")}</th>
                 <th>{t("venues.contact")}</th>
@@ -732,6 +758,9 @@ function VenuesTab() {
                   <td className="text-right">
                     <span className="font-condensed text-lg tabular text-accent-2">{v.score_qualif}</span>
                   </td>
+                  <td className="text-right">
+                    <FitScore score={v.fit_score} detail={v.fit_detail} />
+                  </td>
                   <td className="overflow-hidden font-semibold">
                     <div className="flex items-center gap-1.5 whitespace-nowrap">
                       <span className="truncate">{v.nom}</span>
@@ -756,6 +785,7 @@ function VenuesTab() {
                           {t("venues.target_match")}
                         </span>
                       )}
+                      {v.timing && v.timing.state !== "unknown" && <TimingBadge timing={v.timing} compact />}
                     </div>
                   </td>
                   <td className="truncate text-fg-subtle">

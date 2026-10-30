@@ -122,6 +122,9 @@ pub struct BuildOptions {
     pub min_events: Option<i64>,
     #[serde(default)]
     pub limit: Option<i64>,
+    /// Also list promoters / collectives of the zone (promoters.rs).
+    #[serde(default)]
+    pub include_promoters: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -146,8 +149,16 @@ pub struct Candidate {
     pub email_rank: u8,
     pub first_name: Option<String>,
     pub lang: String,
-    /// "discovery" | "pipeline"
+    /// "discovery" | "pipeline" | "promoter"
     pub source: String,
+    /// Discovery promoter (vi_promoter_orgs) when source is "promoter".
+    pub promoter_id: Option<i64>,
+    /// "Books artists like ours" score (fit.rs), when computed.
+    pub fit_score: Option<i64>,
+    /// "a programmé X, Y ; 14 soirées house en 12 mois".
+    pub fit_explain: Option<String>,
+    /// "Bon moment pour écrire" (timing.rs).
+    pub timing: crate::commands::timing::Timing,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -226,6 +237,18 @@ fn rank_of(score_qualif: i64, artists: i64, events: i64) -> f64 {
     score_qualif as f64 + 12.0 * artists as f64 + (events.min(400) as f64) / 8.0
 }
 
+/// Weight of the fit score (0-100) in the ranking. A venue without a score
+/// keeps exactly its previous rank.
+pub const FIT_WEIGHT: f64 = 1.0;
+
+pub fn rank_with_fit(base: f64, fit: Option<i64>) -> f64 {
+    base + FIT_WEIGHT * fit.unwrap_or(0) as f64
+}
+
+fn timing_fields(lead: Option<i64>, profile: Option<&str>) -> crate::commands::timing::Timing {
+    crate::commands::timing::window_for_row(chrono::Utc::now().date_naive(), lead, profile)
+}
+
 fn in_audience(conn: &Connection, campaign_id: i64, contact_id: Option<i64>) -> bool {
     contact_id.map_or(false, |cid| {
         conn.query_row(
@@ -271,14 +294,18 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
     let sql = format!(
         "SELECT v.id, v.nom, v.ville, v.pays, v.capacite_est, v.nb_events_periode, v.score_qualif,
                 v.crm_contact_id, v.site_web,
-                EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id = v.id AND c.type = 'email' AND {own})
+                EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id = v.id AND c.type = 'email' AND {own}),
+                v.fit_score, v.fit_detail, v.lead_weeks, v.month_profile
          FROM vi_venues v
          WHERE v.statut IN ('qualifie','valide') AND ({zone}) AND {cap} AND v.nb_events_periode >= {min_events}",
         own = own_email_sql("c.valeur"),
         zone = zone_parts.join(" OR "),
         cap = cap_cond,
     );
-    type Row = (i64, String, Option<String>, Option<String>, Option<i64>, i64, i64, Option<i64>, Option<String>, bool);
+    type Row = (
+        i64, String, Option<String>, Option<String>, Option<i64>, i64, i64, Option<i64>, Option<String>, bool,
+        (Option<i64>, Option<String>, Option<i64>, Option<String>),
+    );
     let rows: Vec<Row> = {
         let mut st = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
@@ -287,6 +314,7 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
                 Ok((
                     r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?,
                     r.get::<_, i64>(9)? != 0,
+                    (r.get(10)?, r.get(11)?, r.get(12)?, r.get(13)?),
                 ))
             })
             .map_err(|e| e.to_string())?;
@@ -308,7 +336,7 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
         )
         .map_err(|e| e.to_string())?;
 
-    for (id, nom, ville, pays, cap, events, score, crm, site, has_email) in rows {
+    for (id, nom, ville, pays, cap, events, score, crm, site, has_email, (fit, fit_detail, lead, profile)) in rows {
         if crate::commands::vi::is_placeholder_venue(&nom, ville.as_deref()) || not_a_club(&nom) {
             out.excluded_placeholder += 1;
             continue;
@@ -353,6 +381,7 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
             .map(|it| it.flatten().collect())
             .unwrap_or_default();
         let country = iso_country(pays.as_deref().unwrap_or(""));
+        let timing = timing_fields(lead, profile.as_deref());
         out.candidates.push(Candidate {
             key: format!("v:{}", id),
             venue_id: Some(id),
@@ -365,31 +394,164 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
             capacity_unknown: cap.is_none(),
             events,
             score_qualif: score,
-            rank: rank_of(score, artists.len() as i64, events),
+            rank: rank_with_fit(rank_of(score, artists.len() as i64, events), fit),
             artist_count: artists.len() as i64,
             artists: artists.into_iter().take(4).collect(),
             email: best.addr.trim().to_string(),
             email_rank: email_rank(&best.addr, best.person.as_deref()),
             first_name: first_name_of(best.person.as_deref()),
             source: "discovery".into(),
+            promoter_id: None,
+            fit_score: fit,
+            fit_explain: crate::commands::fit::explain_stored(fit_detail.as_deref()),
+            timing,
         });
     }
 
     // Venue contacts already in the pipeline that Discovery does not cover
     // (typed by hand, imported): matched on their city.
-    pipeline_candidates(conn, campaign_id, cfg, &cities, &countries, &mut seen_addr, &mut out)?;
+    let with_promoters = opts.include_promoters == Some(true);
+    if with_promoters {
+        promoter_candidates(conn, campaign_id, cfg, &cities, &pays, &mut seen_addr, &mut out)?;
+    }
+    pipeline_candidates(conn, campaign_id, cfg, &cities, &countries, with_promoters, &mut seen_addr, &mut out)?;
 
     out.candidates.sort_by(|a, b| b.rank.partial_cmp(&a.rank).unwrap_or(std::cmp::Ordering::Equal));
     out.candidates.truncate(limit);
     Ok(out)
 }
 
+/// Least nights (12 months if known, else harvested total) for a promoter to
+/// be listed: a collective with one or two parties is not a residency lead.
+pub const PROMOTER_MIN_EVENTS: i64 = 3;
+
+/// Discovery promoters of the zone (main city in the zone's cities, or
+/// country in its countries) with an address of their own. Capacity does not
+/// apply: a collective rents rooms of every size.
+fn promoter_candidates(
+    conn: &Connection,
+    campaign_id: i64,
+    cfg: &Config,
+    cities: &[String],
+    pays: &[String],
+    seen_addr: &mut HashSet<String>,
+    out: &mut BuildResult,
+) -> Result<(), String> {
+    let mut zone_parts: Vec<String> = Vec::new();
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if !cities.is_empty() {
+        zone_parts.push(format!("o.ville_norm IN ({})", vec!["?"; cities.len()].join(",")));
+        for c in cities {
+            args.push(Box::new(c.clone()));
+        }
+    }
+    if !pays.is_empty() {
+        zone_parts.push(format!("o.pays IN ({})", vec!["?"; pays.len()].join(",")));
+        for p in pays {
+            args.push(Box::new(p.clone()));
+        }
+    }
+    if zone_parts.is_empty() {
+        return Ok(());
+    }
+    let sql = format!(
+        "SELECT o.id, o.nom, o.ville, o.pays, o.crm_contact_id, MAX(o.nb_events_12m, o.nb_events_total), o.site_web,
+                o.fit_score, o.fit_detail, o.lead_weeks, o.month_profile
+         FROM vi_promoter_orgs o
+         WHERE o.statut = 'actif' AND o.house_promoter = 0 AND ({zone})
+           AND MAX(o.nb_events_12m, o.nb_events_total) >= {PROMOTER_MIN_EVENTS}",
+        zone = zone_parts.join(" OR "),
+    );
+    type Row = (
+        i64, String, Option<String>, Option<String>, Option<i64>, i64, Option<String>,
+        Option<i64>, Option<String>, Option<i64>, Option<String>,
+    );
+    let rows: Vec<Row> = {
+        let mut st = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+        let it = st
+            .query_map(refs.as_slice(), |r| {
+                Ok((
+                    r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?,
+                    r.get(9)?, r.get(10)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        it.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+    };
+    let mut email_st = conn
+        .prepare("SELECT valeur, score FROM vi_promoter_contacts WHERE promoter_id = ?1 AND type = 'email'")
+        .map_err(|e| e.to_string())?;
+    for (id, nom, ville, pays, crm, events, site, fit, fit_detail, lead, profile) in rows {
+        if in_audience(conn, campaign_id, crm) {
+            out.excluded_in_audience += 1;
+            continue;
+        }
+        let cands: Vec<EmailCand> = email_st
+            .query_map(params![id], |r| Ok(EmailCand { addr: r.get(0)?, score: r.get(1)?, person: None }))
+            .map(|it| it.flatten().collect())
+            .unwrap_or_default();
+        let Some(best) = best_email(&cands, site.as_deref()) else {
+            out.excluded_no_email += 1;
+            continue;
+        };
+        match skip_reason(conn, &best.addr, crm) {
+            Some(Skip::Suppressed) => {
+                out.excluded_suppressed += 1;
+                continue;
+            }
+            Some(Skip::Recent) => {
+                out.excluded_recent += 1;
+                continue;
+            }
+            Some(Skip::Declined) => {
+                out.excluded_declined += 1;
+                continue;
+            }
+            None => {}
+        }
+        if !seen_addr.insert(best.addr.trim().to_lowercase()) {
+            continue;
+        }
+        let country = iso_country(pays.as_deref().unwrap_or(""));
+        let timing = timing_fields(lead, profile.as_deref());
+        let matched = crate::commands::fit::matched_artists(fit_detail.as_deref());
+        out.candidates.push(Candidate {
+            key: format!("p:{}", id),
+            venue_id: None,
+            contact_id: crm,
+            lang: language_for(&country, ville.as_deref(), &cfg.lang).to_string(),
+            name: nom,
+            city: ville,
+            country,
+            capacity: None,
+            capacity_unknown: false,
+            events,
+            score_qualif: 0,
+            rank: rank_with_fit(12.0 * matched.len() as f64 + (events.min(400) as f64) / 8.0, fit),
+            artist_count: matched.len() as i64,
+            artists: matched.into_iter().take(4).collect(),
+            email: best.addr.trim().to_string(),
+            email_rank: email_rank(&best.addr, None),
+            first_name: None,
+            source: "promoter".into(),
+            promoter_id: Some(id),
+            fit_score: fit,
+            fit_explain: crate::commands::fit::explain_stored(fit_detail.as_deref()),
+            timing,
+        });
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn pipeline_candidates(
     conn: &Connection,
     campaign_id: i64,
     cfg: &Config,
     cities: &[String],
     countries: &[String],
+    with_promoters: bool,
     seen_addr: &mut HashSet<String>,
     out: &mut BuildResult,
 ) -> Result<(), String> {
@@ -411,10 +573,14 @@ fn pipeline_candidates(
     let default_country = cfg.zone.default_country();
     let mut st = conn
         .prepare(
-            "SELECT c.id, c.name, c.area, c.email, c.promoter FROM contacts c
-             WHERE c.category = 'venue' AND c.email IS NOT NULL AND trim(c.email) <> ''
-               AND c.status NOT IN ('declined','confirmed')
-               AND NOT EXISTS (SELECT 1 FROM vi_venues v WHERE v.crm_contact_id = c.id)",
+            &format!(
+                "SELECT c.id, c.name, c.area, c.email, c.promoter FROM contacts c
+                 WHERE c.category IN ({cats}) AND c.email IS NOT NULL AND trim(c.email) <> ''
+                   AND c.status NOT IN ('declined','confirmed')
+                   AND NOT EXISTS (SELECT 1 FROM vi_venues v WHERE v.crm_contact_id = c.id)
+                   AND NOT EXISTS (SELECT 1 FROM vi_promoter_orgs o WHERE o.crm_contact_id = c.id)",
+                cats = if with_promoters { "'venue','promoter'" } else { "'venue'" }
+            ),
         )
         .map_err(|e| e.to_string())?;
     let rows: Vec<(i64, String, Option<String>, String, Option<String>)> = st
@@ -470,6 +636,10 @@ fn pipeline_candidates(
             email: email.trim().to_string(),
             first_name: first_name_of(promoter.as_deref()),
             source: "pipeline".into(),
+            promoter_id: None,
+            fit_score: None,
+            fit_explain: None,
+            timing: timing_fields(None, None),
         });
     }
     Ok(())
@@ -486,6 +656,8 @@ pub struct Pick {
     pub email: String,
     #[serde(default)]
     pub first_name: Option<String>,
+    #[serde(default)]
+    pub promoter_id: Option<i64>,
 }
 
 /// Promote picked venues into contacts when needed (with the chosen address),
@@ -494,10 +666,11 @@ pub fn add_targets(conn: &Connection, campaign_id: i64, picks: &[Pick]) -> Resul
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut n = 0;
     for p in picks {
-        let cid = match (p.contact_id, p.venue_id) {
-            (Some(c), _) => c,
-            (None, Some(v)) => crate::commands::harvest::promote_venue_inner(&tx, v)?,
-            (None, None) => continue,
+        let cid = match (p.contact_id, p.venue_id, p.promoter_id) {
+            (Some(c), _, _) => c,
+            (None, Some(v), _) => crate::commands::harvest::promote_venue_inner(&tx, v)?,
+            (None, None, Some(o)) => crate::commands::promoters::promote_promoter_inner(&tx, o)?,
+            (None, None, None) => continue,
         };
         // The chosen address replaces the promotion's pick as long as nothing
         // was sent to the contact yet.
@@ -706,7 +879,7 @@ mod tests {
         let picks: Vec<Pick> = r
             .candidates
             .iter()
-            .map(|x| Pick { venue_id: x.venue_id, contact_id: x.contact_id, email: x.email.clone(), first_name: None })
+            .map(|x| Pick { venue_id: x.venue_id, contact_id: x.contact_id, email: x.email.clone(), first_name: None, promoter_id: x.promoter_id })
             .collect();
         assert_eq!(add_targets(&c, 1, &picks).unwrap(), 3);
         let email: String = c
@@ -720,6 +893,47 @@ mod tests {
         let info = target_info(&c, cid, &cfg).unwrap();
         assert_eq!(info.artists.len(), 3);
         assert_eq!(info.country, "FR");
+    }
+
+    #[test]
+    fn fit_ranks_and_promoters_join_on_request() {
+        let c = testdb::conn();
+        c.execute_batch(
+            "INSERT INTO campaigns (id, name, kind) VALUES (1, 'R', 'residency');
+             INSERT INTO vi_venues (id, nom, nom_normalise, ville, ville_norm, pays, statut, capacite_est, nb_events_periode, score_qualif, fit_score, fit_detail)
+             VALUES (1, 'Club A', 'cluba', 'Paris', 'paris', 'FR', 'qualifie', 400, 120, 60, NULL, NULL),
+                    (2, 'Club B', 'clubb', 'Paris', 'paris', 'FR', 'qualifie', 400, 120, 50, 70,
+                     '{\"score\":70,\"matched\":[\"Prunk\"],\"genre_nights\":14,\"nights\":20,\"genre_label\":\"house\",\"parts\":{\"overlap\":16,\"genre\":25,\"activity\":14,\"capacity\":15}}');
+             INSERT INTO vi_contacts (venue_id, type, valeur, score, source_url) VALUES
+                (1, 'email', 'booking@cluba.fr', 10, 'x'), (2, 'email', 'booking@clubb.fr', 10, 'x');
+             INSERT INTO vi_promoter_orgs (id, cle, nom, nom_normalise, ville, ville_norm, pays, nb_events_total, fit_score)
+             VALUES (7, 'ra:7', 'Collectif X', 'collectifx', 'Paris', 'paris', 'FR', 8, 55),
+                    (8, 'ra:8', 'Tiny', 'tiny', 'Paris', 'paris', 'FR', 1, 90);
+             INSERT INTO vi_promoter_contacts (promoter_id, valeur, score) VALUES
+                (7, 'booking@collectifx.fr', 100), (8, 'hello@tiny.fr', 100);",
+        )
+        .unwrap();
+        let cfg = Config::default();
+        let r = build(&c, 1, &cfg, &BuildOptions::default()).unwrap();
+        // Without a score Club A would lead (60 > 50); the fit puts B first.
+        let keys: Vec<&str> = r.candidates.iter().map(|x| x.key.as_str()).collect();
+        assert_eq!(keys, vec!["v:2", "v:1"]);
+        assert_eq!(r.candidates[0].fit_explain.as_deref(), Some("a programmé Prunk ; 14 soirées house en 12 mois"));
+        assert_eq!(r.candidates[1].fit_score, None);
+        let opts = BuildOptions { include_promoters: Some(true), ..Default::default() };
+        let r = build(&c, 1, &cfg, &opts).unwrap();
+        let p = r.candidates.iter().find(|x| x.source == "promoter").expect("promoter listed");
+        assert_eq!((p.key.as_str(), p.email.as_str()), ("p:7", "booking@collectifx.fr"));
+        assert!(!r.candidates.iter().any(|x| x.key == "p:8"), "too few nights");
+        let picks = vec![Pick { venue_id: None, contact_id: None, email: p.email.clone(), first_name: None, promoter_id: Some(7) }];
+        assert_eq!(add_targets(&c, 1, &picks).unwrap(), 1);
+        let cat: String = c
+            .query_row("SELECT k.category FROM contacts k JOIN vi_promoter_orgs o ON o.crm_contact_id = k.id WHERE o.id = 7", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cat, "promoter");
+        let r = build(&c, 1, &cfg, &opts).unwrap();
+        assert!(!r.candidates.iter().any(|x| x.key == "p:7"));
+        assert_eq!(r.excluded_in_audience, 1);
     }
 
     /// On a copy of the real database (PIERSCRM_DB_COPY): migrations, then the
@@ -755,7 +969,7 @@ mod tests {
                 });
                 crate::commands::residency::save_config(&c, id, &cfg).unwrap();
                 let picks: Vec<Pick> = r.candidates.iter().take(2)
-                    .map(|x| Pick { venue_id: x.venue_id, contact_id: x.contact_id, email: x.email.clone(), first_name: x.first_name.clone() })
+                    .map(|x| Pick { venue_id: x.venue_id, contact_id: x.contact_id, email: x.email.clone(), first_name: x.first_name.clone(), promoter_id: x.promoter_id })
                     .collect();
                 add_targets(&c, id, &picks).unwrap();
                 let g = crate::commands::residency::content::generate(&c, id, &cfg, None, false, None, None).unwrap();
