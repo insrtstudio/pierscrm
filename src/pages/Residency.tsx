@@ -24,6 +24,7 @@ import {
 import { TabbedPage, Loader, ErrorState, EmptyState } from "../components/Layout";
 import { Field, Modal, errorMessage, useConfirm, useToast } from "../components/ui";
 import { InsrtActivityPanel } from "../components/InsrtActivity";
+import { TimingBadge } from "../components/FitTiming";
 import {
   ASSET_TYPES,
   BOARD_COLUMNS,
@@ -468,7 +469,13 @@ function TargetTab({ view }: { view: ResidencyView }) {
         view.campaign.id!,
         (result?.candidates ?? [])
           .filter((c) => picked.has(c.key))
-          .map((c) => ({ venue_id: c.venue_id, contact_id: c.contact_id, email: c.email, first_name: c.first_name }))
+          .map((c) => ({
+            venue_id: c.venue_id,
+            contact_id: c.contact_id,
+            promoter_id: c.promoter_id,
+            email: c.email,
+            first_name: c.first_name,
+          }))
       ),
     onSuccess: (n) => {
       toast(t("residency.targets_added", { count: n }), "ok");
@@ -501,6 +508,14 @@ function TargetTab({ view }: { view: ResidencyView }) {
               onChange={(e) => setOpts((o) => ({ ...o, include_unknown_capacity: e.target.checked }))}
             />
             {t("residency.include_unknown")}
+          </label>
+          <label className="flex items-center gap-2 pb-2 text-sm" title={t("promoters.residency_hint")}>
+            <input
+              type="checkbox"
+              checked={opts.include_promoters === true}
+              onChange={(e) => setOpts((o) => ({ ...o, include_promoters: e.target.checked }))}
+            />
+            {t("promoters.residency_include")}
           </label>
           <button className="btn-primary" onClick={() => build.mutate()} disabled={build.isPending}>
             <Wand2 size={15} /> {build.isPending ? t("common.loading") : t("residency.build")}
@@ -562,6 +577,7 @@ function TargetTab({ view }: { view: ResidencyView }) {
                       <div className="text-2xs text-fg-subtle">
                         {c.city} · {c.country}
                         {c.source === "pipeline" && ` · ${t("residency.from_pipeline")}`}
+                        {c.source === "promoter" && ` · ${t("promoters.badge")}`}
                       </div>
                     </td>
                     <td className="text-xs">
@@ -570,7 +586,14 @@ function TargetTab({ view }: { view: ResidencyView }) {
                           {c.capacity_unknown ? t("residency.cap_unknown") : t("residency.cap", { n: c.capacity })}
                         </span>
                         {c.events > 0 && <span className="badge bg-muted text-fg-subtle">{t("residency.events", { n: c.events })}</span>}
+                        {c.fit_score != null && (
+                          <span className="badge bg-accent-2/15 text-accent-2" title={c.fit_explain ?? undefined}>
+                            {t("fit.badge", { n: c.fit_score })}
+                          </span>
+                        )}
+                        {c.timing && c.timing.state !== "unknown" && <TimingBadge timing={c.timing} />}
                       </div>
+                      {c.fit_explain && <div className="mt-1 text-2xs text-fg-subtle">{c.fit_explain}</div>}
                       {c.artists.length > 0 && (
                         <div className="mt-1 text-2xs text-fg-subtle">
                           {t("residency.played", { artists: c.artists.join(", ") })}

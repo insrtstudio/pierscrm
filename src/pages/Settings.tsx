@@ -20,6 +20,7 @@ import { PageHeader } from "../components/Layout";
 import clsx from "clsx";
 import { Field, errorMessage, useSubmit, useToast } from "../components/ui";
 import { ResidencySettingsCard } from "../components/ResidencySettings";
+import { ComparablesSettingsCard } from "../components/ComparablesSettings";
 
 type SignatureFields = {
   name: string;
@@ -669,6 +670,9 @@ export function Settings() {
         )}
         {tab === "general" && (
         <>
+        {/* Comparable artists (Discovery fit score) */}
+        <ComparablesSettingsCard />
+
         {/* Updates */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">

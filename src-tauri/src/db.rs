@@ -758,6 +758,12 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // one-shot cleanup of scraping-artefact addresses. See commands/vi.rs.
     crate::commands::vi::migrate_quality(conn);
 
+    // ---- Promoters as targets, fit score, booking timing ----
+    // vi_promoter_orgs (one identity per promoter across rooms), lineups and
+    // promoters per RA event, artist_comparables, fit / lead-time columns.
+    // Additive, see commands/promoters.rs and commands/fit.rs.
+    crate::commands::promoters::migrate(conn);
+
     // ---- Residency campaigns (autopilot, reply intelligence, EPK activity, reports) ----
     // campaigns.kind, residency_campaigns, campaign_messages, reply_insights,
     // press_activity, campaign_reports, residency_log, ai_usage and

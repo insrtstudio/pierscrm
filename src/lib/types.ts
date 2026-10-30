@@ -373,6 +373,11 @@ export interface ViVenueRow {
   played: boolean;
   /** City is one of the targeted artist's audience cities (sorted first server-side). */
   is_target: boolean;
+  /** "Books artists like ours" score 0-100 (fit.rs), null without data. */
+  fit_score?: number | null;
+  fit_detail?: string | null;
+  /** "Bon moment pour écrire" (timing.rs). */
+  timing?: import("./targets").Timing;
 }
 
 export interface CountryCount {

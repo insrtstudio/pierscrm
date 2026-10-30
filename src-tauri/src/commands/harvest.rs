@@ -377,6 +377,14 @@ fn describe_task(pool: &DbPool, task_type: &str, payload: &str) -> ProgressMsg {
         let name = nom.unwrap_or_else(|| format!("#{}", id));
         return ProgressMsg::new("radar_enrich", json!({ "name": name }), format!("Email search: {}", name));
     }
+    if task_type == "enrich_promoter" {
+        let id = v["promoter_id"].as_i64().unwrap_or(0);
+        let nom: Option<String> = pool.get().ok().and_then(|c| {
+            c.query_row("SELECT nom FROM vi_promoter_orgs WHERE id=?1", params![id], |r| r.get(0)).ok()
+        });
+        let name = nom.unwrap_or_else(|| format!("#{}", id));
+        return ProgressMsg::new("enrich", json!({ "name": name }), format!("Email search: {}", name));
+    }
     if task_type == "enrich_venue" {
         let vid = v["venue_id"].as_i64().unwrap_or(0);
         let nom: Option<String> = pool.get().ok().and_then(|c| {
@@ -448,6 +456,7 @@ async fn drain(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i64, po
             }
             "radar_harvest" => crate::commands::radar::process_harvest_task(&pool, &payload).await,
             "radar_enrich" => crate::commands::radar::process_enrich_task(&pool, &payload).await,
+            "enrich_promoter" => crate::commands::promoters::process_enrich_task(&client, &pool, &payload).await,
             _ => process_harvest_task(&client, &pool, &payload).await,
         };
         match result {
@@ -551,6 +560,10 @@ pub fn spawn_worker(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i6
         let cancelled = cancels.lock().unwrap_or_else(|e| e.into_inner()).remove(&run_id);
 
         qualify(&pool);
+        // Fit scores and booking timing follow the new data (best-effort).
+        if let Ok(c) = pool.get() {
+            crate::commands::fit::recompute_default(&c);
+        }
         // Finalisation must not panic on a starved pool, or the run would stay
         // 'en_cours' forever: wait for a connection instead.
         let conn = loop {
@@ -746,8 +759,9 @@ fn record_listings(conn: &rusqlite::Connection, listings: &[ra::Listing], region
         let new_event = match ev.id.parse::<i64>() {
             Ok(eid) => conn
                 .execute(
-                    "INSERT OR IGNORE INTO vi_venue_events (ra_event_id, venue_id, date_event) VALUES (?1,?2,?3)",
-                    params![eid, venue_id, date_event],
+                    "INSERT OR IGNORE INTO vi_venue_events (ra_event_id, venue_id, date_event, titre, first_seen_at)
+                     VALUES (?1,?2,?3,?4,datetime('now'))",
+                    params![eid, venue_id, date_event, ev.title],
                 )
                 .map(|n| n > 0)
                 .unwrap_or(false),
@@ -814,6 +828,9 @@ fn record_listings(conn: &rusqlite::Connection, listings: &[ra::Listing], region
                 );
             }
         }
+        // Lineup, title and promoter identities (promoters.rs), on every
+        // pass so events harvested before these tables existed fill in.
+        crate::commands::promoters::record_event_extras(conn, ev, venue_id);
     }
 }
 
@@ -967,6 +984,11 @@ pub struct VenueRow {
     pub played: bool,
     /// The venue's city is one of the targeted artist's audience cities.
     pub is_target: bool,
+    /// "Books artists like ours" (fit.rs), None when not computed / no data.
+    pub fit_score: Option<i64>,
+    pub fit_detail: Option<String>,
+    /// "Bon moment pour écrire" (timing.rs), computed for today.
+    pub timing: crate::commands::timing::Timing,
 }
 
 /// Normalised, de-duplicated audience cities (same folding as vi_venues.ville_norm).
@@ -1016,6 +1038,7 @@ fn venue_filters(
     contacted: Option<bool>,
     played: Option<bool>,
     only_in: &[String],
+    fit_min: Option<i64>,
 ) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
     let mut filters = String::new();
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -1064,6 +1087,10 @@ fn venue_filters(
     if played == Some(true) {
         filters.push_str(&format!(" AND {}", PLAYED_SQL));
     }
+    if let Some(m) = fit_min.filter(|m| *m > 0) {
+        filters.push_str(" AND v.fit_score >= ?");
+        args.push(Box::new(m));
+    }
 
     (filters, args)
 }
@@ -1082,11 +1109,12 @@ pub fn vi_count_venues(
     played: Option<bool>,
     target_cities: Option<Vec<String>>,
     target_only: Option<bool>,
+    fit_min: Option<i64>,
 ) -> Result<i64, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     count_venues(
         &conn, statut, pays, search, has_email, has_phone, has_website, contacted, played,
-        target_cities, target_only,
+        target_cities, target_only, fit_min,
     )
 }
 
@@ -1103,10 +1131,11 @@ fn count_venues(
     played: Option<bool>,
     target_cities: Option<Vec<String>>,
     target_only: Option<bool>,
+    fit_min: Option<i64>,
 ) -> Result<i64, String> {
     let only_in = if target_only == Some(true) { norm_cities(target_cities) } else { Vec::new() };
     let (filters, args) = venue_filters(
-        statut, pays, search, has_email, has_phone, has_website, contacted, played, &only_in,
+        statut, pays, search, has_email, has_phone, has_website, contacted, played, &only_in, fit_min,
     );
     let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
     conn.query_row(
@@ -1133,11 +1162,13 @@ pub fn vi_list_venues(
     target_only: Option<bool>,
     limit: Option<i64>,
     offset: Option<i64>,
+    fit_min: Option<i64>,
+    sort: Option<String>,
 ) -> Result<Vec<VenueRow>, String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     list_venues(
         &conn, statut, pays, search, has_email, has_phone, has_website, contacted, played,
-        target_cities, target_only, limit, offset,
+        target_cities, target_only, limit, offset, fit_min, sort,
     )
 }
 
@@ -1156,6 +1187,8 @@ fn list_venues(
     target_only: Option<bool>,
     limit: Option<i64>,
     offset: Option<i64>,
+    fit_min: Option<i64>,
+    sort: Option<String>,
 ) -> Result<Vec<VenueRow>, String> {
     // Filters and paging first, decoration second. Selecting the page in an inner
     // query means the six correlated subqueries below run for the rows actually
@@ -1165,8 +1198,10 @@ fn list_venues(
     let cities = norm_cities(target_cities);
     let only_in: &[String] = if target_only == Some(true) { &cities } else { &[] };
     let (filters, filter_args) = venue_filters(
-        statut, pays, search, has_email, has_phone, has_website, contacted, played, only_in,
+        statut, pays, search, has_email, has_phone, has_website, contacted, played, only_in, fit_min,
     );
+    // "fit": best "books artists like ours" first (venues without a score last).
+    let fit_order = if sort.as_deref() == Some("fit") { "v.fit_score IS NULL, v.fit_score DESC, " } else { "" };
     // Artist targeting sorts in SQL, so venues in the audience cities come first
     // across every page, not just within the rows already loaded. Without a
     // target the ORDER BY stays the index's and SQLite stops after one page.
@@ -1188,11 +1223,11 @@ fn list_venues(
                 v.crm_contact_id,
                 {contacted} AS is_contacted,
                 {played} AS has_played,
-                v.is_target
+                v.is_target, v.fit_score, v.fit_detail, v.lead_weeks, v.month_profile
          FROM (SELECT v.*, {target_expr} AS is_target FROM vi_venues v WHERE 1=1{filters}
-               ORDER BY {order}v.score_qualif DESC, v.nb_events_periode DESC, v.nom COLLATE NOCASE
+               ORDER BY {order}{fit_order}v.score_qualif DESC, v.nb_events_periode DESC, v.nom COLLATE NOCASE
                LIMIT {limit} OFFSET {offset}) v
-         ORDER BY v.is_target DESC, v.score_qualif DESC, v.nb_events_periode DESC, v.nom COLLATE NOCASE",
+         ORDER BY v.is_target DESC, {fit_order}v.score_qualif DESC, v.nb_events_periode DESC, v.nom COLLATE NOCASE",
         contacted = CONTACTED_SQL,
         played = PLAYED_SQL,
         own = own_email_sql("c.valeur"),
@@ -1204,8 +1239,11 @@ fn list_venues(
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+    let today = Utc::now().date_naive();
     let rows = stmt
         .query_map(refs.as_slice(), |r| {
+            let lead: Option<i64> = r.get(23)?;
+            let profile: Option<String> = r.get(24)?;
             Ok(VenueRow {
                 id: r.get(0)?,
                 nom: r.get(1)?,
@@ -1228,6 +1266,9 @@ fn list_venues(
                 contacted: r.get::<_, i64>(18)? != 0,
                 played: r.get::<_, i64>(19)? != 0,
                 is_target: r.get::<_, i64>(20)? != 0,
+                fit_score: r.get(21)?,
+                fit_detail: r.get(22)?,
+                timing: crate::commands::timing::window_for_row(today, lead, profile.as_deref()),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1521,6 +1562,37 @@ mod tests {
         assert_eq!(counts().1, 3);
     }
 
+    /// Discovery sorts and filters on the fit score, and carries the timing.
+    #[test]
+    fn venue_list_by_fit() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate_for_tests(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO vi_venues (id, nom, nom_normalise, statut, score_qualif, fit_score, month_profile, lead_weeks) VALUES
+               (1, 'High qualif', 'a', 'qualifie', 90, 20, NULL, NULL),
+               (2, 'Good fit', 'b', 'qualifie', 10, 75, '2,2,2,2,2,2,2,2,2,2,2,2', 10),
+               (3, 'No score', 'c', 'qualifie', 50, NULL, NULL, NULL);",
+        )
+        .unwrap();
+        let s = || Some("actif".to_string());
+        let ids = |sort: Option<String>, fit_min: Option<i64>| -> Vec<i64> {
+            list_venues(&conn, s(), None, None, None, None, None, None, None, None, None, None, None, fit_min, sort)
+                .unwrap()
+                .iter()
+                .map(|v| v.id)
+                .collect()
+        };
+        assert_eq!(ids(None, None), vec![1, 3, 2]);
+        assert_eq!(ids(Some("fit".into()), None), vec![2, 1, 3]);
+        assert_eq!(ids(Some("fit".into()), Some(40)), vec![2]);
+        let c = count_venues(&conn, s(), None, None, None, None, None, None, None, None, None, Some(40)).unwrap();
+        assert_eq!(c, 1);
+        let rows = list_venues(&conn, s(), None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+        let good = rows.iter().find(|v| v.id == 2).unwrap();
+        assert_eq!(good.timing.state, crate::commands::timing::State::Now);
+        assert_eq!(rows.iter().find(|v| v.id == 3).unwrap().timing.state, crate::commands::timing::State::Unknown);
+    }
+
     /// Timing on a copy of the real database (never the live one):
     /// VI_MIGRATION_DB=/path/copy.db cargo test --release venue_list_perf -- --ignored --nocapture
     #[test]
@@ -1538,15 +1610,15 @@ mod tests {
             let n = f();
             println!("{label}: {n} rows in {:?}", t.elapsed());
         };
-        time("list p1 no target", &|| list_venues(&conn, s(), None, None, None, None, None, None, None, None, None, Some(200), Some(0)).unwrap().len());
-        time("list p1 target", &|| list_venues(&conn, s(), None, None, None, None, None, None, None, cities(), None, Some(200), Some(0)).unwrap().len());
-        time("list p20 target", &|| list_venues(&conn, s(), None, None, None, None, None, None, None, cities(), None, Some(200), Some(4000)).unwrap().len());
-        time("list all statuts target", &|| list_venues(&conn, Some("all".into()), None, None, None, None, None, None, None, cities(), None, Some(200), Some(0)).unwrap().len());
-        time("list email no target", &|| list_venues(&conn, s(), None, None, Some(true), None, None, None, None, None, None, Some(200), Some(0)).unwrap().len());
-        time("list email target", &|| list_venues(&conn, s(), None, None, Some(true), None, None, None, None, cities(), None, Some(200), Some(0)).unwrap().len());
-        time("count target_only", &|| count_venues(&conn, s(), None, None, None, None, None, None, None, cities(), Some(true)).unwrap() as usize);
-        time("count no target", &|| count_venues(&conn, s(), None, None, None, None, None, None, None, None, None).unwrap() as usize);
-        let rows = list_venues(&conn, s(), None, None, None, None, None, None, None, cities(), None, Some(200), Some(0)).unwrap();
+        time("list p1 no target", &|| list_venues(&conn, s(), None, None, None, None, None, None, None, None, None, Some(200), Some(0), None, None).unwrap().len());
+        time("list p1 target", &|| list_venues(&conn, s(), None, None, None, None, None, None, None, cities(), None, Some(200), Some(0), None, None).unwrap().len());
+        time("list p20 target", &|| list_venues(&conn, s(), None, None, None, None, None, None, None, cities(), None, Some(200), Some(4000), None, None).unwrap().len());
+        time("list all statuts target", &|| list_venues(&conn, Some("all".into()), None, None, None, None, None, None, None, cities(), None, Some(200), Some(0), None, None).unwrap().len());
+        time("list email no target", &|| list_venues(&conn, s(), None, None, Some(true), None, None, None, None, None, None, Some(200), Some(0), None, None).unwrap().len());
+        time("list email target", &|| list_venues(&conn, s(), None, None, Some(true), None, None, None, None, cities(), None, Some(200), Some(0), None, None).unwrap().len());
+        time("count target_only", &|| count_venues(&conn, s(), None, None, None, None, None, None, None, cities(), Some(true), None).unwrap() as usize);
+        time("count no target", &|| count_venues(&conn, s(), None, None, None, None, None, None, None, None, None, None).unwrap() as usize);
+        let rows = list_venues(&conn, s(), None, None, None, None, None, None, None, cities(), None, Some(200), Some(0), None, None).unwrap();
         let first_non = rows.iter().position(|r| !r.is_target).unwrap_or(rows.len());
         assert!(rows[first_non..].iter().all(|r| !r.is_target), "targets first");
         println!("first page: {} targets then {}", first_non, rows.len() - first_non);

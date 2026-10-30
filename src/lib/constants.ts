@@ -26,7 +26,7 @@ export const STATUS_DOT: Record<Status, string> = {
   no_answer: "#6b6560",
 };
 
-export const CATEGORIES = ["venue", "curator", "lineup", "major", "other"] as const;
+export const CATEGORIES = ["venue", "promoter", "curator", "lineup", "major", "other"] as const;
 
 /** Fields that can be targeted by the import column mapper. */
 export const IMPORT_FIELDS = [

@@ -115,7 +115,13 @@ export interface Candidate {
   email_rank: number;
   first_name?: string | null;
   lang: string;
-  source: "discovery" | "pipeline";
+  source: "discovery" | "pipeline" | "promoter";
+  promoter_id?: number | null;
+  /** "Books artists like ours" score (fit.rs). */
+  fit_score?: number | null;
+  fit_explain?: string | null;
+  /** "Bon moment pour écrire" (timing.rs). */
+  timing?: import("./targets").Timing;
 }
 
 export interface BuildResult {
@@ -134,6 +140,8 @@ export interface BuildOptions {
   include_unknown_capacity?: boolean;
   min_events?: number;
   limit?: number;
+  /** Also list promoters / collectives of the zone. */
+  include_promoters?: boolean;
 }
 
 export const BOARD_COLUMNS = [
@@ -298,7 +306,13 @@ export const buildTarget = (campaignId: number, options?: BuildOptions) =>
   invoke<BuildResult>("residency_build_target", { campaignId, options: options ?? null });
 export const addTargets = (
   campaignId: number,
-  picks: { venue_id?: number | null; contact_id?: number | null; email: string; first_name?: string | null }[]
+  picks: {
+    venue_id?: number | null;
+    contact_id?: number | null;
+    promoter_id?: number | null;
+    email: string;
+    first_name?: string | null;
+  }[]
 ) => invoke<number>("residency_add_targets", { campaignId, picks });
 export const removeTarget = (campaignId: number, contactId: number) =>
   invoke<void>("residency_remove_target", { campaignId, contactId });
