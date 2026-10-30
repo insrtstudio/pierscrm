@@ -71,7 +71,7 @@ pub fn vars_for(info: &TargetInfo, cfg: &Config, artist: &str, press_url: Option
     );
     v.insert("venue".into(), info.venue.clone());
     if !info.city.trim().is_empty() {
-        v.insert("city".into(), info.city.clone());
+        v.insert("city".into(), super::zone::city_label(&info.city, &info.lang));
     }
     if !artist.trim().is_empty() {
         v.insert("artist".into(), artist.to_string());
@@ -204,7 +204,7 @@ pub fn campaign_block(cfg: &Config, artist: &str) -> String {
 fn facts_of(info: &TargetInfo) -> String {
     let mut f = vec![format!("Club: {}", info.venue)];
     if !info.city.is_empty() {
-        f.push(format!("City: {} ({})", info.city, info.country));
+        f.push(format!("City: {} ({})", super::zone::city_label(&info.city, &info.lang), info.country));
     }
     if let Some(c) = info.capacity {
         f.push(format!("Estimated capacity: {}", c));

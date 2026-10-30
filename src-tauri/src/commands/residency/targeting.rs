@@ -200,6 +200,28 @@ fn skip_reason(conn: &Connection, addr: &str, contact_id: Option<i64>) -> Option
     recent.then_some(Skip::Recent)
 }
 
+/// Discovery rows that are not a club room: hotels, breweries, universities,
+/// festivals, and "venues" whose name is a street address (RA's fallback when a
+/// promoter types the address instead of a room).
+pub(crate) fn not_a_club(nom: &str) -> bool {
+    let words = nom.split(|c: char| !c.is_alphanumeric()).map(crate::db::normalise).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ");
+    let n = format!(" {} ", words);
+    const WORDS: &[&str] = &[
+        " hotel ", " hostel ", " brewery ", " brouwerij ", " beer co ", " university ", " universite ",
+        " universiteit ", " vub ", " ulb ", " campus ", " festival ", " jazz ",
+    ];
+    if WORDS.iter().any(|w| n.contains(w)) {
+        return true;
+    }
+    static ADDRESS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    ADDRESS
+        .get_or_init(|| {
+            regex::Regex::new(r"(?i)(\b\d{4,5}\b.*\b[a-z]{3,}\b|\b(rue|avenue|boulevard|chaussee|straat|street|road|strasse|laan|weg|plein|place)\b.*\d|\d+\s*,?\s*(rue|avenue|boulevard|street|road)\b|^(avenue|rue|boulevard|chaussee)\b|straat\s*\d)")
+                .unwrap()
+        })
+        .is_match(&words)
+}
+
 fn rank_of(score_qualif: i64, artists: i64, events: i64) -> f64 {
     score_qualif as f64 + 12.0 * artists as f64 + (events.min(400) as f64) / 8.0
 }
@@ -287,7 +309,7 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
         .map_err(|e| e.to_string())?;
 
     for (id, nom, ville, pays, cap, events, score, crm, site, has_email) in rows {
-        if crate::commands::vi::is_placeholder_venue(&nom, ville.as_deref()) {
+        if crate::commands::vi::is_placeholder_venue(&nom, ville.as_deref()) || not_a_club(&nom) {
             out.excluded_placeholder += 1;
             continue;
         }
@@ -663,6 +685,13 @@ mod tests {
         assert_eq!(b.artist_count, 3);
         assert_eq!(r.excluded_suppressed, 1);
         assert_eq!(r.excluded_placeholder, 1);
+        for bad in ["Meininger Hotel Brussels City Center", "La Source Beer Co", "Pilar - VUB", "Avenue des Genets",
+                    "Sint-Jacobsnieuwstraat 30, 9000 Gent, België", "Jazz Middelheim"] {
+            assert!(not_a_club(bad), "{bad}");
+        }
+        for ok in ["Funke", "Club Vaag", "AB Club (Ancienne Belgique)", "Brasserie Illegaal", "Le Botanique Witloof Bar", "Rex Club", "La Rotonde Stalingrad", "Péniche Marcounet", "Nouveau Casino", "Fuse"] {
+            assert!(!not_a_club(ok), "{ok}");
+        }
 
         // Belgium preset: Brussels in French.
         let mut be = Config::default();

@@ -126,6 +126,30 @@ pub fn pays_values(iso: &str) -> Vec<String> {
 
 /// Email language for a target: "fr" or "en". `override_lang` is the
 /// campaign setting ("auto", "fr", "en").
+/// City name as written in the email's language: Discovery stores RA's English
+/// names ("Brussels", "Ghent"), a French email says "Bruxelles", "Gand".
+pub fn city_label(city: &str, lang: &str) -> String {
+    const PAIRS: &[(&str, &str)] = &[
+        ("brussels", "Bruxelles"), ("antwerp", "Anvers"), ("ghent", "Gand"), ("bruges", "Bruges"),
+        ("leuven", "Louvain"), ("mechelen", "Malines"), ("liege", "Liège"), ("geneva", "Genève"),
+        ("basel", "Bâle"), ("bern", "Berne"), ("lucerne", "Lucerne"), ("zurich", "Zurich"),
+        ("london", "Londres"), ("cologne", "Cologne"), ("munich", "Munich"), ("vienna", "Vienne"),
+        ("lisbon", "Lisbonne"), ("barcelona", "Barcelone"), ("amsterdam", "Amsterdam"), ("berlin", "Berlin"),
+    ];
+    let key = normalise(city);
+    match lang {
+        "fr" => PAIRS.iter().find(|(en, _)| *en == key).map(|(_, fr)| fr.to_string()),
+        _ => PAIRS
+            .iter()
+            .find(|(_, fr)| normalise(fr) == key)
+            .map(|(en, _)| {
+                let mut c = en.chars();
+                c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+            }),
+    }
+    .unwrap_or_else(|| city.trim().to_string())
+}
+
 pub fn language_for(country: &str, city: Option<&str>, override_lang: &str) -> &'static str {
     match override_lang {
         "fr" => return "fr",
@@ -369,6 +393,11 @@ mod tests {
         assert_eq!(language_for("CH", Some("Genève"), "auto"), "fr");
         assert_eq!(language_for("CH", Some("Zurich"), "auto"), "en");
         assert_eq!(language_for("UK", Some("London"), "auto"), "en");
+        assert_eq!(city_label("Brussels", "fr"), "Bruxelles");
+        assert_eq!(city_label("Ghent", "fr"), "Gand");
+        assert_eq!(city_label("Zürich", "fr"), "Zurich");
+        assert_eq!(city_label("Bruxelles", "en"), "Brussels");
+        assert_eq!(city_label("Paris", "fr"), "Paris");
         assert_eq!(language_for("UK", Some("London"), "fr"), "fr");
         assert_eq!(pays_values("GB"), vec!["GB".to_string(), "UK".to_string()]);
     }
