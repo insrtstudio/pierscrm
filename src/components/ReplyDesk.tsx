@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import clsx from "clsx";
-import { ChevronDown, ChevronRight, Clock, EyeOff, RefreshCw, Send, Sparkles } from "lucide-react";
+import { BookOpen, Bot, ChevronDown, ChevronRight, Clock, EyeOff, PowerOff, RefreshCw, Send, Sparkles, X } from "lucide-react";
 import { setSetting } from "../lib/api";
 import {
   DESK_NOTIFY_KEY,
@@ -19,6 +19,14 @@ import {
   deskSnooze,
   type DeskItem,
 } from "../lib/replyDesk";
+import {
+  autonomyOverview,
+  autonomyStopAll,
+  autosendCancel,
+  localTime,
+  type AutoRow,
+  type DeskAuto,
+} from "../lib/playbook";
 import { errorMessage, useSubmit, useToast } from "./ui";
 
 /// Opening the app within this delay of a notification lands on its conversation
@@ -26,7 +34,7 @@ import { errorMessage, useSubmit, useToast } from "./ui";
 const NOTIFIED_OPEN_MS = 2 * 3600_000;
 
 function invalidateDesk(qc: QueryClient) {
-  for (const key of ["reply_desk", "reply_desk_count", "emails", "campaigns", "followups", "contacts"])
+  for (const key of ["reply_desk", "reply_desk_count", "emails", "campaigns", "followups", "contacts", "autonomy"])
     qc.invalidateQueries({ queryKey: [key] });
 }
 
@@ -109,6 +117,15 @@ export function ReplyDeskTab() {
   const [params] = useSearchParams();
   const focusId = Number(params.get("item")) || null;
   const { data, isLoading } = useQuery({ queryKey: ["reply_desk"], queryFn: deskList });
+  // Autonomy (scheduled sends, why a draft waits, playbook entries used).
+  const { data: auto } = useQuery({ queryKey: ["autonomy"], queryFn: autonomyOverview, refetchInterval: 60_000 });
+  const autoFor = (id: number) => auto?.items.find((a) => a.desk_id === id);
+  const autoOn = !!auto && auto.settings.enabled && auto.settings.levels.some((l) => l.level > 0);
+  const [stopAll, stopping] = useSubmit(async () => {
+    const n = await autonomyStopAll();
+    invalidateDesk(qc);
+    toast(t("autonomy.stopped", { count: n }));
+  });
   const [refresh, refreshing] = useSubmit(async () => {
     const r = await deskRefresh();
     invalidateDesk(qc);
@@ -125,15 +142,63 @@ export function ReplyDeskTab() {
         </button>
       </div>
       {data && <DeskSettings notify={data.notify} nudgeDays={data.nudge_days} />}
+      {autoOn && auto && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-accent/30 bg-accent/5 px-3 py-2 text-xs">
+          <Bot size={14} className="text-accent-2" />
+          <span className="flex-1">{t("autonomy.desk_on", { name: auto.settings.agent_name, delay: auto.settings.delay_min })}</span>
+          <button className="btn-ghost text-danger" onClick={() => stopAll()} disabled={stopping}>
+            <PowerOff size={13} />
+            {t("autonomy.stop_all")}
+          </button>
+        </div>
+      )}
       {isLoading && <p className="text-sm text-fg-muted">{t("common.loading")}</p>}
       {data && data.items.length === 0 && (
         <div className="card p-8 text-center text-sm text-fg-muted">{t("desk.empty")}</div>
       )}
       {data?.items.map((it) => (
-        <DeskCard key={it.id} item={it} focused={it.id === focusId} />
+        <DeskCard key={it.id} item={it} focused={it.id === focusId} auto={autoFor(it.id)} />
       ))}
       {data && data.snoozed > 0 && (
         <p className="text-xs text-fg-faint">{t("desk.snoozed_count", { count: data.snoozed })}</p>
+      )}
+      {auto && auto.history.length > 0 && <AutosendHistory rows={auto.history} />}
+    </div>
+  );
+}
+
+/// Every autonomous send (and the ones cancelled or held back), with its reason.
+function AutosendHistory({ rows }: { rows: AutoRow[] }) {
+  const { t, i18n } = useTranslation();
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="pt-2">
+      <button className="flex items-center gap-1 text-xs text-fg-muted hover:text-fg" onClick={() => setOpen((v) => !v)}>
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        {t("autonomy.history", { count: rows.length })}
+      </button>
+      {open && (
+        <ul className="mt-2 divide-y divide-border rounded-md border border-border text-xs">
+          {rows.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2">
+              <span className="tabular text-fg-faint">{fmtDate(r.done_at ?? r.due_at, i18n.language)}</span>
+              <span className="font-medium">{r.contact}</span>
+              <span className="text-fg-muted">{t(`autonomy.cat_${r.category}`)}</span>
+              <span
+                className={clsx(
+                  "rounded-full px-2 py-0.5",
+                  r.state === "sent" ? "bg-accent/15 text-accent-2" : r.state === "failed" ? "bg-danger/10 text-danger" : "bg-muted text-fg-muted"
+                )}
+              >
+                {t(`autonomy.state_${r.state}`)}
+              </span>
+              <span className="w-full text-fg-subtle">
+                {r.reason}
+                {r.note && ` · ${r.note}`}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
@@ -184,7 +249,7 @@ function DeskSettings({ notify, nudgeDays }: { notify: boolean; nudgeDays: numbe
   );
 }
 
-function DeskCard({ item, focused }: { item: DeskItem; focused: boolean }) {
+function DeskCard({ item, focused, auto }: { item: DeskItem; focused: boolean; auto?: DeskAuto }) {
   const { t, i18n } = useTranslation();
   const toast = useToast();
   const qc = useQueryClient();
@@ -228,7 +293,12 @@ function DeskCard({ item, focused }: { item: DeskItem; focused: boolean }) {
     await deskRedraft(item.id);
     qc.invalidateQueries({ queryKey: ["reply_desk"] });
   });
-  const busy = sending || ignoring || snoozing || redrafting;
+  const [cancelAuto, cancelling] = useSubmit(async () => {
+    if (auto?.autosend_id) await autosendCancel(auto.autosend_id);
+    invalidateDesk(qc);
+    toast(t("autonomy.cancelled"));
+  });
+  const busy = sending || ignoring || snoozing || redrafting || cancelling;
 
   const intentLabel =
     item.kind === "nudge"
@@ -263,6 +333,23 @@ function DeskCard({ item, focused }: { item: DeskItem; focused: boolean }) {
           {waiting(item.hours_waiting, t)}
         </span>
       </div>
+
+      {auto?.autosend_id && auto.due_at && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-sm">
+          <Bot size={14} className="text-accent-2" />
+          <span>{t("autonomy.badge", { time: localTime(auto.due_at) })}</span>
+          <button className="btn-ghost ml-auto" disabled={busy} onClick={() => cancelAuto()}>
+            <X size={13} />
+            {t("autonomy.cancel")}
+          </button>
+        </div>
+      )}
+      {!auto?.autosend_id && auto?.note && (
+        <p className="text-xs text-fg-muted">
+          <Bot size={12} className="mr-1 inline" />
+          {t("autonomy.waits", { reason: auto.note })}
+        </p>
+      )}
 
       {item.summary && <p className="text-sm italic text-fg-muted">{item.summary}</p>}
 
@@ -304,6 +391,17 @@ function DeskCard({ item, focused }: { item: DeskItem; focused: boolean }) {
             </span>
           )}
         </p>
+        {auto && auto.playbook.length > 0 && (
+          <p className="flex flex-wrap items-center gap-1 text-2xs text-fg-faint">
+            <BookOpen size={11} />
+            {t("autonomy.used")}
+            {auto.playbook.map((p) => (
+              <span key={p.id} className="rounded bg-muted px-1.5 py-0.5 text-fg-muted">
+                {p.title || t(`playbook.topic_${p.topic}`)}
+              </span>
+            ))}
+          </p>
+        )}
         <input
           className="input w-full"
           value={subject}

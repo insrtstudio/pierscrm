@@ -797,6 +797,11 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // ---- Offers, documents, payments, advancing (commands/offers) ----
     // offers, invoices, advancing. Additive and idempotent.
     crate::commands::offers::migrate(conn);
+    // ---- Agent library + graduated autonomy ----
+    // playbook_entries, autosends, reply_desk / campaign_messages columns.
+    // Additive, see commands/playbook.rs and commands/autonomy.rs.
+    crate::commands::playbook::migrate(conn);
+    crate::commands::autonomy::migrate(conn);
 
     Ok(())
 }

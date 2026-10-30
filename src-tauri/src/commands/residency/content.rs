@@ -290,6 +290,7 @@ pub fn draft_first_email(
     artist: &str,
     press_link: &str,
     played_at: &[String],
+    playbook: Option<&str>,
     usage_sink: &mut dyn FnMut(&str, &claude::Usage),
 ) -> Result<Draft, String> {
     let lang_name = if info.lang == "en" { "English" } else { "French" };
@@ -308,10 +309,16 @@ pub fn draft_first_email(
     let req = LlmRequest {
         model: model.to_string(),
         max_tokens: 400,
-        system: vec![
-            SystemBlock { text: DRAFT_SYSTEM.into(), cache: false },
-            SystemBlock { text: campaign_block(cfg, artist), cache: true },
-        ],
+        // The approved playbook (commands/playbook.rs) sits between the rules
+        // and the campaign block: the single cache breakpoint stays at the end.
+        system: {
+            let mut blocks = vec![SystemBlock { text: DRAFT_SYSTEM.into(), cache: false }];
+            if let Some(p) = playbook.filter(|p| !p.trim().is_empty()) {
+                blocks.push(SystemBlock { text: p.to_string(), cache: false });
+            }
+            blocks.push(SystemBlock { text: campaign_block(cfg, artist), cache: true });
+            blocks
+        },
         user,
         schema: Some(draft_schema()),
     };
@@ -425,6 +432,7 @@ pub fn generate(
     let artist = artist_name(conn, campaign_id);
     let model = claude::drafting_model(conn);
     let played = crate::commands::routing::played_at_facts_for_campaign(conn, campaign_id);
+    let playbook = crate::commands::playbook::prompt_context(conn);
     let mut res = GenResult::default();
     for cid in ids {
         let status: Option<String> = conn
@@ -456,7 +464,7 @@ pub fn generate(
         let ai = match llm {
             Some(l) if !link_text.is_empty() => {
                 let mut sink = |m: &str, u: &claude::Usage| claude::log_usage(conn, "draft", Some(campaign_id), m, u);
-                match draft_first_email(l, &model, cfg, &info, &artist, link_text.trim(), &played, &mut sink) {
+                match draft_first_email(l, &model, cfg, &info, &artist, link_text.trim(), &played, playbook.as_ref().map(|p| p.text.as_str()), &mut sink) {
                     Ok(d) => Some(d),
                     Err(e) => {
                         note = Some(format!("IA indisponible, modèle utilisé : {}", e));
@@ -503,6 +511,12 @@ pub fn generate(
             params![campaign_id, cid, subject, body, info.lang, press, note, generated_by, variant],
         )
         .map_err(|e| e.to_string())?;
+        // The approved entries the model had in hand for this draft.
+        let used = playbook.as_ref().filter(|_| generated_by != "template").map(|p| crate::commands::playbook::ids_json(&p.ids));
+        let _ = conn.execute(
+            "UPDATE campaign_messages SET playbook_ids = ?3 WHERE campaign_id = ?1 AND contact_id = ?2 AND step = 1 AND status <> 'sent'",
+            params![campaign_id, cid, used],
+        );
         res.created += 1;
     }
     Ok(res)
@@ -656,5 +670,24 @@ mod tests {
         assert_eq!(r.created, 1);
         let body: String = c.query_row("SELECT body FROM campaign_messages WHERE step = 1", [], |r| r.get(0)).unwrap();
         assert!(body.contains("https://insrt.studio/p/pk1-10-fr"), "{}", body);
+    }
+
+    #[test]
+    fn approved_playbook_reaches_the_first_email_prompt() {
+        use crate::commands::playbook::{self, Entry};
+        let (c, mut cfg) = setup();
+        cfg.press_kit_id = Some("pk1".into());
+        let ok = playbook::save(&c, &Entry { kind: "answer".into(), topic: "formats".into(), text_fr: "Warm-up ou closing.".into(), status: "approved".into(), ..Default::default() }).unwrap();
+        playbook::save(&c, &Entry { kind: "answer".into(), topic: "fee".into(), text_fr: "BROUILLON PAS VALIDÉ".into(), ..Default::default() }).unwrap();
+        let llm = FakeLlm::new(&[r#"{"subject":"Club A x Piers","body":"Hello,\n\nUne idée.\n\nThibault"}"#]);
+        generate(&c, 1, &cfg, None, false, Some(&llm), Some(&FakeInsrt)).unwrap();
+        let seen = llm.seen.lock().unwrap();
+        let sys = &seen[0].system;
+        assert_eq!(sys.len(), 3);
+        assert_eq!(sys.iter().filter(|b| b.cache).count(), 1, "one cache breakpoint");
+        assert!(sys[2].cache && sys[1].text.contains("Warm-up ou closing.") && !sys[1].text.contains("PAS VALIDÉ"));
+        drop(seen);
+        let used: String = c.query_row("SELECT playbook_ids FROM campaign_messages WHERE step = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(used, format!("[{}]", ok));
     }
 }

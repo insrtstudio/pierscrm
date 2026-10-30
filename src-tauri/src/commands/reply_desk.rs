@@ -226,6 +226,10 @@ pub struct DraftInput {
     pub ours: Option<Message>,
     pub theirs: Option<Message>,
     pub facts: Facts,
+    /// Approved playbook entries (commands/playbook.rs), as a cached system block.
+    pub playbook: Option<crate::commands::playbook::Context>,
+    /// A category is on autopilot (commands/autonomy.rs): ask for risk-free wording.
+    pub autonomy: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -236,6 +240,8 @@ pub struct Message {
 }
 
 pub const DESK_INTENTS: &[&str] = &["interested", "question", "not_interested", "other"];
+/// What a draft does, for the autonomy rules (commands/autonomy.rs).
+pub const DESK_CATEGORIES: &[&str] = &["music_request", "call_slots", "holding", "none"];
 
 /// The cached system prompt (static text: identical across calls, so the
 /// prefix cache holds).
@@ -263,12 +269,20 @@ about money or conditions. If they ask something the facts do not answer, say Th
 - Dates: offer at most three of the free weekends, the closest to anything they mentioned.
 - Links: one or two at most, copied verbatim, each on its own line. Prefer the personal press link when there is one.
 - Write in the language requested (the language of the thread).
+- When a PLAYBOOK is given, its entries are Thibault's approved answers and facts: prefer them over improvising.
 {}
 Also classify the programmer's last message (for a nudge, answer interested): interested (open to a date or a talk), \
 question (asks for information before deciding: fee, dates, rider, references, mix), not_interested (declines), \
 other (out of office, unrelated, newsletter, anything else).
 
-Answer with JSON only: {{\"intent\": \"...\", \"body\": \"...\"}}.",
+Then say what your answer does, for Thibault's autonomy rules. category: music_request (it only sends the mix or \
+press link they asked for), call_slots (it only proposes a call, with days or moments of the week, no calendar date), \
+holding (it only thanks them for an out-of-office or a \"we will come back to you\" and says Thibault stays \
+available), none (anything else: money, dates, holds, contracts, an objection, a refusal, several topics). \
+confidence: from 0 to 1, how sure you are of that category and that the answer is complete and safe to send as is. \
+playbook_used: the numbers of the playbook entries you relied on ([P12] gives 12), [] if none.
+
+Answer with JSON only: {{\"intent\": \"...\", \"body\": \"...\", \"category\": \"...\", \"confidence\": 0.0, \"playbook_used\": []}}.",
         HOUSE_VOICE
     )
 }
@@ -278,9 +292,12 @@ fn answer_schema() -> Value {
         "type": "object",
         "properties": {
             "intent": {"type": "string", "enum": DESK_INTENTS},
-            "body": {"type": "string"}
+            "body": {"type": "string"},
+            "category": {"type": "string", "enum": DESK_CATEGORIES},
+            "confidence": {"type": "number"},
+            "playbook_used": {"type": "array", "items": {"type": "integer"}}
         },
-        "required": ["intent", "body"],
+        "required": ["intent", "body", "category", "confidence", "playbook_used"],
         "additionalProperties": false
     })
 }
@@ -329,6 +346,12 @@ pub fn build_user(input: &DraftInput) -> String {
             .collect();
         s.push_str(&format!("- Free weekends (Saturday dates, next {} months): {}\n", AVAILABILITY_MONTHS, days.join(", ")));
     }
+    if input.autonomy {
+        s.push_str(
+            "\nAutonomy: a low-risk answer (category other than none) may leave without Thibault's review, so keep such \
+an answer free of amounts, figures, calendar dates, holds, contracts and exclusivity.\n",
+        );
+    }
     if let Some(m) = &input.ours {
         s.push_str(&format!("\nThibault's last email ({}):\nSubject: {}\n{}\n", m.at, m.subject, clip(&m.body, 1200)));
     }
@@ -343,18 +366,53 @@ pub fn build_request(input: &DraftInput, model: &str) -> LlmRequest {
     LlmRequest {
         model: model.to_string(),
         max_tokens: 500,
-        system: vec![SystemBlock { text: reply_system(), cache: true }],
+        // One cache breakpoint, at the end of the stable prefix: the rules, then
+        // the approved playbook when there is one.
+        system: match input.playbook.as_ref().filter(|p| !p.text.trim().is_empty()) {
+            Some(p) => vec![SystemBlock { text: reply_system(), cache: false }, SystemBlock { text: p.text.clone(), cache: true }],
+            None => vec![SystemBlock { text: reply_system(), cache: true }],
+        },
         user: build_user(input),
         schema: Some(answer_schema()),
     }
 }
 
 /// (intent, body) from the model's answer.
+#[cfg(test)]
 pub fn parse_answer(text: &str) -> Option<(String, String)> {
+    parse_answer_full(text).map(|a| (a.intent, a.body))
+}
+
+/// The whole answer. Category, confidence and cited entries default to
+/// "none", 0 and [] (an answer without them never leaves alone).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Answer {
+    pub intent: String,
+    pub body: String,
+    pub category: Option<String>,
+    pub confidence: f64,
+    pub playbook_used: Vec<i64>,
+}
+
+pub fn parse_answer_full(text: &str) -> Option<Answer> {
     let v = claude::extract_json(text)?;
     let intent = v.get("intent")?.as_str()?.trim().to_lowercase();
     let body = claude::no_dashes(v.get("body")?.as_str()?.trim());
-    (DESK_INTENTS.contains(&intent.as_str()) && !body.is_empty()).then_some((intent, body))
+    if !DESK_INTENTS.contains(&intent.as_str()) || body.is_empty() {
+        return None;
+    }
+    let category = v
+        .get("category")
+        .and_then(Value::as_str)
+        .map(|c| c.trim().to_lowercase())
+        .filter(|c| DESK_CATEGORIES.contains(&c.as_str()) && c != "none");
+    let confidence = v.get("confidence").and_then(Value::as_f64).filter(|c| c.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
+    let playbook_used = v
+        .get("playbook_used")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_i64).collect())
+        .unwrap_or_default();
+    Some(Answer { intent, body, category, confidence, playbook_used })
 }
 
 /// The short answer used without an API key (or when Claude fails): honest,
@@ -774,6 +832,8 @@ pub fn input_for(conn: &Connection, id: i64, today: NaiveDate) -> Option<DraftIn
         ours,
         theirs,
         facts: facts_for(conn, Some(cid), camp, today),
+        playbook: crate::commands::playbook::prompt_context(conn),
+        autonomy: crate::commands::autonomy::any_on(conn),
     })
 }
 
@@ -784,6 +844,7 @@ pub fn draft_item(conn: &Connection, id: i64, llm: Option<&dyn Llm>, today: Naiv
     let known: Option<String> = conn.query_row("SELECT intent FROM reply_desk WHERE id = ?1", params![id], |r| r.get(0)).ok().flatten();
     let campaign: Option<i64> = conn.query_row("SELECT campaign_id FROM reply_desk WHERE id = ?1", params![id], |r| r.get(0)).ok().flatten();
     let mut out: Option<(String, String, String)> = None;
+    let mut extra: Option<Answer> = None;
     if let Some(llm) = llm {
         let model = claude::drafting_model(conn);
         let req = build_request(&input, &model);
@@ -792,8 +853,9 @@ pub fn draft_item(conn: &Connection, id: i64, llm: Option<&dyn Llm>, today: Naiv
                 Ok(resp) => {
                     let m = if resp.model.is_empty() { model.clone() } else { resp.model.clone() };
                     claude::log_usage(conn, "reply_draft", campaign, &m, &resp.usage);
-                    if let Some((intent, body)) = parse_answer(&resp.text) {
-                        out = Some((intent, body, m));
+                    if let Some(a) = parse_answer_full(&resp.text) {
+                        out = Some((a.intent.clone(), a.body.clone(), m));
+                        extra = Some(a);
                         break;
                     }
                 }
@@ -818,6 +880,17 @@ pub fn draft_item(conn: &Connection, id: i64, llm: Option<&dyn Llm>, today: Naiv
         "UPDATE reply_desk SET body = ?2, intent = ?3, lang = ?4, draft_by = ?5, edited = 0, state = ?6, updated_at = datetime('now')
          WHERE id = ?1 AND state IN ('pending','open','snoozed')",
         params![id, body, intent, input.lang, by, state],
+    );
+    // What the draft does and which approved entries it relied on (autonomy).
+    let used = extra.as_ref().map(|a| crate::commands::playbook::used_ids(&a.playbook_used, input.playbook.as_ref()));
+    let _ = conn.execute(
+        "UPDATE reply_desk SET auto_category = ?2, auto_confidence = ?3, playbook_ids = ?4 WHERE id = ?1",
+        params![
+            id,
+            extra.as_ref().and_then(|a| a.category.clone()),
+            extra.as_ref().map(|a| a.confidence),
+            used.as_deref().map(crate::commands::playbook::ids_json)
+        ],
     );
     Some(state.to_string())
 }
@@ -856,6 +929,8 @@ pub fn run_pass(conn: &Connection, llm: Option<&dyn Llm>, now: NaiveDateTime, to
     for id in pending {
         if draft_item(conn, id, llm, today).is_some() {
             res.drafted += 1;
+            // Level 1 categories: scheduled to leave alone after the delay.
+            crate::commands::autonomy::consider(conn, id, now);
         }
     }
 
@@ -881,11 +956,14 @@ pub fn run_pass(conn: &Connection, llm: Option<&dyn Llm>, now: NaiveDateTime, to
                 "question" => "pose une question",
                 _ => "est intéressé",
             };
-            let body = if summary.trim().is_empty() {
+            let mut body = if summary.trim().is_empty() {
                 format!("{} {}. Brouillon de réponse prêt.", who, what)
             } else {
                 format!("{}. Brouillon de réponse prêt.", summary.trim().trim_end_matches('.'))
             };
+            if let Some(at) = crate::commands::autonomy::scheduled_hhmm(conn, id) {
+                body.push_str(&format!(" Partira seule à {} si tu ne l'annules pas.", at));
+            }
             res.notify.push((id, format!("Réponse de {}", who), body));
         }
     }
@@ -900,6 +978,14 @@ static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
 /// command (engine tick, background classification) can notify.
 pub fn set_app(app: tauri::AppHandle) {
     let _ = APP.set(app);
+}
+
+/// Tell the frontend the desk changed (autonomous send done or cancelled).
+pub fn emit_changed() {
+    if let Some(app) = APP.get() {
+        use tauri::Emitter;
+        let _ = app.emit("reply-desk", ());
+    }
 }
 
 pub fn deliver(res: &PassResult) {
@@ -1141,8 +1227,10 @@ pub async fn desk_refresh(state: State<'_, AppState>) -> Result<PassResult, Stri
 
 #[tauri::command(async)]
 pub fn desk_save(state: State<'_, AppState>, id: i64, subject: String, body: String) -> Result<(), String> {
-    conn(&state)?
-        .execute(
+    let c = conn(&state)?;
+    // Thibault edits: the draft is his now, nothing leaves alone.
+    crate::commands::autonomy::take_over(&c, id, "Brouillon modifié par Thibault.")?;
+    c.execute(
             "UPDATE reply_desk SET subject = ?2, body = ?3, edited = 1, updated_at = datetime('now') WHERE id = ?1",
             params![id, subject, body],
         )
@@ -1153,6 +1241,7 @@ pub fn desk_save(state: State<'_, AppState>, id: i64, subject: String, body: Str
 #[tauri::command(async)]
 pub fn desk_ignore(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let c = conn(&state)?;
+    crate::commands::autonomy::take_over(&c, id, "Ignoré par Thibault.")?;
     c.execute("UPDATE reply_desk SET state = 'ignored', updated_at = datetime('now') WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     let _ = c.execute(
@@ -1166,8 +1255,9 @@ pub fn desk_ignore(state: State<'_, AppState>, id: i64) -> Result<(), String> {
 #[tauri::command(async)]
 pub fn desk_snooze(state: State<'_, AppState>, id: i64, hours: Option<i64>) -> Result<(), String> {
     let until = fmt_ts(Utc::now().naive_utc() + Duration::hours(hours.unwrap_or(24).clamp(1, 24 * 30)));
-    conn(&state)?
-        .execute(
+    let c = conn(&state)?;
+    crate::commands::autonomy::take_over(&c, id, "Mis de côté par Thibault.")?;
+    c.execute(
             "UPDATE reply_desk SET state = 'snoozed', snooze_until = ?2, updated_at = datetime('now') WHERE id = ?1",
             params![id, until],
         )
@@ -1187,7 +1277,9 @@ pub async fn desk_redraft(state: State<'_, AppState>, id: i64) -> Result<(), Str
         if known.is_none() {
             let _ = conn.execute("UPDATE reply_desk SET intent = 'unknown' WHERE id = ?1", params![id]);
         }
+        crate::commands::autonomy::take_over(&conn, id, "Brouillon régénéré.")?;
         draft_item(&conn, id, llm.as_deref(), chrono::Local::now().date_naive()).ok_or_else(|| "Élément introuvable.".to_string())?;
+        crate::commands::autonomy::consider(&conn, id, Utc::now().naive_utc());
         Ok(())
     })
     .await
@@ -1211,6 +1303,7 @@ pub fn desk_send(state: State<'_, AppState>, id: i64, subject: String, body: Str
         if body.trim().is_empty() {
             return Err("Le message est vide.".into());
         }
+        crate::commands::autonomy::take_over(&c, id, "Envoyé par Thibault.")?;
         (cid, camp, to, thread_ref(&c, id))
     };
     let (res, email_id) = email::send_one_in_thread(&state.pool, contact_id, campaign_id, &to, &subject, &body, Some(&thread))?;
@@ -1314,6 +1407,8 @@ mod tests {
                 epk_url: Some("https://insrt.studio/en/p/x".into()),
                 free_saturdays: vec![d("2026-11-07"), d("2026-11-21")],
             },
+            playbook: None,
+            autonomy: false,
         }
     }
 
@@ -1344,6 +1439,11 @@ mod tests {
         assert_eq!(i, "question");
         assert!(!b.contains('—'));
         assert!(parse_answer(r#"{"intent":"bogus","body":"x"}"#).is_none());
+        // Autonomy fields: parsed when present, safe defaults when not.
+        let a = parse_answer_full(r#"{"intent":"question","body":"b","category":"call_slots","confidence":1.4,"playbook_used":[3,"x",5]}"#).unwrap();
+        assert_eq!((a.category.as_deref(), a.confidence, a.playbook_used), (Some("call_slots"), 1.0, vec![3, 5]));
+        let a = parse_answer_full(r#"{"intent":"question","body":"b","category":"none"}"#).unwrap();
+        assert_eq!((a.category, a.confidence, a.playbook_used.len()), (None, 0.0, 0));
         assert!(parse_answer("nope").is_none());
         let en = template_draft(&input());
         assert!(en.contains("Nov 7 and Nov 21") && en.contains("https://insrt.studio/en/p/x") && en.ends_with("Thibault"));
