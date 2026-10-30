@@ -30,4 +30,6 @@ pub mod visa;
 pub mod residency;
 pub mod routing;
 pub mod reply_desk;
+pub mod playbook;
+pub mod autonomy;
 pub mod deliverability;

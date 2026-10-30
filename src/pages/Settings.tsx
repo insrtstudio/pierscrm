@@ -23,6 +23,7 @@ import { ResidencySettingsCard } from "../components/ResidencySettings";
 import { PushSettingsCard } from "../components/PushSettings";
 import { DeliverabilityPanel } from "../components/Deliverability";
 import { ComparablesSettingsCard } from "../components/ComparablesSettings";
+import { AgentLibraryPanel } from "../components/AgentLibrary";
 
 type SignatureFields = {
   name: string;
@@ -45,7 +46,7 @@ const EMPTY_SIG: SignatureFields = {
   soundcloud: "",
 };
 
-const SETTINGS_TABS = ["general", "email", "deliverability", "integrations"] as const;
+const SETTINGS_TABS = ["general", "email", "deliverability", "integrations", "agent"] as const;
 
 /// Secret fields (password, API keys) come back from the backend as a masked
 /// placeholder, never the real value; saving the untouched mask keeps the
@@ -545,6 +546,7 @@ export function Settings() {
         </>
         )}
         {tab === "deliverability" && <DeliverabilityPanel />}
+        {tab === "agent" && <AgentLibraryPanel />}
         {tab === "integrations" && (
         <>
         {/* Venue website resolution (Serper) */}

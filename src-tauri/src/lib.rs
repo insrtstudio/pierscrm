@@ -76,6 +76,7 @@ pub fn run() {
             }
             let pool_for_pulse = pool.clone();
             let pool_for_residency = pool.clone();
+            let pool_for_autosend = pool.clone();
             app.manage(AppState {
                 pool,
                 cancels: Arc::new(Mutex::new(HashSet::new())),
@@ -85,6 +86,8 @@ pub fn run() {
             // Residency autopilot: sends validated sequences, reads replies,
             // polls EPK activity, writes the daily report (see commands/residency).
             commands::residency::engine::start(pool_for_residency, app.handle().clone());
+            // Reply desk autonomous sends (level 1 categories, commands/autonomy.rs).
+            commands::autonomy::start(pool_for_autosend);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -193,6 +196,15 @@ pub fn run() {
             commands::reply_desk::desk_ignore,
             commands::reply_desk::desk_snooze,
             commands::reply_desk::desk_redraft,
+            // agent library + graduated autonomy
+            commands::playbook::playbook_list,
+            commands::playbook::playbook_save,
+            commands::playbook::playbook_set_status,
+            commands::playbook::playbook_delete,
+            commands::autonomy::autonomy_overview,
+            commands::autonomy::autonomy_save,
+            commands::autonomy::autonomy_stop_all,
+            commands::autonomy::autosend_cancel,
             // events
             commands::events::list_events,
             commands::events::save_event,

@@ -801,6 +801,11 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // push_log: every notice once (dedupe + queue). Additive, see
     // commands/push.rs.
     crate::commands::push::migrate(conn);
+    // ---- Agent library + graduated autonomy ----
+    // playbook_entries, autosends, reply_desk / campaign_messages columns.
+    // Additive, see commands/playbook.rs and commands/autonomy.rs.
+    crate::commands::playbook::migrate(conn);
+    crate::commands::autonomy::migrate(conn);
 
     Ok(())
 }
