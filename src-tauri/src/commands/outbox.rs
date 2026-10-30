@@ -86,7 +86,10 @@ pub fn suppress(conn: &Connection, addr: &str, reason: &str, note: Option<&str>)
         > 0;
     if inserted {
         match reason {
-            "bounce" => crate::commands::campaigns::mark_audience_by_address(conn, &a, "bounced"),
+            "bounce" => {
+                crate::commands::campaigns::mark_audience_by_address(conn, &a, "bounced");
+                forget_address(conn, &a);
+            }
             "unsubscribe" | "refused" => {
                 crate::commands::campaigns::mark_audience_by_address(conn, &a, "unsubscribed")
             }
@@ -94,6 +97,18 @@ pub fn suppress(conn: &Connection, addr: &str, reason: &str, note: Option<&str>)
         }
     }
     inserted
+}
+
+/// A bounced address is removed from the contact and from the Discovery and
+/// Radar finds, so no target build picks it again (the suppression row stays
+/// as the record). Tables a test schema lacks are skipped.
+pub fn forget_address(conn: &Connection, addr: &str) {
+    let _ = conn.execute(
+        "UPDATE contacts SET email = NULL, updated_at = datetime('now') WHERE lower(trim(email)) = ?1",
+        params![addr],
+    );
+    let _ = conn.execute("DELETE FROM vi_contacts WHERE type = 'email' AND lower(trim(valeur)) = ?1", params![addr]);
+    let _ = conn.execute("DELETE FROM radar_contacts WHERE type = 'email' AND lower(trim(valeur)) = ?1", params![addr]);
 }
 
 /// SMTP rejections that mean "this mailbox does not exist / cannot receive",
@@ -1399,6 +1414,30 @@ pub fn reply_sync_status(state: State<'_, AppState>) -> Result<ReplySyncStatus, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounce_forgets_the_address_everywhere() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE suppressions (id INTEGER PRIMARY KEY, address TEXT NOT NULL UNIQUE, reason TEXT, note TEXT, created_at TEXT);
+             CREATE TABLE contacts (id INTEGER PRIMARY KEY, email TEXT, updated_at TEXT);
+             CREATE TABLE campaign_contacts (id INTEGER PRIMARY KEY, contact_id INTEGER, state TEXT);
+             CREATE TABLE vi_contacts (id INTEGER PRIMARY KEY, type TEXT, valeur TEXT);
+             CREATE TABLE radar_contacts (id INTEGER PRIMARY KEY, type TEXT, valeur TEXT);
+             INSERT INTO contacts (id, email) VALUES (1, 'Info@Club.fr'), (2, 'other@club.fr');
+             INSERT INTO vi_contacts (type, valeur) VALUES ('email', 'info@club.fr'), ('email', 'other@club.fr');
+             INSERT INTO radar_contacts (type, valeur) VALUES ('email', 'INFO@club.fr');",
+        )
+        .unwrap();
+        assert!(suppress(&c, "info@club.fr", "bounce", None));
+        let n = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(n("SELECT COUNT(*) FROM contacts WHERE email IS NULL"), 1);
+        assert_eq!(n("SELECT COUNT(*) FROM vi_contacts"), 1);
+        assert_eq!(n("SELECT COUNT(*) FROM radar_contacts"), 0);
+        // An opt-out keeps the address on file.
+        assert!(suppress(&c, "other@club.fr", "unsubscribe", None));
+        assert_eq!(n("SELECT COUNT(*) FROM vi_contacts"), 1);
+    }
 
     #[test]
     fn imap_candidates_try_mail_prefix() {

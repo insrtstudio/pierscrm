@@ -29,9 +29,11 @@ pub const SYNC_FRESH_MIN: i64 = 15;
 /// No successful reply sync for this long pauses the autopilot.
 pub const SYNC_STALE_HOURS: i64 = 6;
 pub const PRESS_POLL_MIN: i64 = 30;
-/// Bounce gate: more than 5 % over the last 20 sends.
+/// Bounce gate: more than 20 % over the last 20 sends. An isolated bounce
+/// only drops the address (outbox::suppress); the gate is kept for a
+/// systemic problem (bad list, blocked domain).
 pub const BOUNCE_WINDOW: i64 = 20;
-pub const BOUNCE_MAX_PCT: i64 = 5;
+pub const BOUNCE_MAX_PCT: i64 = 20;
 /// The daily report is built on the first tick after this local hour.
 pub const REPORT_HOUR: u32 = 8;
 
@@ -906,7 +908,7 @@ pub(crate) mod tests {
         c.execute("UPDATE settings SET value = datetime('now') WHERE key = 'imap_last_ok'", []).unwrap();
         apply_gates(&c, true, now);
         assert!(load(&c, 1).unwrap().paused_reason.is_none());
-        // Bounce rate: 1 bounce in 20 is 5 % (allowed), 2 is over.
+        // Bounce rate: 4 bounces in 20 is 20 % (allowed), 5 is over.
         for i in 0..20 {
             c.execute(
                 "INSERT INTO emails (to_addr, subject, body, status) VALUES (?1, 's', 'b', 'sent')",
@@ -914,9 +916,11 @@ pub(crate) mod tests {
             )
             .unwrap();
         }
-        c.execute("INSERT INTO suppressions (address, reason) VALUES ('a1@x.fr', 'bounce')", []).unwrap();
+        for i in 1..=4 {
+            c.execute("INSERT INTO suppressions (address, reason) VALUES (?1, 'bounce')", params![format!("a{}@x.fr", i)]).unwrap();
+        }
         assert_eq!(safety_gate(&c, true, now), Gate::Open);
-        c.execute("INSERT INTO suppressions (address, reason) VALUES ('a2@x.fr', 'bounce')", []).unwrap();
+        c.execute("INSERT INTO suppressions (address, reason) VALUES ('a5@x.fr', 'bounce')", []).unwrap();
         assert!(matches!(safety_gate(&c, true, now), Gate::Hard(_)));
         apply_gates(&c, true, now);
         assert_eq!(load(&c, 1).unwrap().paused_kind.as_deref(), Some("hard"));
