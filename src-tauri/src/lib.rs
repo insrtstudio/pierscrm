@@ -132,6 +132,9 @@ pub fn run() {
             commands::email::send_email,
             commands::email::send_bulk,
             commands::email::cancel_bulk_send,
+            commands::funnel::funnel_report,
+            commands::funnel::funnel_keep_variant,
+            commands::funnel::funnel_digest,
             commands::email::list_emails,
             commands::email::apply_opens,
             // campaigns

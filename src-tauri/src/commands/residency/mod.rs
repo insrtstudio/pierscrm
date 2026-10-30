@@ -186,6 +186,12 @@ pub struct Step {
     pub body_en: String,
     #[serde(default)]
     pub extra_asset: Option<String>,
+    /// A/B test: extra subject lines (B, C) next to `subject` (A), see
+    /// commands/funnel.rs. Empty = no test.
+    #[serde(default)]
+    pub subject_variants: Vec<String>,
+    #[serde(default)]
+    pub subject_variants_en: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -301,6 +307,7 @@ pub fn default_steps() -> Vec<Step> {
                       Cheers,\nThibault"
                 .into(),
             extra_asset: None,
+            ..Default::default()
         },
         Step {
             offset_days: 5,
@@ -319,6 +326,7 @@ pub fn default_steps() -> Vec<Step> {
                       Thanks,\nThibault"
                 .into(),
             extra_asset: None,
+            ..Default::default()
         },
         Step {
             offset_days: 12,
@@ -337,6 +345,7 @@ pub fn default_steps() -> Vec<Step> {
                       Have a good one,\nThibault"
                 .into(),
             extra_asset: None,
+            ..Default::default()
         },
     ]
 }

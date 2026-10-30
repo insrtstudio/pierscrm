@@ -398,6 +398,9 @@ pub fn send_picked(conn: &Connection, mailer: &dyn Mailer, m: &DueMsg, now: Date
         }
         Ok((r, email_id)) if r.ok => {
             mark(conn, m.id, "sent", None, email_id);
+            if let Some(eid) = email_id {
+                crate::commands::funnel::tag_from_message(conn, m.id, eid);
+            }
             let start = if m.step == 1 { Some(now) } else { j0(conn, m.campaign_id, m.contact_id) };
             if let (Some(start), Some(cfg)) = (start, load(conn, m.campaign_id).map(|r| r.config)) {
                 content::create_next_step(conn, m.campaign_id, &cfg, m.contact_id, m.step, start);
@@ -626,6 +629,9 @@ fn tick(pool: &DbPool, app: &tauri::AppHandle, now: DateTime<Utc>) {
             notify(app, built);
         }
     }
+    drop(conn);
+    // Monday digest (commands/funnel.rs): once a week, from 08:00 local.
+    crate::commands::funnel::on_tick(pool, local.naive_local());
 }
 
 fn notify(app: &tauri::AppHandle, n: usize) {

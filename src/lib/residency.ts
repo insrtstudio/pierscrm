@@ -19,6 +19,9 @@ export interface Step {
   subject_en: string;
   body_en: string;
   extra_asset?: string | null;
+  /** A/B test: subject lines B, C next to `subject` (A). Empty = no test. */
+  subject_variants?: string[];
+  subject_variants_en?: string[];
 }
 
 export interface Zone {

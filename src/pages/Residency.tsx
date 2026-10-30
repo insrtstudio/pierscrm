@@ -699,7 +699,7 @@ function SequenceTab({ view }: { view: ResidencyView }) {
       toast(t("residency.validated", { count: r.scheduled, left: r.unresolved }), "ok");
     },
   });
-  const setStep = (i: number, k: string, v: string | number | null) =>
+  const setStep = (i: number, k: string, v: string | number | string[] | null) =>
     set("steps", cfg.steps.map((s, j) => (j === i ? { ...s, [k]: v } : s)));
   const toggleDay = (d: number) => {
     const days = cfg.window.days.includes(d) ? cfg.window.days.filter((x) => x !== d) : [...cfg.window.days, d].sort();
@@ -739,6 +739,7 @@ function SequenceTab({ view }: { view: ResidencyView }) {
               {i === 0 && <p className="text-2xs text-fg-faint">{t("residency.step1_help")}</p>}
               <Field label={t("residency.subject_fr")}>
                 <input className="input" value={s.subject} onChange={(e) => setStep(i, "subject", e.target.value)} />
+                <SubjectVariants values={s.subject_variants ?? []} onChange={(v) => setStep(i, "subject_variants", v)} />
               </Field>
               <Field label={t("residency.body_fr")}>
                 <textarea className="input min-h-[150px] font-mono text-[13px]" value={s.body} onChange={(e) => setStep(i, "body", e.target.value)} />
@@ -750,6 +751,7 @@ function SequenceTab({ view }: { view: ResidencyView }) {
                 <>
                   <Field label={t("residency.subject_en")}>
                     <input className="input" value={s.subject_en} onChange={(e) => setStep(i, "subject_en", e.target.value)} />
+                    <SubjectVariants values={s.subject_variants_en ?? []} onChange={(v) => setStep(i, "subject_variants_en", v)} />
                   </Field>
                   <Field label={t("residency.body_en")}>
                     <textarea className="input min-h-[150px] font-mono text-[13px]" value={s.body_en} onChange={(e) => setStep(i, "body_en", e.target.value)} />
@@ -1293,5 +1295,34 @@ export function BackToCampaigns() {
     <Link to="/campaigns" className="btn-ghost">
       <ArrowLeft size={14} /> {t("residency.back")}
     </Link>
+  );
+}
+
+// Subject A/B test for a step: lines B and C next to the main subject (A).
+// Each prospect gets one line from a hash of its id (commands/funnel.rs).
+function SubjectVariants({ values, onChange }: { values: string[]; onChange: (v: string[]) => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="mt-2 space-y-2">
+      {values.map((v, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <span className="w-5 text-center text-2xs font-semibold text-fg-subtle">{String.fromCharCode(66 + i)}</span>
+          <input
+            className="input flex-1"
+            value={v}
+            placeholder={t("funnel.variant_placeholder")}
+            onChange={(e) => onChange(values.map((x, j) => (j === i ? e.target.value : x)))}
+          />
+          <button type="button" className="btn-ghost text-xs" onClick={() => onChange(values.filter((_, j) => j !== i))}>
+            {t("funnel.variant_remove")}
+          </button>
+        </div>
+      ))}
+      {values.length < 2 && (
+        <button type="button" className="btn-ghost py-1 text-xs" onClick={() => onChange([...values, ""])}>
+          {t("funnel.variant_add", { label: String.fromCharCode(66 + values.length) })}
+        </button>
+      )}
+    </div>
   );
 }

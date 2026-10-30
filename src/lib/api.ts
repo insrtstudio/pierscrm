@@ -168,6 +168,9 @@ export const sendBulk = (p: {
   subject: string;
   body: string;
   extra_vars?: Record<string, string>;
+  /** Subject A/B test: lines B, C (empty ones are ignored). */
+  subject_variants?: string[];
+  template_id?: number | null;
 }) =>
   invoke<BulkResult>("send_bulk", {
     campaignId: p.campaign_id ?? null,
@@ -175,6 +178,8 @@ export const sendBulk = (p: {
     subject: p.subject,
     body: p.body,
     extraVars: p.extra_vars ?? {},
+    subjectVariants: p.subject_variants ?? [],
+    templateId: p.template_id ?? null,
   });
 export const applyOpens = (
   opens: { token: string; opened_at?: string; count?: number }[]

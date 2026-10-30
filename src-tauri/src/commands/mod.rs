@@ -7,6 +7,7 @@ pub mod radar;
 pub mod email;
 pub mod enrich;
 pub mod events;
+pub mod funnel;
 pub mod insrt_gigs;
 pub mod harvest;
 pub mod import;

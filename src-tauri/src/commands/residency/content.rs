@@ -117,6 +117,41 @@ pub fn render_step(cfg: &Config, idx: usize, lang: &str, vars: &HashMap<String, 
     Some((render_template(subj, vars), body))
 }
 
+/// A/B subject of step `idx` for a recipient (commands/funnel.rs): its label
+/// and the rendered subject, None when the step has no variants. A follow-up
+/// whose subject is "Re: " + step 1's stays on the arm step 1 used, so the
+/// thread keeps one subject.
+pub fn ab_subject(
+    cfg: &Config,
+    idx: usize,
+    lang: &str,
+    campaign_id: i64,
+    contact_id: i64,
+    vars: &HashMap<String, String>,
+) -> Option<(&'static str, String)> {
+    use crate::commands::funnel::{clean_variants, pick, salt};
+    let arms = |s: &Step| {
+        if lang == "en" && !s.body_en.trim().is_empty() {
+            (s.subject_en.clone(), clean_variants(&s.subject_en, &s.subject_variants_en))
+        } else {
+            (s.subject.clone(), clean_variants(&s.subject, &s.subject_variants))
+        }
+    };
+    let (main, own) = arms(cfg.steps.get(idx)?);
+    if let Some((label, tpl)) = pick(contact_id, salt(Some(campaign_id), idx as i64 + 1), &own) {
+        return Some((label, render_template(tpl, vars)));
+    }
+    if idx > 0 {
+        let (first, v0) = arms(cfg.steps.first()?);
+        if main.trim() == format!("Re: {}", first.trim()) {
+            if let Some((label, tpl)) = pick(contact_id, salt(Some(campaign_id), 1), &v0) {
+                return Some((label, render_template(&format!("Re: {}", tpl), vars)));
+            }
+        }
+    }
+    None
+}
+
 // ---------------- Claude first email ----------------
 
 /// Thibault's house voice: the "sound human" rule and the AI tells he never
@@ -432,7 +467,7 @@ pub fn generate(
             }
             _ => None,
         };
-        let (subject, body) = match ai {
+        let (mut subject, body) = match ai {
             Some(d) => {
                 res.with_ai += 1;
                 generated_by = d.model;
@@ -447,19 +482,25 @@ pub fn generate(
                 }
             },
         };
+        // A subject under test replaces the drafted one (same arm for every draft).
+        let variant = ab_subject(cfg, 0, &info.lang, campaign_id, cid, &vars).map(|(label, subj)| {
+            subject = subj;
+            label
+        });
         let missing = unresolved(&format!("{}\n{}", subject, body));
         if !missing.is_empty() {
             note = Some(format!("Variables à compléter : {}", missing.join(", ")));
         }
         conn.execute(
-            "INSERT INTO campaign_messages (campaign_id, contact_id, step, subject, body, lang, status, press_url, note, generated_by)
-             VALUES (?1, ?2, 1, ?3, ?4, ?5, 'draft', ?6, ?7, ?8)
+            "INSERT INTO campaign_messages (campaign_id, contact_id, step, subject, body, lang, status, press_url, note, generated_by, subject_variant)
+             VALUES (?1, ?2, 1, ?3, ?4, ?5, 'draft', ?6, ?7, ?8, ?9)
              ON CONFLICT(campaign_id, contact_id, step) DO UPDATE SET
                 subject = excluded.subject, body = excluded.body, lang = excluded.lang, status = 'draft',
+                subject_variant = excluded.subject_variant,
                 scheduled_for = NULL, press_url = COALESCE(excluded.press_url, campaign_messages.press_url),
                 note = excluded.note, generated_by = excluded.generated_by, updated_at = datetime('now')
              WHERE campaign_messages.status <> 'sent'",
-            params![campaign_id, cid, subject, body, info.lang, press, note, generated_by],
+            params![campaign_id, cid, subject, body, info.lang, press, note, generated_by, variant],
         )
         .map_err(|e| e.to_string())?;
         res.created += 1;
@@ -502,7 +543,11 @@ pub fn create_next_step(
     let mut info = info;
     info.lang = lang.clone();
     let vars = vars_for(&info, cfg, &artist, press.as_deref());
-    let (subject, body) = render_step(cfg, idx, &lang, &vars)?;
+    let (mut subject, body) = render_step(cfg, idx, &lang, &vars)?;
+    let variant = ab_subject(cfg, idx, &lang, campaign_id, contact_id, &vars).map(|(label, subj)| {
+        subject = subj;
+        label
+    });
     let missing = unresolved(&format!("{}\n{}", subject, body));
     let (status, note) = if missing.is_empty() {
         ("scheduled", None)
@@ -512,9 +557,9 @@ pub fn create_next_step(
     let when = (j0 + chrono::Duration::days(step.offset_days)).format("%Y-%m-%d %H:%M:%S").to_string();
     conn.execute(
         "INSERT OR IGNORE INTO campaign_messages
-            (campaign_id, contact_id, step, subject, body, lang, status, scheduled_for, press_url, note, generated_by)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'template')",
-        params![campaign_id, contact_id, sent_step + 1, subject, body, lang, status, when, press, note],
+            (campaign_id, contact_id, step, subject, body, lang, status, scheduled_for, press_url, note, generated_by, subject_variant)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'template', ?11)",
+        params![campaign_id, contact_id, sent_step + 1, subject, body, lang, status, when, press, note, variant],
     )
     .ok()
     .filter(|n| *n > 0)
