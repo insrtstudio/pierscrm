@@ -872,6 +872,21 @@ pub fn reply_text(content_type: &str, transfer_encoding: &str, body: &str) -> St
 
 /// IMAP host to use: the explicit `imap_host` setting, else derived from the
 /// SMTP host ("smtp.x" -> "imap.x", "smtp-x" -> "imap-x").
+/// IMAP host guesses for an SMTP host, most likely first.
+pub(crate) fn imap_host_candidates(smtp_host: &str) -> Vec<String> {
+    let first = derive_imap_host(smtp_host);
+    let h = smtp_host.trim();
+    let mut out = vec![first];
+    for (pre, alt) in [("smtp.", "mail."), ("smtp-", "mail-")] {
+        if let Some(rest) = h.strip_prefix(pre) {
+            out.push(format!("{alt}{rest}"));
+        }
+    }
+    out.push(h.to_string());
+    out.dedup();
+    out
+}
+
 pub fn derive_imap_host(smtp_host: &str) -> String {
     let h = smtp_host
         .trim()
@@ -1089,20 +1104,97 @@ pub fn sync_replies_blocking(pool: &DbPool) -> Result<SyncResult, String> {
     res
 }
 
-fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncResult, String> {
-    let mut out = SyncResult::default();
+/// IMAP (host, port, user) of the sending account, derived like the reply sync.
+fn imap_target(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<(String, u16, String), String> {
     let own = cfg.from_email.trim().to_string();
-    let user = if cfg.username.trim().is_empty() { own.clone() } else { cfg.username.trim().to_string() };
+    let user = if cfg.username.trim().is_empty() { own } else { cfg.username.trim().to_string() };
     if user.is_empty() || cfg.password.trim().is_empty() {
         return Err("Identifiants email non configurés (Réglages, Email).".into());
-    }
-    let host = get_setting(conn, "imap_host").unwrap_or_else(|| derive_imap_host(&cfg.host));
-    if host.is_empty() {
-        return Err("Serveur IMAP non configuré.".into());
     }
     let port: u16 = get_setting(conn, "imap_port")
         .and_then(|p| p.trim().parse().ok())
         .unwrap_or(993);
+    let host = match get_setting(conn, "imap_host").filter(|h| !h.trim().is_empty()) {
+        Some(h) => h,
+        // Guessed names do not always exist (securemail: smtp-fr resolves,
+        // imap-fr does not, the IMAP server is mail-fr): keep the first that resolves.
+        None => imap_host_candidates(&cfg.host)
+            .into_iter()
+            .find(|h| {
+                use std::net::ToSocketAddrs;
+                (h.as_str(), port).to_socket_addrs().map(|mut a| a.next().is_some()).unwrap_or(false)
+            })
+            .unwrap_or_else(|| derive_imap_host(&cfg.host)),
+    };
+    if host.is_empty() {
+        return Err("Serveur IMAP non configuré.".into());
+    }
+    Ok((host, port, user))
+}
+
+/// The Sent mailbox: the one flagged \Sent (RFC 6154), else a usual name.
+pub(crate) fn pick_sent_folder(folders: &[(String, Vec<String>)]) -> Option<String> {
+    if let Some((name, _)) = folders.iter().find(|(_, attrs)| attrs.iter().any(|a| a.eq_ignore_ascii_case("\\Sent"))) {
+        return Some(name.clone());
+    }
+    const NAMES: &[&str] = &["sent", "inbox.sent", "sent items", "sent messages", "envoyés", "inbox.envoyés", "éléments envoyés", "messages envoyés"];
+    NAMES.iter().find_map(|n| folders.iter().find(|(f, _)| f.to_lowercase() == *n).map(|(f, _)| f.clone()))
+}
+
+/// Keep a copy of a sent email in the account's Sent folder, as a mail client
+/// does after SMTP (SMTP alone leaves nothing there). Best effort, off the
+/// sending thread; turned off with the setting `imap_save_sent` = "0".
+pub(crate) fn save_to_sent(pool: &DbPool, cfg: &crate::models::SmtpConfig, raw: Vec<u8>) {
+    let Ok(conn) = pool.get() else { return };
+    if get_setting(&conn, "imap_save_sent").as_deref() == Some("0") {
+        return;
+    }
+    let Ok((host, port, user)) = imap_target(&conn, cfg) else { return };
+    let cached = get_setting(&conn, "imap_sent_folder");
+    let pass = cfg.password.trim().to_string();
+    let pool = pool.clone();
+    drop(conn);
+    std::thread::spawn(move || {
+        let res = (|| -> Result<String, String> {
+            let mut session = imap_connect(&host, port, &user, &pass)?;
+            let folder = match cached {
+                Some(f) => f,
+                None => {
+                    let names = session.list(Some(""), Some("*")).map_err(|e| e.to_string())?;
+                    let folders: Vec<(String, Vec<String>)> = names
+                        .iter()
+                        .map(|n| {
+                            let attrs = n
+                                .attributes()
+                                .iter()
+                                .map(|a| match a {
+                                    imap::types::NameAttribute::Custom(c) => c.to_string(),
+                                    other => format!("{:?}", other),
+                                })
+                                .collect();
+                            (n.name().to_string(), attrs)
+                        })
+                        .collect();
+                    pick_sent_folder(&folders).ok_or("dossier Envoyés introuvable")?
+                }
+            };
+            session.append_with_flags(&folder, &raw, &[imap::types::Flag::Seen]).map_err(|e| e.to_string())?;
+            let _ = session.logout();
+            Ok(folder)
+        })();
+        if let Ok(conn) = pool.get() {
+            match res {
+                Ok(folder) => put_setting(&conn, "imap_sent_folder", &folder),
+                Err(e) => put_setting(&conn, "imap_sent_error", &e),
+            }
+        }
+    });
+}
+
+fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncResult, String> {
+    let mut out = SyncResult::default();
+    let own = cfg.from_email.trim().to_string();
+    let (host, port, user) = imap_target(conn, cfg)?;
 
     // Window: from the oldest unanswered email of the last SYNC_WINDOW_DAYS.
     let oldest: Option<String> = conn
@@ -1328,6 +1420,23 @@ pub fn reply_sync_status(state: State<'_, AppState>) -> Result<ReplySyncStatus, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imap_candidates_try_mail_prefix() {
+        assert_eq!(
+            imap_host_candidates("smtp-fr.securemail.pro"),
+            vec!["imap-fr.securemail.pro", "mail-fr.securemail.pro", "smtp-fr.securemail.pro"]
+        );
+    }
+
+    #[test]
+    fn sent_folder_prefers_special_use_flag() {
+        let f = |v: &[(&str, &[&str])]| v.iter().map(|(n, a)| (n.to_string(), a.iter().map(|x| x.to_string()).collect())).collect::<Vec<_>>();
+        assert_eq!(pick_sent_folder(&f(&[("INBOX", &[]), ("Mes envois", &["\\HasNoChildren", "\\Sent"])])).as_deref(), Some("Mes envois"));
+        assert_eq!(pick_sent_folder(&f(&[("INBOX", &[]), ("INBOX.Sent", &[])])).as_deref(), Some("INBOX.Sent"));
+        assert_eq!(pick_sent_folder(&f(&[("INBOX", &[]), ("Envoyés", &[])])).as_deref(), Some("Envoyés"));
+        assert_eq!(pick_sent_folder(&f(&[("INBOX", &[])])), None);
+    }
 
     #[test]
     fn message_id_shape_and_uniqueness() {

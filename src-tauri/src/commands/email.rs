@@ -582,6 +582,9 @@ pub(crate) fn send_one(
 
     let transport = build_transport(&cfg)?;
     let (outcome, error, hard_bounce) = deliver(&transport, &email);
+    if outcome == "sent" {
+        outbox::save_to_sent(pool, &cfg, email.formatted());
+    }
 
     let conn = pool.get().map_err(|e| e.to_string())?;
     // A free-typed address (Compose tab) is tied to its contact, so the email
@@ -963,6 +966,9 @@ fn send_bulk_blocking(
             }
         };
         let (outcome, err, hard_bounce) = deliver(&transport, &msg);
+        if outcome == "sent" {
+            outbox::save_to_sent(pool, &cfg, msg.formatted());
+        }
         let _ = conn.execute(
             "INSERT INTO emails (contact_id, campaign_id, to_addr, subject, body, status, error, track_token, message_id)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
