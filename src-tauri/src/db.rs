@@ -776,6 +776,10 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // (thank-you / rebook / routing lines handled). Additive, see
     // commands/routing.rs.
     crate::commands::routing::migrate(conn);
+    // ---- Réponses à traiter (reply desk) ----
+    // reply_desk: replies awaiting Thibault and stalled threads, with their
+    // drafts. Additive, see commands/reply_desk.rs.
+    crate::commands::reply_desk::migrate(conn);
 
     Ok(())
 }

@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { ReplySync } from "./components/ReplySync";
+import { ReplyDeskWatcher } from "./components/ReplyDesk";
 
 import { Home } from "./pages/Home";
 
@@ -54,6 +55,8 @@ export function App() {
     <HashRouter>
       {/* Background IMAP reply detection, every 10 minutes while the app is open. */}
       <ReplySync />
+      {/* "Réponses à traiter": refresh on backend passes, open a notified conversation. */}
+      <ReplyDeskWatcher />
       <Routes>
         <Route element={<Layout />}>
           <Route index element={page(<Home />)} />

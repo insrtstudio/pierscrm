@@ -175,6 +175,15 @@ pub fn run() {
             commands::insrt_gigs::insrt_gig_get,
             commands::insrt_gigs::insrt_gig_set,
             commands::residency::commands::ai_cost_month,
+            // réponses à traiter (reply desk)
+            commands::reply_desk::desk_list,
+            commands::reply_desk::desk_count,
+            commands::reply_desk::desk_refresh,
+            commands::reply_desk::desk_save,
+            commands::reply_desk::desk_send,
+            commands::reply_desk::desk_ignore,
+            commands::reply_desk::desk_snooze,
+            commands::reply_desk::desk_redraft,
             // events
             commands::events::list_events,
             commands::events::save_event,

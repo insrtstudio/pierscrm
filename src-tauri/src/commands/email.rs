@@ -444,12 +444,44 @@ fn build_message(
     token: &str,
     message_id: &str,
 ) -> Result<Message, String> {
-    Message::builder()
+    build_message_in_thread(from, to, subject, body, signature, tracking_base, token, message_id, None)
+}
+
+/// Where an answer sits in an existing conversation: the Message-ID it answers
+/// (In-Reply-To) and the chain before it (References), so the programmer's
+/// mail app shows it inside the same thread. Used by the reply desk.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ThreadRef {
+    pub in_reply_to: Option<String>,
+    pub references: Vec<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_message_in_thread(
+    from: &Mailbox,
+    to: &Mailbox,
+    subject: &str,
+    body: &str,
+    signature: &Option<SignatureData>,
+    tracking_base: &Option<String>,
+    token: &str,
+    message_id: &str,
+    thread: Option<&ThreadRef>,
+) -> Result<Message, String> {
+    let mut b = Message::builder()
         .from(from.clone())
         .to(to.clone())
         .subject(subject.to_string())
-        .message_id(Some(message_id.to_string()))
-        .header(outbox::list_unsubscribe(&from.email.to_string()))
+        .message_id(Some(message_id.to_string()));
+    if let Some(t) = thread {
+        if let Some(id) = t.in_reply_to.as_deref().filter(|s| !s.trim().is_empty()) {
+            b = b.in_reply_to(id.trim().to_string());
+        }
+        if !t.references.is_empty() {
+            b = b.references(t.references.join(" "));
+        }
+    }
+    b.header(outbox::list_unsubscribe(&from.email.to_string()))
         .multipart(message_body(body, signature, tracking_base, token))
         .map_err(|e| e.to_string())
 }
@@ -532,6 +564,20 @@ pub(crate) fn send_one(
     subject: &str,
     body: &str,
 ) -> Result<(SendResult, Option<i64>), String> {
+    send_one_in_thread(pool, contact_id, campaign_id, to, subject, body, None)
+}
+
+/// `send_one` for an answer inside an existing conversation (reply desk):
+/// same guardrails and logging, plus In-Reply-To / References.
+pub(crate) fn send_one_in_thread(
+    pool: &crate::db::DbPool,
+    contact_id: Option<i64>,
+    campaign_id: Option<i64>,
+    to: &str,
+    subject: &str,
+    body: &str,
+    thread: Option<&ThreadRef>,
+) -> Result<(SendResult, Option<i64>), String> {
     let cfg = load_smtp_from(pool)?;
     if cfg.from_email.trim().is_empty() {
         return Err("Sender email is not configured (Settings → Email).".into());
@@ -576,8 +622,8 @@ pub(crate) fn send_one(
     let tracked = tracking_base.is_some();
     let message_id = outbox::gen_message_id(&cfg.from_email);
 
-    let email = build_message(
-        &from_mbox, &to_mbox, subject, body, &signature, &tracking_base, &token, &message_id,
+    let email = build_message_in_thread(
+        &from_mbox, &to_mbox, subject, body, &signature, &tracking_base, &token, &message_id, thread,
     )?;
 
     let transport = build_transport(&cfg)?;
@@ -1041,6 +1087,20 @@ mod body_html_tests {
         assert!(h.contains("<a href=\"https://insrt.studio/fr/p/abc\""));
         assert!(h.contains("À bientôt,<br/>Thibault"));
         assert_eq!(linkify("voir https://a.fr/x."), "voir <a href=\"https://a.fr/x\" style=\"color:#ff5a1f\">https://a.fr/x</a>.");
+    }
+
+    #[test]
+    fn threaded_message_headers() {
+        use super::{build_message_in_thread, ThreadRef};
+        let from: lettre::message::Mailbox = "Thibault <booking@insrt.fr>".parse().unwrap();
+        let to: lettre::message::Mailbox = "booking@club.fr".parse().unwrap();
+        let t = ThreadRef { in_reply_to: Some("<r1@club.fr>".into()), references: vec!["<s1@insrt.fr>".into(), "<r1@club.fr>".into()] };
+        let m = build_message_in_thread(&from, &to, "Re: date", "Hello", &None, &None, "tok", "<n1@insrt.fr>", Some(&t)).unwrap();
+        let raw = String::from_utf8(m.formatted()).unwrap();
+        assert!(raw.contains("In-Reply-To: <r1@club.fr>"));
+        assert!(raw.contains("References: <s1@insrt.fr> <r1@club.fr>"));
+        let plain = build_message_in_thread(&from, &to, "s", "b", &None, &None, "tok", "<n2@insrt.fr>", None).unwrap();
+        assert!(!String::from_utf8(plain.formatted()).unwrap().contains("In-Reply-To"));
     }
 }
 
