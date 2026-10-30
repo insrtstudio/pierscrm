@@ -32,6 +32,8 @@ import { euro, parseDay } from "../lib/format";
 import { useAppIntent, useDebounced } from "../lib/hooks";
 import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui";
 import { InsrtGigFields, useInsrtGig } from "../components/InsrtGig";
+import { TourRouting } from "../components/TourRouting";
+import { GigRecap } from "../components/GigRecap";
 
 // Warm, on-brand ramp (reds → warm neutrals) so artists stay distinguishable
 // without breaking the Modernist red/grey system.
@@ -671,6 +673,8 @@ function EventModal({
           />
         </Field>
         <InsrtGigFields gig={gig} status={form.status} />
+        <TourRouting eventId={event.id} status={form.status} />
+        <GigRecap eventId={event.id} artistId={form.artist_id} date={form.date} status={form.status} />
         {event.id != null && visa && (visa.dossier_id != null || visa.needs_visa) && (
           <div
             className={clsx(

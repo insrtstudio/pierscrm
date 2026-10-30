@@ -7,6 +7,8 @@
 //! - `GET  {base}/api/crm/v1/press-links/activity?since=<ISO>&pressKitId=<id>` -> `{"events":[...], "next": ISO}`
 //! - `POST {base}/api/crm/v1/gigs` `{externalRef:"crm-event:<event_id>", artistSlug, date, startTime, venue, city,
 //!   country, ticketUrl, status, published}` -> the stored gig (upsert per externalRef, see crate::commands::insrt_gigs)
+//! - `POST {base}/api/crm/v1/press-kits` `{id?, artistSlug, title, content}` -> `{id, title, created}`
+//!   (found by id, else by artist + title, else created; `content` replaces the kit's, see crate::commands::routing)
 //!
 //! `Authorization: Bearer <insrt_api_token>` (a secret, see crate::secrets).
 //! The HTTP side sits behind the `Insrt` trait so tests run on fixtures.
@@ -100,6 +102,27 @@ pub struct GigAck {
     pub updated_at: Option<String>,
 }
 
+/// A press kit written from the CRM (`POST /api/crm/v1/press-kits`). The
+/// whole `content` replaces the kit's (same JSON shape as the back office).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PressKitUpsert {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub artist_slug: String,
+    pub title: String,
+    pub content: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct PressKitAck {
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub created: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Recipient {
     pub name: String,
@@ -116,6 +139,11 @@ pub trait Insrt: Send + Sync {
     fn push_gig(&self, gig: &GigPush) -> Result<GigAck, String> {
         let _ = gig;
         Err("insrt: publication des dates indisponible.".into())
+    }
+    /// Create or update a press kit's content. Defaulted like `push_gig`.
+    fn upsert_press_kit(&self, kit: &PressKitUpsert) -> Result<PressKitAck, String> {
+        let _ = kit;
+        Err("insrt: mise à jour du dossier presse indisponible.".into())
     }
 }
 
@@ -136,6 +164,10 @@ pub fn parse_press_link(raw: &str) -> Result<PressLink, String> {
 }
 
 pub fn parse_activity(raw: &str) -> Result<ActivityPage, String> {
+    serde_json::from_str(raw).map_err(|e| format!("insrt: réponse illisible ({})", e))
+}
+
+pub fn parse_press_kit_ack(raw: &str) -> Result<PressKitAck, String> {
     serde_json::from_str(raw).map_err(|e| format!("insrt: réponse illisible ({})", e))
 }
 
@@ -247,6 +279,17 @@ impl Insrt for HttpInsrt {
             .send()
             .map_err(|e| format!("insrt: {}", e))?;
         parse_gig_ack(&Self::check(resp)?)
+    }
+
+    fn upsert_press_kit(&self, kit: &PressKitUpsert) -> Result<PressKitAck, String> {
+        let resp = self
+            .http
+            .post(format!("{}/api/crm/v1/press-kits", self.base))
+            .bearer_auth(&self.token)
+            .json(kit)
+            .send()
+            .map_err(|e| format!("insrt: {}", e))?;
+        parse_press_kit_ack(&Self::check(resp)?)
     }
 }
 

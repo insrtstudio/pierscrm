@@ -14,7 +14,9 @@ import {
   Mail,
   Megaphone,
   MessageSquareReply,
+  MapPinned,
   Plane,
+  Repeat,
   Target,
   type LucideIcon,
 } from "lucide-react";
@@ -36,13 +38,15 @@ import { ComposeModal, quotaQuery } from "../components/ComposeModal";
 import { useToast } from "../components/ui";
 import { markHandled, residencyActions, utcDate } from "../lib/residency";
 import { IntentBadge } from "./Residency";
+import { followupDone, followupDraft, gigFollowups, tourActions, type FollowupKind } from "../lib/routing";
+import { TourRoutingModal } from "../components/TourRouting";
 
 /// How far ahead the list looks. Further out, nothing is actionable yet.
 const HORIZON_DAYS = 14;
 /// Replies older than this are assumed handled.
 const REPLY_DAYS = 10;
 
-type Kind = "followup" | "reply" | "campaign" | "deadline" | "task" | "gig" | "visa" | "agent" | "hot" | "wrong";
+type Kind = "followup" | "reply" | "campaign" | "deadline" | "task" | "gig" | "visa" | "agent" | "hot" | "wrong" | "rebook" | "routing";
 
 type Action = {
   key: string;
@@ -58,7 +62,15 @@ type Action = {
 
 /// What ComposeModal opens with: the contact, plus the reply the residency
 /// agent suggests (the user reviews and sends it, never the agent).
-type ComposeState = { contact: Contact; subject?: string; body?: string; campaignId?: number | null; insightId?: number | null };
+type ComposeState = {
+  contact: Contact;
+  subject?: string;
+  body?: string;
+  campaignId?: number | null;
+  insightId?: number | null;
+  /// Thank-you / rebook draft: marked handled once sent (routing.rs).
+  gigFollowup?: { eventId: number; kind: FollowupKind };
+};
 
 const KIND_ICON: Record<Kind, LucideIcon> = {
   followup: Mail,
@@ -71,10 +83,12 @@ const KIND_ICON: Record<Kind, LucideIcon> = {
   agent: Bot,
   hot: Flame,
   wrong: UserX,
+  rebook: Repeat,
+  routing: MapPinned,
 };
 
 // Most urgent kind first within a day: a reply waiting beats a task.
-const KIND_ORDER: Kind[] = ["reply", "hot", "wrong", "followup", "agent", "visa", "campaign", "gig", "deadline", "task"];
+const KIND_ORDER: Kind[] = ["reply", "hot", "wrong", "followup", "rebook", "agent", "visa", "campaign", "routing", "gig", "deadline", "task"];
 
 /// Agenda › Actions: what to do, day by day, gathered from every module
 /// (follow-ups due, replies to answer, planned campaign sends, tasks, gigs,
@@ -85,6 +99,7 @@ export function Actions() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [compose, setCompose] = useState<ComposeState | null>(null);
+  const [routing, setRouting] = useState<{ eventId: number; title: string } | null>(null);
 
   const today = todayDay();
   const horizon = toDay(new Date(Date.now() + HORIZON_DAYS * 86_400_000));
@@ -112,6 +127,27 @@ export function Actions() {
     queryFn: residencyActions,
     refetchInterval: 120_000,
   });
+  // Chaining dates and bringing clubs back (commands/routing.rs).
+  const { data: gigFollow = [] } = useQuery({ queryKey: ["routing_followups"], queryFn: gigFollowups });
+  const { data: tours = [] } = useQuery({ queryKey: ["routing_tours"], queryFn: tourActions });
+  const gigDone = useMutation({
+    mutationFn: ({ eventId, kind }: { eventId: number; kind: FollowupKind | "routing" }) => followupDone(eventId, kind),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["routing_followups"] });
+      qc.invalidateQueries({ queryKey: ["routing_tours"] });
+    },
+  });
+  const draftFollowup = async (contactId: number, eventId: number, kind: FollowupKind) => {
+    try {
+      const [d, c] = await Promise.all([followupDraft(eventId, kind), getContact(contactId)]);
+      if (!c) return;
+      if (d.note) toast(d.note, "error");
+      setCompose({ contact: c, subject: d.subject, body: d.body, gigFollowup: { eventId, kind } });
+    } catch (e) {
+      toast(String(e), "error");
+    }
+  };
+
   const handled = useMutation({
     mutationFn: (id: number) => markHandled(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["residency_actions"] }),
@@ -234,6 +270,35 @@ export function Actions() {
       }
     }
 
+    // After a confirmed gig: the thank-you (J+2) and, with nothing new booked,
+    // the rebook reminder (J+60). Drafted on click, sent by the user.
+    for (const f of gigFollow) {
+      out.push({
+        key: `gf${f.kind}${f.event_id}`,
+        day: clampDay(f.due),
+        kind: "rebook",
+        title: t(f.kind === "thanks" ? "routing.action_thanks" : "routing.action_rebook", { name: f.venue || f.contact_name }),
+        detail: [formatDate(f.gig_date), f.city].filter(Boolean).join(" · "),
+        cta: { label: t("routing.action_draft"), run: () => draftFollowup(f.contact_id, f.event_id, f.kind) },
+        dismiss: () => gigDone.mutate({ eventId: f.event_id, kind: f.kind }),
+      });
+    }
+
+    // Confirmed gigs with free days around them and clubs nearby to pitch.
+    for (const r of tours) {
+      out.push({
+        key: `rt${r.event_id}`,
+        day: today,
+        kind: "routing",
+        title: t("routing.action_route", { title: r.title, count: r.count }),
+        detail: [formatDate(r.date), r.city, r.warm ? t("routing.action_warm", { count: r.warm }) : null, r.top.join(", ")]
+          .filter(Boolean)
+          .join(" · "),
+        cta: { label: t("routing.action_route_cta"), run: () => setRouting({ eventId: r.event_id, title: r.title }) },
+        dismiss: () => gigDone.mutate({ eventId: r.event_id, kind: "routing" }),
+      });
+    }
+
     // Dossiers still open whose trip falls inside the horizon.
     for (const d of dossiers) {
       if (["approved", "rejected"].includes(d.status)) continue;
@@ -352,7 +417,7 @@ export function Actions() {
 
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [followups, replies, campaigns, tasks, events, visas, dossiers, quota, agent, today, horizon, i18n.language]);
+  }, [followups, replies, campaigns, tasks, events, visas, dossiers, quota, agent, gigFollow, tours, today, horizon, i18n.language]);
 
   // Overdue first (one bucket), then today, then each upcoming day that has something.
   const groups = useMemo(() => {
@@ -458,9 +523,13 @@ export function Actions() {
           initialSubject={compose.subject}
           initialBody={compose.body}
           initialCampaignId={compose.campaignId}
-          onSent={() => compose.insightId && handled.mutate(compose.insightId)}
+          onSent={() => {
+            if (compose.insightId) handled.mutate(compose.insightId);
+            if (compose.gigFollowup) gigDone.mutate(compose.gigFollowup);
+          }}
         />
       )}
+      {routing && <TourRoutingModal eventId={routing.eventId} title={routing.title} onClose={() => setRouting(null)} />}
     </div>
   );
 }

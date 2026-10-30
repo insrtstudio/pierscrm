@@ -179,6 +179,17 @@ pub fn run() {
             commands::events::list_events,
             commands::events::save_event,
             commands::events::delete_event,
+            // tour routing, rebook loop, played at (commands/routing.rs)
+            commands::routing::routing_tour_plan,
+            commands::routing::routing_tour_actions,
+            commands::routing::routing_pitch_draft,
+            commands::routing::routing_followups,
+            commands::routing::routing_followup_draft,
+            commands::routing::routing_followup_done,
+            commands::routing::gig_recap_get,
+            commands::routing::gig_recap_save,
+            commands::routing::played_at_list,
+            commands::routing::played_at_push,
             // visa
             commands::visa::list_visa_countries,
             commands::visa::save_visa_country,

@@ -242,16 +242,22 @@ pub fn draft_first_email(
     info: &TargetInfo,
     artist: &str,
     press_link: &str,
+    played_at: &[String],
     usage_sink: &mut dyn FnMut(&str, &claude::Usage),
 ) -> Result<Draft, String> {
     let lang_name = if info.lang == "en" { "English" } else { "French" };
-    let user = format!(
+    let mut user = format!(
         "Language: {}\nContact first name: {}\nPress link to include: {}\n\nFacts about the club:\n{}",
         lang_name,
         info.first_name.clone().unwrap_or_else(|| "unknown".into()),
         press_link,
         facts_of(info)
     );
+    // Clubs the artist really played (Agenda, see commands/routing.rs): true
+    // facts the email may cite, one at most.
+    if !played_at.is_empty() {
+        user.push_str(&format!("\n\nFacts about the artist (clubs he played, may cite one):\n{}", played_at.join("\n")));
+    }
     let req = LlmRequest {
         model: model.to_string(),
         max_tokens: 400,
@@ -371,6 +377,7 @@ pub fn generate(
     };
     let artist = artist_name(conn, campaign_id);
     let model = claude::drafting_model(conn);
+    let played = crate::commands::routing::played_at_facts_for_campaign(conn, campaign_id);
     let mut res = GenResult::default();
     for cid in ids {
         let status: Option<String> = conn
@@ -402,7 +409,7 @@ pub fn generate(
         let ai = match llm {
             Some(l) if !link_text.is_empty() => {
                 let mut sink = |m: &str, u: &claude::Usage| claude::log_usage(conn, "draft", Some(campaign_id), m, u);
-                match draft_first_email(l, &model, cfg, &info, &artist, link_text.trim(), &mut sink) {
+                match draft_first_email(l, &model, cfg, &info, &artist, link_text.trim(), &played, &mut sink) {
                     Ok(d) => Some(d),
                     Err(e) => {
                         note = Some(format!("IA indisponible, modèle utilisé : {}", e));

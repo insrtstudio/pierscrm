@@ -771,6 +771,12 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // push. Additive, see commands/insrt_gigs.rs.
     crate::commands::insrt_gigs::migrate(conn);
 
+    // ---- Tour routing, rebook loop, played at ----
+    // gig_recaps (the night's assets, "a joué à" switch) and gig_followups
+    // (thank-you / rebook / routing lines handled). Additive, see
+    // commands/routing.rs.
+    crate::commands::routing::migrate(conn);
+
     Ok(())
 }
 
