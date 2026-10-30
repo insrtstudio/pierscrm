@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, State};
 
-use super::{campaigns, organisations, outbox, status};
+use super::{campaigns, funnel, organisations, outbox, status};
 
 static TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -728,10 +728,13 @@ pub async fn send_bulk(
     subject: String,
     body: String,
     extra_vars: Option<HashMap<String, String>>,
+    subject_variants: Option<Vec<String>>,
+    template_id: Option<i64>,
 ) -> Result<BulkResult, String> {
     let pool = state.pool.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        send_bulk_blocking(app, &pool, campaign_id, contact_ids, subject, body, extra_vars)
+        let ab = (subject_variants.unwrap_or_default(), template_id);
+        send_bulk_blocking(app, &pool, campaign_id, contact_ids, subject, body, extra_vars, ab)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -745,6 +748,7 @@ fn send_bulk_blocking(
     subject: String,
     body: String,
     extra_vars: Option<HashMap<String, String>>,
+    (subject_variants, template_id): (Vec<String>, Option<i64>),
 ) -> Result<BulkResult, String> {
     if BULK_RUNNING.swap(true, Ordering::SeqCst) {
         return Err("Un envoi groupé est déjà en cours.".into());
@@ -819,6 +823,11 @@ fn send_bulk_blocking(
     }
 
     let fallback_artist = sole_artist(&conn);
+    // Subject A/B test (commands/funnel.rs): `subject` is arm A, each recipient
+    // gets one arm from a hash of its contact id.
+    let variants = funnel::clean_variants(&subject, &subject_variants);
+    funnel::record_variants(&conn, campaign_id, template_id, &variants);
+    let ab_salt = funnel::salt(campaign_id, template_id.unwrap_or(0));
 
     let total = contact_ids.len();
     let (mut sent, mut failed, mut skipped, mut deferred) = (0usize, 0usize, 0usize, 0usize);
@@ -902,7 +911,8 @@ fn send_bulk_blocking(
             non_empty(date).map(|d| human_date(&d)).unwrap_or(fallback_date),
         );
 
-        let subj = render_template(&subject, &vars);
+        let picked = funnel::pick(*cid, ab_salt, &variants);
+        let subj = render_template(picked.map_or(subject.as_str(), |p| p.1), &vars);
         let bod = render_template(&body, &vars);
 
         let to_mbox: Mailbox = match parse_recipient(&email) {
@@ -963,12 +973,14 @@ fn send_bulk_blocking(
             }
         };
         let (outcome, err, hard_bounce) = deliver(&transport, &msg);
-        let _ = conn.execute(
+        if conn.execute(
             "INSERT INTO emails (contact_id, campaign_id, to_addr, subject, body, status, error, track_token, message_id)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![cid, campaign_id, email, subj, bod, outcome, err, token,
                 (outcome == "sent").then_some(&message_id)],
-        );
+        ).is_ok() {
+            funnel::tag_email(&conn, conn.last_insert_rowid(), template_id, None, picked.map(|p| p.0));
+        }
         if outcome == "sent" {
             sent += 1;
             budget -= 1;

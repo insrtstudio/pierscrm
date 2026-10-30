@@ -771,6 +771,11 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // push. Additive, see commands/insrt_gigs.rs.
     crate::commands::insrt_gigs::migrate(conn);
 
+    // ---- Funnel, subject A/B tests, Monday digest ----
+    // emails.subject_variant / template_id / step, campaign_messages.subject_variant,
+    // ab_subjects, weekly_digests. Additive, see commands/funnel.rs.
+    crate::commands::funnel::migrate(conn);
+
     Ok(())
 }
 

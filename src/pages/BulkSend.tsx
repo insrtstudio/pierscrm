@@ -197,6 +197,9 @@ export function BulkSend() {
 
   // Message
   const [subject, setSubject] = useState("");
+  // Subject A/B test: B and C next to `subject` (A), see commands/funnel.rs.
+  const [variants, setVariants] = useState<string[]>([]);
+  const [templateId, setTemplateId] = useState<number | null>(null);
   const [body, setBody] = useState("");
   const [links, setLinks] = useState<Record<LinkKey, string>>({
     mix: "",
@@ -216,6 +219,7 @@ export function BulkSend() {
 
   const applyTemplate = (id: string) => {
     const tpl = templates.find((x) => x.id === Number(id));
+    setTemplateId(tpl?.id ?? null);
     if (tpl) {
       setSubject(tpl.subject);
       setBody(tpl.body);
@@ -298,6 +302,8 @@ export function BulkSend() {
         subject,
         body,
         extra_vars,
+        subject_variants: variants.map((v) => v.trim()).filter(Boolean),
+        template_id: templateId,
       });
       setBulk({ result: res });
       invalidateAfterSend(qc);
@@ -580,6 +586,40 @@ export function BulkSend() {
             onFocus={() => (focused.current = "subject")}
             onChange={(e) => setSubject(e.target.value)}
           />
+          {variants.map((v, i) => (
+            <div key={i} className="mt-2 flex items-center gap-2">
+              <span className="w-5 text-center text-2xs font-semibold text-fg-subtle">
+                {String.fromCharCode(66 + i)}
+              </span>
+              <input
+                className="input flex-1"
+                value={v}
+                placeholder={t("funnel.variant_placeholder")}
+                onChange={(e) =>
+                  setVariants((vs) => vs.map((x, j) => (j === i ? e.target.value : x)))
+                }
+              />
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                onClick={() => setVariants((vs) => vs.filter((_, j) => j !== i))}
+              >
+                {t("funnel.variant_remove")}
+              </button>
+            </div>
+          ))}
+          {variants.length < 2 && (
+            <button
+              type="button"
+              className="btn-ghost mt-1 text-xs"
+              onClick={() => setVariants((vs) => [...vs, ""])}
+            >
+              {t("funnel.variant_add", { label: String.fromCharCode(66 + variants.length) })}
+            </button>
+          )}
+          {variants.some((v) => v.trim()) && (
+            <p className="mt-1 text-2xs text-fg-subtle">{t("funnel.variant_hint")}</p>
+          )}
         </div>
         <div className="mt-3 flex-1">
           <span className="label">{t("bulk.body")}</span>
