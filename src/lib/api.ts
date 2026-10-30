@@ -142,6 +142,8 @@ export const sendEmail = (p: {
   to: string;
   subject: string;
   body: string;
+  /// Paths of documents PiersCRM generated (offers); anything else is refused.
+  attachments?: string[];
 }) =>
   invoke<SendResult>("send_email", {
     contactId: p.contact_id ?? null,
@@ -149,6 +151,7 @@ export const sendEmail = (p: {
     to: p.to,
     subject: p.subject,
     body: p.body,
+    attachments: p.attachments?.length ? p.attachments : null,
   });
 export const listEmails = (contactId?: number) =>
   invoke<EmailLog[]>("list_emails", { contactId: contactId ?? null });

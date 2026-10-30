@@ -12,6 +12,7 @@ import {
 } from "../lib/api";
 import { PageHeader, EmptyState } from "../components/Layout";
 import { AudienceTile } from "../components/AudienceTile";
+import { OverduePaymentsAlert } from "../components/Offers";
 import { daysUntil, euro, formatDate, parseDay, today as todayDay } from "../lib/format";
 import { emitIntent } from "../lib/hooks";
 import { STATUS_DOT } from "../lib/constants";
@@ -118,6 +119,8 @@ export function Dashboard() {
           </>
         }
       />
+
+      <OverduePaymentsAlert />
 
       {visaAlerts.length > 0 && (
         <div className="space-y-1.5 border-b border-border bg-warn/10 px-8 py-3 text-sm">

@@ -458,7 +458,7 @@ fn build_message(
     message_id: &str,
     unsubscribe_base: Option<&str>,
 ) -> Result<Message, String> {
-    build_message_in_thread(from, to, subject, body, signature, tracking_base, token, message_id, unsubscribe_base, None)
+    build_message_full(from, to, subject, body, signature, tracking_base, token, message_id, unsubscribe_base, None, &[])
 }
 
 /// Where an answer sits in an existing conversation: the Message-ID it answers
@@ -483,6 +483,35 @@ fn build_message_in_thread(
     unsubscribe_base: Option<&str>,
     thread: Option<&ThreadRef>,
 ) -> Result<Message, String> {
+    build_message_full(from, to, subject, body, signature, tracking_base, token, message_id, unsubscribe_base, thread, &[])
+}
+
+/// Every outgoing message: optional thread headers (reply desk) and file
+/// attachments (generated booking documents, see commands/offers/docs.rs,
+/// as multipart/mixed around the usual alternative body).
+#[allow(clippy::too_many_arguments)]
+fn build_message_full(
+    from: &Mailbox,
+    to: &Mailbox,
+    subject: &str,
+    body: &str,
+    signature: &Option<SignatureData>,
+    tracking_base: &Option<String>,
+    token: &str,
+    message_id: &str,
+    unsubscribe_base: Option<&str>,
+    thread: Option<&ThreadRef>,
+    attachments: &[(String, Vec<u8>)],
+) -> Result<Message, String> {
+    let alt = message_body(body, signature, tracking_base, token);
+    let content = if attachments.is_empty() {
+        alt
+    } else {
+        let pdf = lettre::message::header::ContentType::parse("application/pdf").map_err(|e| e.to_string())?;
+        attachments.iter().fold(MultiPart::mixed().multipart(alt), |m, (name, bytes)| {
+            m.singlepart(lettre::message::Attachment::new(name.clone()).body(bytes.clone(), pdf.clone()))
+        })
+    };
     let mut b = Message::builder()
         .from(from.clone())
         .to(to.clone())
@@ -499,7 +528,7 @@ fn build_message_in_thread(
     // List-Unsubscribe (mailto, plus the HTTPS one-click link and
     // List-Unsubscribe-Post when an endpoint is configured).
     deliverability::with_unsubscribe(b, &from.email.to_string(), unsubscribe_base, token)
-        .multipart(message_body(body, signature, tracking_base, token))
+        .multipart(content)
         .map_err(|e| e.to_string())
 }
 
@@ -559,14 +588,22 @@ pub struct SendResult {
 
 #[tauri::command(async)]
 pub fn send_email(
+    app: AppHandle,
     state: State<'_, AppState>,
     contact_id: Option<i64>,
     campaign_id: Option<i64>,
     to: String,
     subject: String,
     body: String,
+    attachments: Option<Vec<String>>,
 ) -> Result<SendResult, String> {
-    send_one(&state.pool, contact_id, campaign_id, &to, &subject, &body).map(|(r, _)| r)
+    // Only documents PiersCRM generated (app data dir) can be attached.
+    let files = attachments
+        .unwrap_or_default()
+        .iter()
+        .map(|p| super::offers::docs::load_attachment(&app, p))
+        .collect::<Result<Vec<_>, _>>()?;
+    send_one_with(&state.pool, contact_id, campaign_id, &to, &subject, &body, &files).map(|(r, _)| r)
 }
 
 /// One email through every guardrail (suppression list, daily cap), with our
@@ -581,7 +618,7 @@ pub(crate) fn send_one(
     subject: &str,
     body: &str,
 ) -> Result<(SendResult, Option<i64>), String> {
-    send_one_in_thread(pool, contact_id, campaign_id, to, subject, body, None)
+    send_one_full(pool, contact_id, campaign_id, to, subject, body, None, &[])
 }
 
 /// `send_one` for an answer inside an existing conversation (reply desk):
@@ -594,6 +631,33 @@ pub(crate) fn send_one_in_thread(
     subject: &str,
     body: &str,
     thread: Option<&ThreadRef>,
+) -> Result<(SendResult, Option<i64>), String> {
+    send_one_full(pool, contact_id, campaign_id, to, subject, body, thread, &[])
+}
+
+/// `send_one` with file attachments (name, bytes).
+pub(crate) fn send_one_with(
+    pool: &crate::db::DbPool,
+    contact_id: Option<i64>,
+    campaign_id: Option<i64>,
+    to: &str,
+    subject: &str,
+    body: &str,
+    attachments: &[(String, Vec<u8>)],
+) -> Result<(SendResult, Option<i64>), String> {
+    send_one_full(pool, contact_id, campaign_id, to, subject, body, None, attachments)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_one_full(
+    pool: &crate::db::DbPool,
+    contact_id: Option<i64>,
+    campaign_id: Option<i64>,
+    to: &str,
+    subject: &str,
+    body: &str,
+    thread: Option<&ThreadRef>,
+    attachments: &[(String, Vec<u8>)],
 ) -> Result<(SendResult, Option<i64>), String> {
     let cfg = load_smtp_from(pool)?;
     if cfg.from_email.trim().is_empty() {
@@ -643,9 +707,9 @@ pub(crate) fn send_one_in_thread(
     let tracked = tracking_base.is_some();
     let message_id = outbox::gen_message_id(&cfg.from_email);
 
-    let email = build_message_in_thread(
+    let email = build_message_full(
         &from_mbox, &to_mbox, subject, body, &signature, &tracking_base, &token, &message_id,
-        unsub_base.as_deref(), thread,
+        unsub_base.as_deref(), thread, attachments,
     )?;
 
     let transport = build_transport(&cfg)?;

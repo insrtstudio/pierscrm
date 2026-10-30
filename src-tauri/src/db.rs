@@ -794,6 +794,9 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // emails.subject_variant / template_id / step, campaign_messages.subject_variant,
     // ab_subjects, weekly_digests. Additive, see commands/funnel.rs.
     crate::commands::funnel::migrate(conn);
+    // ---- Offers, documents, payments, advancing (commands/offers) ----
+    // offers, invoices, advancing. Additive and idempotent.
+    crate::commands::offers::migrate(conn);
 
     Ok(())
 }

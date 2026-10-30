@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Send, Link as LinkIcon, ShieldAlert, Gauge } from "lucide-react";
+import { Send, Link as LinkIcon, ShieldAlert, Gauge, Paperclip, X } from "lucide-react";
 import { Modal, Field, useToast, useConfirm, errorMessage } from "./ui";
 import {
   listArtists,
@@ -204,6 +204,8 @@ export function ComposeModal({
   initialSubject,
   initialBody,
   initialCampaignId,
+  initialTo,
+  initialAttachments,
   onSent,
 }: {
   open: boolean;
@@ -214,6 +216,11 @@ export function ComposeModal({
   initialSubject?: string;
   initialBody?: string;
   initialCampaignId?: number | null;
+  /// Recipient when it is not the contact's address (booking documents).
+  initialTo?: string;
+  /// Documents PiersCRM generated (offers: contract, rider, invoices). The
+  /// backend refuses any other file.
+  initialAttachments?: { path: string; file_name: string }[];
   onSent?: () => void;
 }) {
   const { t } = useTranslation();
@@ -243,10 +250,12 @@ export function ComposeModal({
     epk: "",
   });
   const [sending, setSending] = useState(false);
+  const [attachments, setAttachments] = useState<{ path: string; file_name: string }[]>([]);
 
   useEffect(() => {
     if (open) {
-      setTo(contact?.email ?? "");
+      setTo(initialTo ?? contact?.email ?? "");
+      setAttachments(initialAttachments ?? []);
       setSubject(initialSubject ?? "");
       setBody(initialBody ?? "");
       setTplId("");
@@ -299,6 +308,7 @@ export function ComposeModal({
         to: to.trim(),
         subject: renderedSubject,
         body: renderedBody,
+        attachments: attachments.map((a) => a.path),
       });
       if (res.ok) {
         toast(t("emails.sent_ok"), "ok");
@@ -373,6 +383,27 @@ export function ComposeModal({
             onChange={(e) => setBody(e.target.value)}
           />
         </Field>
+
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {attachments.map((a) => (
+              <span
+                key={a.path}
+                className="inline-flex items-center gap-1.5 border border-border px-2 py-1 text-xs"
+              >
+                <Paperclip size={12} className="text-fg-subtle" />
+                {a.file_name}
+                <button
+                  className="text-fg-faint hover:text-danger"
+                  aria-label={t("common.delete")}
+                  onClick={() => setAttachments((l) => l.filter((x) => x.path !== a.path))}
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* Case-by-case links */}
         <div className="panel p-3">

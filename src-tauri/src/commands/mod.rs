@@ -20,6 +20,7 @@ pub mod timing;
 pub mod status;
 pub mod outbox;
 pub mod promoters;
+pub mod offers;
 pub mod organisations;
 pub mod youtube;
 pub mod ra;

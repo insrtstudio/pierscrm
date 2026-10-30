@@ -34,6 +34,7 @@ import { Modal, Field, useToast, useConfirm, useSubmit } from "../components/ui"
 import { InsrtGigFields, useInsrtGig } from "../components/InsrtGig";
 import { TourRouting } from "../components/TourRouting";
 import { GigRecap } from "../components/GigRecap";
+import { EventOfferPanel } from "../components/Offers";
 
 // Warm, on-brand ramp (reds → warm neutrals) so artists stay distinguishable
 // without breaking the Modernist red/grey system.
@@ -675,6 +676,7 @@ function EventModal({
         <InsrtGigFields gig={gig} status={form.status} />
         <TourRouting eventId={event.id} status={form.status} />
         <GigRecap eventId={event.id} artistId={form.artist_id} date={form.date} status={form.status} />
+        {event.id != null && <EventOfferPanel eventId={event.id} />}
         {event.id != null && visa && (visa.dossier_id != null || visa.needs_visa) && (
           <div
             className={clsx(

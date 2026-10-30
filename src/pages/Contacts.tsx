@@ -50,6 +50,7 @@ import { ComposeModal } from "../components/ComposeModal";
 import { AddToCampaign, AssignUnassignedArtist, SetOrganisation } from "../components/BulkActions";
 import { OrganisationsModal } from "../components/Organisations";
 import { InsrtActivityPanel } from "../components/InsrtActivity";
+import { ContactOffersPanel } from "../components/Offers";
 
 const PAGE_SIZE = 200;
 
@@ -891,6 +892,7 @@ function ContactModal({
       {form.organisation_id != null && newOrg == null && (
         <OrganisationSiblings orgId={form.organisation_id} selfId={contact.id} />
       )}
+      {!isNew && <ContactOffersPanel contactId={contact.id!} />}
       {!isNew && <ContactHistory contactId={contact.id!} />}
       {!isNew && <InsrtActivityPanel contactId={contact.id!} />}
       <div className="mt-5 flex justify-end gap-2">
