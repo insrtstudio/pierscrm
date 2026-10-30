@@ -15,6 +15,7 @@ pub mod import;
 pub mod meta;
 pub mod musicbrainz;
 pub mod pulse;
+pub mod push;
 pub mod spotify;
 pub mod timing;
 pub mod status;

@@ -316,6 +316,10 @@ pub fn run() {
             commands::data::print_page,
             menu::set_menu_lang,
             commands::data::dashboard_stats,
+            // iPhone notifications (Pushover, commands/push.rs)
+            commands::push::push_get,
+            commands::push::push_save,
+            commands::push::push_test,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PiersCRM");

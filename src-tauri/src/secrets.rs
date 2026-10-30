@@ -37,6 +37,9 @@ pub const SECRET_KEYS: &[&str] = &[
     // the insrt.studio CRM API (personal EPK links, link activity).
     "anthropic_api_key",
     "insrt_api_token",
+    // iPhone notifications (commands/push.rs, Pushover).
+    "pushover_user",
+    "pushover_token",
 ];
 
 /// Vault key of the SMTP password (stored inside the `smtp` JSON setting before).

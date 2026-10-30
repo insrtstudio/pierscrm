@@ -20,6 +20,7 @@ import { PageHeader } from "../components/Layout";
 import clsx from "clsx";
 import { Field, errorMessage, useSubmit, useToast } from "../components/ui";
 import { ResidencySettingsCard } from "../components/ResidencySettings";
+import { PushSettingsCard } from "../components/PushSettings";
 import { DeliverabilityPanel } from "../components/Deliverability";
 import { ComparablesSettingsCard } from "../components/ComparablesSettings";
 
@@ -635,6 +636,9 @@ export function Settings() {
         <>
         {/* Residency agent (Claude + insrt.studio) */}
         <ResidencySettingsCard />
+
+        {/* iPhone notifications (Pushover) */}
+        <PushSettingsCard />
 
         {/* Pulse (Spotify + Meta) */}
         <div className="card p-6">

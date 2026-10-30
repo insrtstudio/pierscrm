@@ -797,6 +797,10 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // ---- Offers, documents, payments, advancing (commands/offers) ----
     // offers, invoices, advancing. Additive and idempotent.
     crate::commands::offers::migrate(conn);
+    // ---- iPhone notifications (Pushover) ----
+    // push_log: every notice once (dedupe + queue). Additive, see
+    // commands/push.rs.
+    crate::commands::push::migrate(conn);
 
     Ok(())
 }

@@ -547,6 +547,8 @@ fn classify_now(pool: &DbPool) {
         // threads, native notification (commands/reply_desk.rs).
         crate::commands::reply_desk::run_and_deliver(&conn, llm.as_deref());
     }
+    // iPhone notifications for what just came in (commands/push.rs).
+    crate::commands::push::tick(pool);
     CLASSIFY_RUNNING.store(false, Ordering::SeqCst);
 }
 
@@ -646,6 +648,8 @@ fn tick(pool: &DbPool, app: &tauri::AppHandle, now: DateTime<Utc>) {
     drop(conn);
     // Monday digest (commands/funnel.rs): once a week, from 08:00 local.
     crate::commands::funnel::on_tick(pool, local.naive_local());
+    // iPhone notifications: EPK activity, opens, problems, daily summary.
+    crate::commands::push::tick(pool);
 }
 
 fn notify(app: &tauri::AppHandle, n: usize) {
