@@ -53,10 +53,12 @@ use zone::{Window, Zone};
 /// - residency_log                every autopilot decision (ring, pruned)
 /// - ai_usage                     tokens + cost of every Claude call
 /// - email_replies.body_excerpt   text of a reply, for classification
+/// - email_replies.text_tries     backfills of a reply stored without text
 pub fn migrate(conn: &Connection) {
     for stmt in [
         "ALTER TABLE campaigns ADD COLUMN kind TEXT NOT NULL DEFAULT 'standard'",
         "ALTER TABLE email_replies ADD COLUMN body_excerpt TEXT",
+        "ALTER TABLE email_replies ADD COLUMN text_tries INTEGER NOT NULL DEFAULT 0",
         "CREATE TABLE IF NOT EXISTS residency_campaigns (
             campaign_id            INTEGER PRIMARY KEY REFERENCES campaigns(id) ON DELETE CASCADE,
             config                 TEXT NOT NULL DEFAULT '{}',
