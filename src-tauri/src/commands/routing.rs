@@ -979,7 +979,7 @@ pub fn write_draft(conn: &Connection, llm: Option<&dyn Llm>, model: &str, facts:
     let Some(llm) = llm else { return fallback(None) };
     let req = LlmRequest {
         model: model.to_string(),
-        max_tokens: 350,
+        max_tokens: 700,
         system: vec![SystemBlock { text: ROUTING_SYSTEM.into(), cache: true }],
         user: facts.prompt(),
         schema: Some(draft_schema()),
