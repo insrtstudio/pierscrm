@@ -9,6 +9,7 @@ use tauri::State;
 use super::claude::{self, AiCost};
 use super::content::{self, GenResult};
 use super::engine::{self, fmt};
+use super::expand;
 use super::insrt::{self, PressKit};
 use super::report::{self, HotSignal};
 use super::targeting::{self, BuildOptions, BuildResult, Pick};
@@ -37,7 +38,7 @@ pub fn residency_presets() -> Vec<Preset> {
 }
 
 /// City wording for the pre-filled pitch ("un club de Paris" / "a club in London").
-fn zone_words(zone: &Zone) -> (String, String) {
+pub(super) fn zone_words(zone: &Zone) -> (String, String) {
     match zone.presets.first().map(String::as_str) {
         Some("paris") => ("Paris".into(), "Paris".into()),
         Some("london") => ("Londres".into(), "London".into()),
@@ -721,6 +722,9 @@ pub struct ActionItem {
     pub seconds: Option<f64>,
     pub count: Option<i64>,
     pub next_at: Option<String>,
+    /// "expand": the next zone to open; first emails the campaign has left.
+    pub expand: Option<expand::Suggestion>,
+    pub remaining: Option<i64>,
 }
 
 impl ActionItem {
@@ -744,6 +748,8 @@ impl ActionItem {
             seconds: None,
             count: None,
             next_at: None,
+            expand: None,
+            remaining: None,
         }
     }
 }
@@ -775,6 +781,30 @@ pub fn actions(conn: &Connection) -> Result<Vec<ActionItem>, String> {
         a.summary = r.paused_reason.clone().or_else(|| (!r.autopilot).then(|| "off".to_string()));
         a.next_at = engine::next_send_estimate(conn, id, &r.config, now).map(fmt);
         out.push(a);
+    }
+    // Campaigns running dry: the next zone to open, or the drafts of the
+    // campaign the last proposal created, still to review.
+    for id in super::active_ids(conn) {
+        let name: String = conn.query_row("SELECT name FROM campaigns WHERE id = ?1", params![id], |x| x.get(0)).unwrap_or_default();
+        match expand::proposal(conn, id) {
+            Some(expand::Proposal::Expand { remaining, suggestion }) => {
+                let mut a = ActionItem::new(format!("ex{}", id), "expand", today.clone(), name.clone());
+                a.campaign_id = Some(id);
+                a.campaign = Some(name);
+                a.count = Some(suggestion.eligible);
+                a.remaining = Some(remaining);
+                a.expand = Some(suggestion);
+                out.push(a);
+            }
+            Some(expand::Proposal::Review { campaign_id, name: child, drafts }) => {
+                let mut a = ActionItem::new(format!("exr{}", id), "expand_review", today.clone(), name);
+                a.campaign_id = Some(campaign_id);
+                a.campaign = Some(child);
+                a.count = Some(drafts);
+                out.push(a);
+            }
+            None => {}
+        }
     }
     // Classified replies still to handle.
     let mut st = conn
@@ -869,6 +899,57 @@ pub fn residency_mark_handled(state: State<'_, AppState>, insight_id: i64) -> Re
     conn.execute("UPDATE reply_insights SET handled = 1 WHERE id = ?1", params![insight_id])
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ---------------- Next zone (expand.rs) ----------------
+
+#[derive(Serialize)]
+pub struct ExpandView {
+    pub autopilot: bool,
+    pub remaining: i64,
+    pub daily_max: i64,
+    pub running_dry: bool,
+    pub suggestions: Vec<expand::Suggestion>,
+}
+
+/// "Prochaines zones" of the Cible tab.
+#[tauri::command(async)]
+pub fn residency_expand(state: State<'_, AppState>, campaign_id: i64) -> Result<ExpandView, String> {
+    let conn = conn(&state)?;
+    let r = require(&conn, campaign_id)?;
+    Ok(ExpandView {
+        autopilot: r.autopilot,
+        remaining: expand::remaining_first(&conn, campaign_id),
+        daily_max: r.config.daily_max,
+        running_dry: expand::running_dry(&conn, campaign_id).is_some(),
+        suggestions: expand::suggestions(&conn, campaign_id)?,
+    })
+}
+
+/// "Créer la campagne": clone, target, drafts. Claude / insrt calls: runs on
+/// the blocking pool. Never switches the autopilot on.
+#[tauri::command]
+pub async fn residency_expand_create(
+    state: State<'_, AppState>,
+    campaign_id: i64,
+    zone: Zone,
+    name: Option<String>,
+) -> Result<expand::Created, String> {
+    let pool = state.pool.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let llm = claude::client(&conn);
+        let ins = insrt::client(&conn);
+        expand::create(&conn, campaign_id, zone, name, llm.as_deref(), ins.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(async)]
+pub fn residency_expand_dismiss(state: State<'_, AppState>, campaign_id: i64) -> Result<(), String> {
+    let conn = conn(&state)?;
+    expand::dismiss(&conn, campaign_id)
 }
 
 #[cfg(test)]

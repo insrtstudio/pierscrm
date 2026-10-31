@@ -9,6 +9,7 @@
 //! - `insrt`     insrt.studio CRM API client behind the `Insrt` trait
 //! - `targeting` "Construire la cible" over vi_venues + pipeline contacts
 //! - `content`   drafts (Claude for step 1, templates for follow-ups)
+//! - `expand`    next zone to open when a campaign runs dry, one-click creation
 //! - `engine`    autopilot loop, safety gates, step progression, stop rules
 //! - `replies`   reply classification and what each answer triggers
 //! - `report`    daily report aggregation + synthesis
@@ -21,6 +22,7 @@ pub mod claude;
 pub mod commands;
 pub mod content;
 pub mod engine;
+pub mod expand;
 pub mod insrt;
 pub mod replies;
 pub mod report;
@@ -52,6 +54,9 @@ use zone::{Window, Zone};
 /// - campaign_reports             one daily report per campaign
 /// - residency_log                every autopilot decision (ring, pruned)
 /// - ai_usage                     tokens + cost of every Claude call
+/// - residency_expansions         campaigns created from a "next zone"
+///                                proposal (source, new campaign, zone) and
+///                                the "Plus tard" of a proposal (expand.rs)
 /// - email_replies.body_excerpt   text of a reply, for classification
 pub fn migrate(conn: &Connection) {
     for stmt in [
@@ -147,6 +152,15 @@ pub fn migrate(conn: &Connection) {
             cache_write   INTEGER NOT NULL DEFAULT 0,
             cost_usd      REAL NOT NULL DEFAULT 0
         )",
+        "CREATE TABLE IF NOT EXISTS residency_expansions (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+            campaign_id        INTEGER REFERENCES campaigns(id) ON DELETE CASCADE,
+            zone               TEXT NOT NULL DEFAULT '{}',
+            kind               TEXT NOT NULL,
+            created_at         TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_residency_expansions_source ON residency_expansions(source_campaign_id, kind)",
     ] {
         let _ = conn.execute(stmt, []);
     }

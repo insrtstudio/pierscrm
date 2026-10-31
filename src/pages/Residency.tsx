@@ -30,6 +30,7 @@ import {
   BOARD_COLUMNS,
   addTargets,
   buildTarget,
+  createExpansion,
   createResidency,
   generateDrafts,
   getResidency,
@@ -37,6 +38,7 @@ import {
   removeTarget,
   reportNow,
   residencyBoard,
+  residencyExpand,
   residencyLog,
   residencyMessages,
   residencyPresets,
@@ -50,6 +52,7 @@ import {
   type BoardRow,
   type BuildOptions,
   type BuildResult,
+  type ExpandSuggestion,
   type MessageRow,
   type PressKit,
   type ResidencyConfig,
@@ -112,7 +115,7 @@ export function ResidencyPage() {
 function useInvalidate(id: number) {
   const qc = useQueryClient();
   return () => {
-    for (const k of [["residency", id], ["residency_board", id], ["residency_messages", id], ["residency_reports", id], ["residency_actions"], ["campaigns"]])
+    for (const k of [["residency", id], ["residency_board", id], ["residency_messages", id], ["residency_reports", id], ["residency_actions"], ["residency_expand"], ["campaigns"]])
       qc.invalidateQueries({ queryKey: k });
   };
 }
@@ -616,6 +619,72 @@ function TargetTab({ view }: { view: ResidencyView }) {
       )}
 
       <AudienceList view={view} />
+      <ExpandCard view={view} />
+    </div>
+  );
+}
+
+/// "Prochaines zones": cities / countries no active residency campaign covers,
+/// with the clubs available there; one click creates the campaign up to its
+/// drafts (expand.rs), the autopilot stays off.
+function ExpandCard({ view }: { view: ResidencyView }) {
+  const { t, i18n } = useTranslation();
+  const toast = useToast();
+  const navigate = useNavigate();
+  const invalidate = useInvalidate(view.campaign.id!);
+  const id = view.campaign.id!;
+  const { data, isLoading } = useQuery({ queryKey: ["residency_expand", id], queryFn: () => residencyExpand(id) });
+  const create = useMutation({
+    mutationFn: (s: ExpandSuggestion) => createExpansion(id, s.zone, s.name),
+    onSuccess: (r) => {
+      invalidate();
+      toast(t("actions.expand_created", { name: r.name, targets: r.targets, drafts: r.drafts }), "ok");
+      if (r.errors.length) toast(r.errors[0], "error");
+      navigate(`/campaigns/${r.campaign_id}?tab=sequence`);
+    },
+    onError: (e) => toast(errorMessage(e), "error"),
+  });
+  const fr = i18n.language.startsWith("fr");
+  return (
+    <div className="card overflow-hidden">
+      <div className="flex flex-wrap items-baseline gap-3 border-b border-border p-4">
+        <div className="eyebrow text-fg">{t("residency.expand_title")}</div>
+        {data && (
+          <div className={clsx("text-2xs", data.running_dry ? "text-warn" : "text-fg-subtle")}>
+            {t("actions.expand_left", { count: data.remaining })}
+            {data.running_dry && ` · ${t("residency.expand_dry")}`}
+          </div>
+        )}
+      </div>
+      {isLoading ? (
+        <Loader />
+      ) : !data?.suggestions.length ? (
+        <p className="p-4 text-xs text-fg-subtle">{t("residency.expand_none")}</p>
+      ) : (
+        <ul>
+          {data.suggestions.map((s) => (
+            <li key={s.key} className="flex items-center gap-3 border-b border-border/60 px-4 py-3 last:border-0">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{s.name}</div>
+                <div className="truncate text-2xs text-fg-subtle">
+                  {[
+                    `${t("residency.expand_clubs", { count: s.eligible })} ${fr ? s.place_fr : s.place_en}`,
+                    s.no_email > 0 ? t("actions.expand_no_email", { count: s.no_email }) : null,
+                    s.top.join(", "),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </div>
+              </div>
+              <button className="btn-outline shrink-0 py-1.5" disabled={create.isPending} onClick={() => create.mutate(s)}>
+                <Plus size={14} />
+                {create.isPending && create.variables?.key === s.key ? t("actions.expand_creating") : t("actions.expand_cta")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="border-t border-border p-4 text-2xs text-fg-faint">{t("residency.expand_help")}</p>
     </div>
   );
 }
