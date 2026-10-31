@@ -308,7 +308,8 @@ pub fn draft_first_email(
     }
     let req = LlmRequest {
         model: model.to_string(),
-        max_tokens: 400,
+        // French runs ~30 % longer than English: 400 cut most French drafts.
+        max_tokens: 900,
         // The approved playbook (commands/playbook.rs) sits between the rules
         // and the campaign block: the single cache breakpoint stays at the end.
         system: {
@@ -662,7 +663,7 @@ mod tests {
         assert_eq!(calls, 2);
         let seen = llm.seen.lock().unwrap();
         assert!(seen[0].system[1].cache && seen[0].system[1].text.contains("Artist: Piers"));
-        assert_eq!(seen[0].max_tokens, 400);
+        assert_eq!(seen[0].max_tokens, 900);
         drop(seen);
         // A second run does nothing (draft exists), regenerate rewrites it.
         assert_eq!(generate(&c, 1, &cfg, None, false, None, None).unwrap().created, 0);

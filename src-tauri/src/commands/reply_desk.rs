@@ -365,7 +365,7 @@ an answer free of amounts, figures, calendar dates, holds, contracts and exclusi
 pub fn build_request(input: &DraftInput, model: &str) -> LlmRequest {
     LlmRequest {
         model: model.to_string(),
-        max_tokens: 500,
+        max_tokens: 900,
         // One cache breakpoint, at the end of the stable prefix: the rules, then
         // the approved playbook when there is one.
         system: match input.playbook.as_ref().filter(|p| !p.text.trim().is_empty()) {
