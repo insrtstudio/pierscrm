@@ -279,7 +279,7 @@ export interface PressKit {
 
 export interface ResidencyAction {
   key: string;
-  kind: "plan" | "reply" | "unread" | "later" | "wrong" | "hot";
+  kind: "plan" | "reply" | "unread" | "later" | "wrong" | "hot" | "expand" | "expand_review";
   day: string;
   campaign_id?: number | null;
   campaign?: string | null;
@@ -296,6 +296,42 @@ export interface ResidencyAction {
   seconds?: number | null;
   count?: number | null;
   next_at?: string | null;
+  /** "expand": the next zone to open, and the first emails left. */
+  expand?: ExpandSuggestion | null;
+  remaining?: number | null;
+}
+
+/// A zone no active residency campaign covers (commands/residency/expand.rs).
+export interface ExpandSuggestion {
+  key: string;
+  country: string;
+  country_fr: string;
+  country_en: string;
+  zone: Zone;
+  cities: string[];
+  eligible: number;
+  no_email: number;
+  top: string[];
+  name: string;
+  place_fr: string;
+  place_en: string;
+}
+
+export interface ExpandView {
+  autopilot: boolean;
+  remaining: number;
+  daily_max: number;
+  running_dry: boolean;
+  suggestions: ExpandSuggestion[];
+}
+
+export interface ExpandCreated {
+  campaign_id: number;
+  name: string;
+  targets: number;
+  drafts: number;
+  with_ai: number;
+  errors: string[];
 }
 
 export const residencyPresets = () => invoke<{ key: string; label: string }[]>("residency_presets");
@@ -335,6 +371,10 @@ export const residencyLog = (campaignId?: number | null, limit?: number) =>
   invoke<LogRow[]>("residency_log", { campaignId: campaignId ?? null, limit: limit ?? 100 });
 export const residencyActions = () => invoke<ResidencyAction[]>("residency_actions");
 export const markHandled = (insightId: number) => invoke<void>("residency_mark_handled", { insightId });
+export const residencyExpand = (campaignId: number) => invoke<ExpandView>("residency_expand", { campaignId });
+export const createExpansion = (campaignId: number, zone: Zone, name?: string | null) =>
+  invoke<ExpandCreated>("residency_expand_create", { campaignId, zone, name: name ?? null });
+export const dismissExpansion = (campaignId: number) => invoke<void>("residency_expand_dismiss", { campaignId });
 export const pressKits = () => invoke<PressKit[]>("residency_press_kits");
 export const aiCostMonth = (campaignId?: number | null) =>
   invoke<AiCost>("ai_cost_month", { campaignId: campaignId ?? null });

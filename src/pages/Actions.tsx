@@ -17,6 +17,7 @@ import {
   Megaphone,
   MessageSquareReply,
   MapPinned,
+  MapPinPlus,
   Plane,
   Repeat,
   Target,
@@ -37,8 +38,15 @@ import type { Contact } from "../lib/types";
 import { formatDate, parseDay, toDay, today as todayDay } from "../lib/format";
 import { EmptyState } from "../components/Layout";
 import { ComposeModal, quotaQuery } from "../components/ComposeModal";
-import { useToast } from "../components/ui";
-import { markHandled, residencyActions, utcDate } from "../lib/residency";
+import { errorMessage, useToast } from "../components/ui";
+import {
+  createExpansion,
+  dismissExpansion,
+  markHandled,
+  residencyActions,
+  utcDate,
+  type ExpandSuggestion,
+} from "../lib/residency";
 import { IntentBadge } from "./Residency";
 import { followupDone, followupDraft, gigFollowups, tourActions, type FollowupKind } from "../lib/routing";
 import { TourRoutingModal } from "../components/TourRouting";
@@ -67,6 +75,7 @@ type Kind =
   | "gig"
   | "visa"
   | "agent"
+  | "expand"
   | "hot"
   | "wrong"
   | "rebook"
@@ -84,6 +93,8 @@ type Action = {
   /// Reply classification (residency agent).
   intent?: string | null;
   dismiss?: () => void;
+  /// Tooltip of the dismiss button ("Traité" by default).
+  dismissLabel?: string;
 };
 
 /// What ComposeModal opens with: the contact, plus the reply the residency
@@ -107,6 +118,7 @@ const KIND_ICON: Record<Kind, LucideIcon> = {
   gig: Disc3,
   visa: Plane,
   agent: Bot,
+  expand: MapPinPlus,
   hot: Flame,
   wrong: UserX,
   rebook: Repeat,
@@ -124,6 +136,7 @@ const KIND_ORDER: Kind[] = [
   "followup",
   "rebook",
   "agent",
+  "expand",
   "visa",
   "advancing",
   "campaign",
@@ -200,6 +213,24 @@ export function Actions() {
 
   const handled = useMutation({
     mutationFn: (id: number) => markHandled(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["residency_actions"] }),
+  });
+
+  // A residency campaign running dry: one click creates the next one (target
+  // and drafts, autopilot off), then opens its drafts for review.
+  const expandCreate = useMutation({
+    mutationFn: ({ id, s }: { id: number; s: ExpandSuggestion }) => createExpansion(id, s.zone, s.name),
+    onSuccess: (r) => {
+      qc.invalidateQueries({ queryKey: ["residency_actions"] });
+      qc.invalidateQueries({ queryKey: ["campaigns"] });
+      toast(t("actions.expand_created", { name: r.name, targets: r.targets, drafts: r.drafts }), "ok");
+      if (r.errors.length) toast(r.errors[0], "error");
+      navigate(`/campaigns/${r.campaign_id}?tab=sequence`);
+    },
+    onError: (e) => toast(errorMessage(e), "error"),
+  });
+  const expandLater = useMutation({
+    mutationFn: (id: number) => dismissExpansion(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["residency_actions"] }),
   });
 
@@ -502,6 +533,45 @@ export function Actions() {
             dismiss,
           });
           break;
+        case "expand": {
+          const s = a.expand;
+          if (!s || !camp) break;
+          const busy = expandCreate.isPending && expandCreate.variables?.id === camp;
+          out.push({
+            key: a.key,
+            day: today,
+            kind: "expand",
+            title: t("actions.expand", {
+              name: a.name,
+              count: s.eligible,
+              place: i18n.language.startsWith("fr") ? s.place_fr : s.place_en,
+            }),
+            detail: [
+              t("actions.expand_left", { count: a.remaining ?? 0 }),
+              s.no_email > 0 ? t("actions.expand_no_email", { count: s.no_email }) : null,
+              s.top.join(", "),
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            cta: {
+              label: busy ? t("actions.expand_creating") : t("actions.expand_cta"),
+              run: () => !expandCreate.isPending && expandCreate.mutate({ id: camp, s }),
+            },
+            dismiss: () => expandLater.mutate(camp),
+            dismissLabel: t("actions.expand_later"),
+          });
+          break;
+        }
+        case "expand_review":
+          out.push({
+            key: a.key,
+            day: today,
+            kind: "expand",
+            title: t("actions.expand_review", { name: a.campaign, count: a.count ?? 0 }),
+            detail: t("actions.expand_review_hint", { source: a.name }),
+            cta: camp ? { label: t("actions.expand_review_cta"), run: () => navigate(`/campaigns/${camp}?tab=sequence`) } : undefined,
+          });
+          break;
         case "hot":
           out.push({
             key: a.key,
@@ -524,7 +594,7 @@ export function Actions() {
 
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [followups, replies, campaigns, tasks, events, visas, dossiers, payments, advancing, quota, agent, gigFollow, tours, today, horizon, i18n.language]);
+  }, [followups, replies, campaigns, tasks, events, visas, dossiers, payments, advancing, quota, agent, gigFollow, tours, today, horizon, i18n.language, expandCreate.isPending]);
 
   // Overdue first (one bucket), then today, then each upcoming day that has something.
   const groups = useMemo(() => {
@@ -603,7 +673,7 @@ export function Actions() {
                         </span>
                       )}
                       {a.dismiss && (
-                        <button className="btn-ghost shrink-0 px-2 py-1.5 text-2xs" onClick={a.dismiss} title={t("actions.agent_done")}>
+                        <button className="btn-ghost shrink-0 px-2 py-1.5 text-2xs" onClick={a.dismiss} title={a.dismissLabel ?? t("actions.agent_done")}>
                           <Check size={13} />
                         </button>
                       )}
