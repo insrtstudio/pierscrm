@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import clsx from "clsx";
@@ -17,6 +18,7 @@ import {
   Plane,
   Plus,
   RefreshCw,
+  Search,
   Sparkles,
   Trash2,
   Wand2,
@@ -28,9 +30,11 @@ import { TimingBadge } from "../components/FitTiming";
 import {
   ASSET_TYPES,
   BOARD_COLUMNS,
+  EMAIL_FINDER_EVENT,
   addTargets,
   buildTarget,
   createResidency,
+  findMissingEmails,
   generateDrafts,
   getResidency,
   pressKits,
@@ -50,6 +54,7 @@ import {
   type BoardRow,
   type BuildOptions,
   type BuildResult,
+  type FinderProgress,
   type MessageRow,
   type PressKit,
   type ResidencyConfig,
@@ -487,6 +492,40 @@ function TargetTab({ view }: { view: ResidencyView }) {
   const num = (k: keyof BuildOptions) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setOpts((o) => ({ ...o, [k]: e.target.value === "" ? undefined : Number(e.target.value) }));
 
+  // "Chercher les emails manquants": the crawl runs in the background and
+  // reports after each club; the target is rebuilt by hand once it is done.
+  const [finder, setFinder] = useState<FinderProgress | null>(null);
+  const campaignId = view.campaign.id!;
+  useEffect(() => {
+    const un = listen<FinderProgress>(EMAIL_FINDER_EVENT, (e) => {
+      const p = e.payload;
+      if (p.campaign_id !== campaignId) return;
+      setFinder(p);
+      if (p.finished) {
+        toast(
+          t("residency.finder_done", { count: p.emails_found, venues: p.venues_found, total: p.total }),
+          "ok"
+        );
+      }
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, [campaignId, t, toast]);
+  const finderRunning = finder !== null && !finder.finished;
+  const find = useMutation({
+    mutationFn: () => findMissingEmails(campaignId, opts),
+    onSuccess: (r) => {
+      if (r.queued === 0) {
+        toast(t("residency.finder_none", { count: r.skipped_recent }), "ok");
+        return;
+      }
+      setFinder({ campaign_id: campaignId, done: 0, total: r.queued, venues_found: 0, emails_found: 0, dropped_no_mx: 0, finished: false });
+      toast(t("residency.finder_started", { count: r.queued }), "ok");
+    },
+    onError: (e) => toast(errorMessage(e), "error"),
+  });
+
   return (
     <div className="space-y-6">
       <div className="card p-5">
@@ -537,6 +576,29 @@ function TargetTab({ view }: { view: ResidencyView }) {
                 noemail: result.excluded_no_email,
               })}
             </div>
+            {(result.no_email_venue_ids.length > 0 || finder) && (
+              <div className="flex w-full flex-wrap items-center gap-3 text-2xs">
+                {result.no_email_venue_ids.length > 0 && (
+                  <span className="text-warn">{t("residency.no_email_clubs", { count: result.no_email_venue_ids.length })}</span>
+                )}
+                {finderRunning ? (
+                  <span className="text-fg-subtle">
+                    {t("residency.finder_progress", { done: finder.done, total: finder.total, count: finder.emails_found })}
+                  </span>
+                ) : (
+                  result.no_email_venue_ids.length > 0 && (
+                    <button className="btn-ghost" disabled={find.isPending} onClick={() => find.mutate()}>
+                      <Search size={14} /> {t("residency.finder_run")}
+                    </button>
+                  )
+                )}
+                {finder?.finished && (
+                  <button className="btn-ghost" disabled={build.isPending} onClick={() => build.mutate()}>
+                    <RefreshCw size={14} /> {t("residency.finder_rebuild")}
+                  </button>
+                )}
+              </div>
+            )}
             <button className="btn-primary ml-auto" disabled={picked.size === 0 || add.isPending} onClick={() => add.mutate()}>
               <Plus size={15} /> {t("residency.add_targets", { count: picked.size })}
             </button>

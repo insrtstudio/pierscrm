@@ -135,6 +135,8 @@ export interface BuildResult {
   excluded_in_audience: number;
   excluded_placeholder: number;
   excluded_no_email: number;
+  /** Discovery venues counted in excluded_no_email (what the email finder goes over). */
+  no_email_venue_ids: number[];
 }
 
 export interface BuildOptions {
@@ -307,6 +309,28 @@ export const setAutopilot = (campaignId: number, on: boolean) =>
   invoke<void>("residency_set_autopilot", { campaignId, on });
 export const buildTarget = (campaignId: number, options?: BuildOptions) =>
   invoke<BuildResult>("residency_build_target", { campaignId, options: options ?? null });
+export interface FinderStart {
+  queued: number;
+  /** Already searched in the last 14 days (skipped). */
+  skipped_recent: number;
+}
+
+/** Payload of the `residency:email-finder` event, sent after each club. */
+export interface FinderProgress {
+  campaign_id: number;
+  done: number;
+  total: number;
+  venues_found: number;
+  emails_found: number;
+  dropped_no_mx: number;
+  finished: boolean;
+}
+
+export const EMAIL_FINDER_EVENT = "residency:email-finder";
+
+/** "Chercher les emails manquants": runs in the background, see FinderProgress. */
+export const findMissingEmails = (campaignId: number, options?: BuildOptions, force?: boolean) =>
+  invoke<FinderStart>("residency_find_missing_emails", { campaignId, options: options ?? null, force: force ?? null });
 export const addTargets = (
   campaignId: number,
   picks: {

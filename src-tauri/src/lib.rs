@@ -168,6 +168,7 @@ pub fn run() {
             commands::residency::commands::residency_save,
             commands::residency::commands::residency_set_autopilot,
             commands::residency::commands::residency_build_target,
+            commands::email_finder::residency_find_missing_emails,
             commands::residency::commands::residency_add_targets,
             commands::residency::commands::residency_remove_target,
             commands::residency::commands::residency_board,

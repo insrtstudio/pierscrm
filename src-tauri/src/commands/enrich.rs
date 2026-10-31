@@ -21,12 +21,14 @@ pub(crate) const CRAWL_PATHS: &[&str] = &[
     "/about", "/info",
 ];
 
+/// Browser User-Agent of every crawl (enrichment, the missing-email finder):
+/// many club sites answer a bare client with a 403 or an empty shell.
+pub(crate) const CRAWL_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+     (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
 pub(crate) fn crawl_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .user_agent(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
-             (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        )
+        .user_agent(CRAWL_UA)
         .timeout(std::time::Duration::from_secs(12))
         .redirect(reqwest::redirect::Policy::limited(6))
         .build()
@@ -67,7 +69,8 @@ pub(crate) fn score_email(email: &str, from_mailto: bool) -> (i64, &'static str)
         (30, "general")
     } else if has(&[
         "reservation", "reservations", "reserva", "prenotazioni", "table", "vip", "guestlist",
-        "shop", "job", "jobs", "recrutement", "rh", "lostandfound",
+        "shop", "job", "jobs", "recrutement", "rh", "lostandfound", "ticket", "billetterie", "boxoffice",
+        "kassa", "vorverkauf", "location", "privatisation", "webshop",
     ]) {
         (5, "reservation")
     } else {
@@ -182,7 +185,7 @@ pub(crate) fn base_candidates(base: &str) -> Vec<String> {
 pub(crate) fn internal_links(html: &str, origin: &str) -> Vec<String> {
     const KW: &[&str] = &[
         "contact", "kontakt", "contatti", "contacto", "mention", "legal", "impressum",
-        "about", "info", "book", "nous-contacter",
+        "about", "info", "book", "nous-contacter", "programmation", "imprint", "equipe", "team",
     ];
     let mut out: Vec<String> = Vec::new();
     for part in html.split("href=").skip(1) {
@@ -687,6 +690,35 @@ pub(crate) async fn fetch_html(client: &reqwest::Client, url: &str) -> Option<St
     Some(body)
 }
 
+/// Every write-time rule for one venue address: RGPD exclusions (vi_exclusions),
+/// keep_search_email when the site came out of a web search, then
+/// keep_venue_email (placeholders, deny list, "already on another venue").
+/// Shared by enrichment and the missing-email finder (email_finder.rs).
+pub(crate) fn venue_email_allowed(
+    conn: &rusqlite::Connection,
+    venue_id: i64,
+    email: &str,
+    site_host: Option<&str>,
+    searched: Option<(&str, Option<&str>)>,
+) -> bool {
+    if super::vi::is_excluded(conn, email) {
+        return false;
+    }
+    if let Some((name, city)) = searched {
+        if !keep_search_email(email, site_host, name, city) {
+            return false;
+        }
+    }
+    let seen_elsewhere: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM vi_contacts WHERE type='email' AND valeur=?1 AND venue_id != ?2)",
+            params![email, venue_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(false);
+    keep_venue_email(email, site_host, seen_elsewhere)
+}
+
 /// Store the addresses found on one page for a venue, applying the write-time
 /// rules (keep_venue_email, RGPD exclusions). `searched` is (name, city) when
 /// the site came out of a web search: its addresses must then also pass
@@ -704,22 +736,7 @@ fn store_venue_emails(
 ) -> (i64, i64) {
     let (mut kept, mut best) = (0i64, 0i64);
     for (email, from_mailto) in emails {
-        if super::vi::is_excluded(conn, &email) {
-            continue;
-        }
-        if let Some((name, city)) = searched {
-            if !keep_search_email(&email, site_host, name, city) {
-                continue;
-            }
-        }
-        let seen_elsewhere: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM vi_contacts WHERE type='email' AND valeur=?1 AND venue_id != ?2)",
-                params![email, venue_id],
-                |r| r.get(0),
-            )
-            .unwrap_or(false);
-        if !keep_venue_email(&email, site_host, seen_elsewhere) {
+        if !venue_email_allowed(conn, venue_id, &email, site_host, searched) {
             continue;
         }
         let (score, role) = score_email(&email, from_mailto);
