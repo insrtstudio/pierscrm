@@ -1544,7 +1544,8 @@ export const en = {
     complaints_hint: "Spam complaints are not collected automatically yet: this rate stays at 0 until one is recorded.",
     unsub_title: "One-click unsubscribe (RFC 8058)",
     unsub_on: "On: every email carries an HTTPS unsubscribe link and the List-Unsubscribe-Post header.",
-    unsub_off: "Off: only unsubscribe by email (mailto) is offered. Enter the tracking server URL to turn it on.",
+    unsub_off: "Off: only unsubscribe by email (mailto) is offered. Set the insrt token (Settings, Integrations) or enter an unsubscribe server URL to turn it on.",
+    unsub_insrt: "On via insrt.studio: every email carries a one-click unsubscribe link and the List-Unsubscribe-Post header. Unsubscribes are picked up every 30 minutes and the address is removed from sending. Leave the field empty, or enter another server's URL.",
     unsub_https: "The URL must start with https://",
   },
   funnel: {

@@ -771,6 +771,38 @@ fn scan_problems(conn: &Connection, cfg: &PushConfig, now: DateTime<Utc>) {
         record(conn, &n, status, now);
     }
 
+    // One-click unsubscribes (insrt /u/<token> or a custom endpoint).
+    let unsubs: Vec<(i64, String, String)> = conn
+        .prepare(&format!(
+            "SELECT s.id, s.address, s.created_at,
+                    (SELECT {name} FROM contacts k WHERE lower(trim(k.email)) = s.address LIMIT 1)
+             FROM suppressions s WHERE s.reason = 'unsubscribe' AND s.note = ?2 AND s.created_at >= ?1 ORDER BY s.id",
+            name = NAME_SQL
+        ))
+        .and_then(|mut st| {
+            st.query_map(params![since, crate::commands::deliverability::ONE_CLICK_NOTE], |r| {
+                let addr: String = r.get(1)?;
+                let name: Option<String> = r.get(3)?;
+                Ok((r.get(0)?, match name {
+                    Some(n) => format!("{} ({})", addr, n),
+                    None => addr,
+                }, r.get(2)?))
+            })
+            .map(|it| it.flatten().collect())
+        })
+        .unwrap_or_default();
+    for (id, who, at) in unsubs {
+        let n = Notice::new(
+            "unsubscribe",
+            id,
+            "Désinscription".into(),
+            format!("{} : désinscription en un clic, plus aucun envoi.", who),
+            0,
+        )
+        .at(parse_utc(&at));
+        record(conn, &n, status, now);
+    }
+
     let pauses: Vec<(i64, String, String, String, Option<String>)> = conn
         .prepare(
             "SELECT l.id, l.code, l.message, l.at, c.name
@@ -1457,6 +1489,23 @@ mod tests {
         c.execute("INSERT INTO settings (key, value) VALUES ('imap_last_error', 'timeout')", []).unwrap();
         tick_with(&c, &p, &cfg, now + Duration::minutes(215));
         assert_eq!(tick_with(&c, &p, &cfg, now + Duration::minutes(340)), 1);
+    }
+
+    #[test]
+    fn one_click_unsubscribe_is_notified_once() {
+        let c = setup();
+        c.execute_batch(
+            "INSERT INTO suppressions (address, reason, note, created_at) VALUES ('marc@badaboum.fr', 'unsubscribe', 'lien de désinscription', '2026-11-10 12:00:00');
+             INSERT INTO suppressions (address, reason, note, created_at) VALUES ('lea@rex.fr', 'unsubscribe', 'réponse stop', '2026-11-10 12:00:00');",
+        )
+        .unwrap();
+        let p = FakePusher::default();
+        let cfg = PushConfig::default();
+        assert_eq!(tick_with(&c, &p, &cfg, utc(NOW)), 1, "only the one-click one (a reply has its own notice)");
+        assert_eq!(p.sent.borrow()[0].title, "Désinscription");
+        assert_eq!(p.sent.borrow()[0].message, "marc@badaboum.fr (Badaboum) : désinscription en un clic, plus aucun envoi.");
+        assert_eq!(p.sent.borrow()[0].priority, 0);
+        assert_eq!(tick_with(&c, &p, &cfg, utc(NOW) + Duration::minutes(5)), 0);
     }
 
     #[test]

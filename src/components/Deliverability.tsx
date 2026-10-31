@@ -483,11 +483,15 @@ function HealthCard() {
       <div className="mt-5 border-t border-border pt-4">
         <div className="mb-1 text-xs font-semibold">{t("deliverability.unsub_title")}</div>
         <p className="mb-2 text-2xs text-fg-subtle">
-          {data.one_click_unsubscribe ? t("deliverability.unsub_on") : t("deliverability.unsub_off")}
+          {data.unsubscribe_via_insrt
+            ? t("deliverability.unsub_insrt")
+            : data.one_click_unsubscribe
+              ? t("deliverability.unsub_on")
+              : t("deliverability.unsub_off")}
         </p>
         <input
           className="input"
-          placeholder="https://t.insrt.studio"
+          placeholder={data.unsubscribe_via_insrt && data.unsubscribe_endpoint ? data.unsubscribe_endpoint : "https://t.insrt.studio"}
           value={unsub ?? ""}
           onChange={(e) => setUnsub(e.target.value)}
           onBlur={saveUnsub}

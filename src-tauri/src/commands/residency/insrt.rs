@@ -9,6 +9,8 @@
 //!   country, ticketUrl, status, published}` -> the stored gig (upsert per externalRef, see crate::commands::insrt_gigs)
 //! - `POST {base}/api/crm/v1/press-kits` `{id?, artistSlug, title, content}` -> `{id, title, created}`
 //!   (found by id, else by artist + title, else created; `content` replaces the kit's, see crate::commands::routing)
+//! - `GET  {base}/api/crm/v1/unsubscribes?since=<ISO>` -> `{"unsubscribes":[{token,source,at}], "next": ISO}`
+//!   (one-click unsubscribes recorded on `{base}/u/<token>`, see crate::commands::deliverability)
 //!
 //! `Authorization: Bearer <insrt_api_token>` (a secret, see crate::secrets).
 //! The HTTP side sits behind the `Insrt` trait so tests run on fixtures.
@@ -123,6 +125,24 @@ pub struct PressKitAck {
     pub created: bool,
 }
 
+/// One one-click unsubscribe recorded on insrt (`/u/<token>`).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct Unsubscribe {
+    pub token: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct UnsubscribePage {
+    #[serde(default)]
+    pub unsubscribes: Vec<Unsubscribe>,
+    #[serde(default)]
+    pub next: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Recipient {
     pub name: String,
@@ -144,6 +164,11 @@ pub trait Insrt: Send + Sync {
     fn upsert_press_kit(&self, kit: &PressKitUpsert) -> Result<PressKitAck, String> {
         let _ = kit;
         Err("insrt: mise à jour du dossier presse indisponible.".into())
+    }
+    /// One-click unsubscribes recorded after `since`. Defaulted like `push_gig`.
+    fn unsubscribes(&self, since: &str) -> Result<UnsubscribePage, String> {
+        let _ = since;
+        Err("insrt: désinscriptions indisponibles.".into())
     }
 }
 
@@ -168,6 +193,10 @@ pub fn parse_activity(raw: &str) -> Result<ActivityPage, String> {
 }
 
 pub fn parse_press_kit_ack(raw: &str) -> Result<PressKitAck, String> {
+    serde_json::from_str(raw).map_err(|e| format!("insrt: réponse illisible ({})", e))
+}
+
+pub fn parse_unsubscribes(raw: &str) -> Result<UnsubscribePage, String> {
     serde_json::from_str(raw).map_err(|e| format!("insrt: réponse illisible ({})", e))
 }
 
@@ -291,6 +320,16 @@ impl Insrt for HttpInsrt {
             .map_err(|e| format!("insrt: {}", e))?;
         parse_press_kit_ack(&Self::check(resp)?)
     }
+
+    fn unsubscribes(&self, since: &str) -> Result<UnsubscribePage, String> {
+        let resp = self
+            .http
+            .get(self.url("/api/crm/v1/unsubscribes", &[("since", since)])?)
+            .bearer_auth(&self.token)
+            .send()
+            .map_err(|e| format!("insrt: {}", e))?;
+        parse_unsubscribes(&Self::check(resp)?)
+    }
 }
 
 /// The configured client, or None when no token is set (emails then carry the
@@ -369,5 +408,18 @@ mod tests {
         assert!(!again.created && !again.published);
         assert!(parse_gig_ack(r#"{"error":"artist_not_found"}"#).is_err());
         assert!(parse_gig_ack("<html>").is_err());
+    }
+
+    #[test]
+    fn unsubscribe_contract_fixtures() {
+        let page = parse_unsubscribes(
+            r#"{"unsubscribes":[{"token":"0123456789abcdef012345672d669e2ca689da42fee1b4f4663e15c4","source":"one_click","at":"2026-10-31T12:00:00.123Z"}],"next":"2026-10-31T12:00:00.123Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(page.unsubscribes.len(), 1);
+        assert_eq!(page.unsubscribes[0].source.as_deref(), Some("one_click"));
+        assert_eq!(page.next.as_deref(), Some("2026-10-31T12:00:00.123Z"));
+        assert!(parse_unsubscribes(r#"{"unsubscribes":[],"next":"x"}"#).unwrap().unsubscribes.is_empty());
+        assert!(parse_unsubscribes("<html>").is_err());
     }
 }

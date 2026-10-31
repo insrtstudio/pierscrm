@@ -46,6 +46,9 @@ keyring = { version = "3", features = ["apple-native"] }
 # Reply detection (read-only IMAP scan of the sender's inbox).
 imap = "2.4"
 native-tls = "0.2"
+# One-click unsubscribe tokens: random nonce + HMAC-SHA256 signature checked by insrt.
+sha2 = "0.10"
+getrandom = "0.3"
 
 [profile.release]
 # NOT "abort": a panic in a background harvest/enrich worker must never take the

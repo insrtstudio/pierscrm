@@ -88,6 +88,10 @@ export interface DeliverabilityStatus {
   pause?: DeliverabilityPause | null;
   dns?: DnsReport | null;
   one_click_unsubscribe: boolean;
+  /** The one-click endpoint in use (the custom URL, or insrt.studio by default). */
+  unsubscribe_endpoint?: string | null;
+  /** No custom URL: the insrt.studio endpoint, since the insrt API is configured. */
+  unsubscribe_via_insrt?: boolean;
 }
 
 export const deliverabilityStatus = () => invoke<DeliverabilityStatus>("deliverability_status");
