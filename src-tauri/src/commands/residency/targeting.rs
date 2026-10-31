@@ -32,16 +32,42 @@ const OFF_TOPIC_WORDS: &[&str] = &[
     "billetterie", "shop", "boutique", "marketing", "partenariat", "partners", "sponsoring", "media",
 ];
 
+/// Off-topic stems that come glued to another word in a local part
+/// ("ticketshop", "billetteriegenerale", "webshop"), which the token match
+/// misses: AB Club's ticket shop address went out as a pitch.
+const OFF_TOPIC_STEMS: &[&str] = &[
+    "ticket", "billet", "shop", "boxoffice", "kassa", "vorverkauf", "presse", "recrut", "career", "bewerbung",
+    "reserv", "privatis", "verhuur", "vermietung",
+];
+
+/// Mailboxes that never reach a programmer: ticket desks, shops, job offers.
+/// Never picked as a venue's pitch address (best_email), whatever else is on
+/// file; press and reservations stay pickable at rank 4.
+const NEVER_PITCH_STEMS: &[&str] =
+    &["ticket", "billet", "shop", "boxoffice", "kassa", "vorverkauf", "recrut", "career", "bewerbung"];
+const NEVER_PITCH_WORDS: &[&str] = &["jobs", "job", "rh", "hr", "emploi"];
+
+fn local_tokens(local: &str) -> Vec<&str> {
+    local.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).collect()
+}
+
+fn is_booking_local(local: &str, tokens: &[&str]) -> bool {
+    tokens.iter().any(|t| BOOKING_WORDS.contains(t))
+        || local.contains("booking")
+        || local.contains("programmation")
+        || local.starts_with("prog")
+}
+
 /// How good an address is for a booking pitch: 0 (booking/programmation) to
-/// 4 (press, reservations, HR...). Lower is better.
+/// 4 (press, reservations, HR, ticketing...). Lower is better.
 pub fn email_rank(addr: &str, person: Option<&str>) -> u8 {
     let local = addr.split('@').next().unwrap_or("").to_lowercase();
-    let tokens: Vec<&str> = local.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).collect();
+    let tokens = local_tokens(&local);
     let has = |words: &[&str]| tokens.iter().any(|t| words.contains(t));
-    if has(BOOKING_WORDS) || local.contains("booking") || local.contains("programmation") || local.starts_with("prog") {
+    if is_booking_local(&local, &tokens) {
         return 0;
     }
-    if has(OFF_TOPIC_WORDS) {
+    if has(OFF_TOPIC_WORDS) || OFF_TOPIC_STEMS.iter().any(|s| local.contains(s)) {
         return 4;
     }
     if has(GENERIC_WORDS) {
@@ -53,6 +79,28 @@ pub fn email_rank(addr: &str, person: Option<&str>) -> u8 {
         return 1;
     }
     3
+}
+
+/// email_rank, plus the role enrichment guessed from where the address sat on
+/// the page (vi_contacts.role_devine): an info@ printed under "Billetterie" is
+/// the ticket desk's, not the programmer's (email_finder::context_role).
+pub fn email_rank_with_role(addr: &str, person: Option<&str>, role: Option<&str>) -> u8 {
+    let r = email_rank(addr, person);
+    match role {
+        Some("reservation" | "presse") if r > 0 => 4,
+        _ => r,
+    }
+}
+
+/// A ticketing / shop / jobs mailbox (NEVER_PITCH_*), unless the local part
+/// also says booking ("booking.tickets@" is still the booker's).
+pub fn is_never_pitch(addr: &str) -> bool {
+    let local = addr.split('@').next().unwrap_or("").to_lowercase();
+    let tokens = local_tokens(&local);
+    if is_booking_local(&local, &tokens) {
+        return false;
+    }
+    NEVER_PITCH_STEMS.iter().any(|s| local.contains(s)) || tokens.iter().any(|t| NEVER_PITCH_WORDS.contains(t))
 }
 
 fn domain_of(s: &str) -> String {
@@ -67,6 +115,14 @@ pub struct EmailCand {
     pub addr: String,
     pub score: i64,
     pub person: Option<String>,
+    /// vi_contacts.role_devine, when known.
+    pub role: Option<String>,
+}
+
+impl EmailCand {
+    pub fn rank(&self) -> u8 {
+        email_rank_with_role(&self.addr, self.person.as_deref(), self.role.as_deref())
+    }
 }
 
 /// Website builders, ticketing and listing platforms: an address on these
@@ -87,15 +143,15 @@ pub fn is_platform_address(addr: &str) -> bool {
 
 /// Exactly one address per venue: best rank first, then an address on the
 /// venue's own website domain, then the enrichment score. Platform addresses
-/// are never picked.
+/// and ticketing / shop / jobs mailboxes are never picked.
 pub fn best_email<'a>(cands: &'a [EmailCand], site: Option<&str>) -> Option<&'a EmailCand> {
     let site_dom = site.map(domain_of).filter(|d| !d.is_empty());
-    cands.iter().filter(|c| !is_platform_address(&c.addr)).min_by_key(|c| {
+    cands.iter().filter(|c| !is_platform_address(&c.addr) && !is_never_pitch(&c.addr)).min_by_key(|c| {
         let off_site = match &site_dom {
             Some(d) => !(domain_of(&c.addr) == *d || d.ends_with(&domain_of(&c.addr))),
             None => true,
         };
-        (email_rank(&c.addr, c.person.as_deref()), off_site, -c.score, c.addr.clone())
+        (c.rank(), off_site, -c.score, c.addr.clone())
     })
 }
 
@@ -171,6 +227,9 @@ pub struct BuildResult {
     pub excluded_in_audience: i64,
     pub excluded_placeholder: i64,
     pub excluded_no_email: i64,
+    /// The Discovery venues counted in excluded_no_email: what the missing-email
+    /// finder goes over (email_finder.rs), so its count matches the banner.
+    pub no_email_venue_ids: Vec<i64>,
 }
 
 enum Skip {
@@ -324,7 +383,7 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
     let mut out = BuildResult::default();
     let mut seen_addr: HashSet<String> = HashSet::new();
     let email_sql = format!(
-        "SELECT valeur, score, personne_nom FROM vi_contacts c
+        "SELECT valeur, score, personne_nom, role_devine FROM vi_contacts c
          WHERE c.venue_id = ?1 AND c.type = 'email' AND {}",
         own_email_sql("c.valeur")
     );
@@ -343,6 +402,7 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
         }
         if !has_email {
             out.excluded_no_email += 1;
+            out.no_email_venue_ids.push(id);
             continue;
         }
         if in_audience(conn, campaign_id, crm) {
@@ -350,11 +410,14 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
             continue;
         }
         let cands: Vec<EmailCand> = email_st
-            .query_map(params![id], |r| Ok(EmailCand { addr: r.get(0)?, score: r.get(1)?, person: r.get(2)? }))
+            .query_map(params![id], |r| {
+                Ok(EmailCand { addr: r.get(0)?, score: r.get(1)?, person: r.get(2)?, role: r.get(3)? })
+            })
             .map(|it| it.flatten().collect())
             .unwrap_or_default();
         let Some(best) = best_email(&cands, site.as_deref()) else {
             out.excluded_no_email += 1;
+            out.no_email_venue_ids.push(id);
             continue;
         };
         match skip_reason(conn, &best.addr, crm) {
@@ -398,7 +461,7 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
             artist_count: artists.len() as i64,
             artists: artists.into_iter().take(4).collect(),
             email: best.addr.trim().to_string(),
-            email_rank: email_rank(&best.addr, best.person.as_deref()),
+            email_rank: best.rank(),
             first_name: first_name_of(best.person.as_deref()),
             source: "discovery".into(),
             promoter_id: None,
@@ -488,7 +551,7 @@ fn promoter_candidates(
             continue;
         }
         let cands: Vec<EmailCand> = email_st
-            .query_map(params![id], |r| Ok(EmailCand { addr: r.get(0)?, score: r.get(1)?, person: None }))
+            .query_map(params![id], |r| Ok(EmailCand { addr: r.get(0)?, score: r.get(1)?, person: None, role: None }))
             .map(|it| it.flatten().collect())
             .unwrap_or_default();
         let Some(best) = best_email(&cands, site.as_deref()) else {
@@ -788,7 +851,7 @@ mod tests {
     use crate::commands::residency::zone::Zone;
 
     fn cand(a: &str, score: i64) -> EmailCand {
-        EmailCand { addr: a.into(), score, person: None }
+        EmailCand { addr: a.into(), score, person: None, role: None }
     }
 
     #[test]

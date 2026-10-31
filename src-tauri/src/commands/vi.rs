@@ -414,6 +414,9 @@ pub(crate) fn migrate_quality(conn: &rusqlite::Connection) {
         // #13: when the "retry venues without an email" pass last went over a
         // venue, so a second click resumes instead of starting over.
         "ALTER TABLE vi_venues ADD COLUMN email_retry_at TEXT",
+        // When the residency "find missing emails" pass (email_finder.rs) last
+        // went over a venue, found or not: a second click skips it for a while.
+        "ALTER TABLE vi_venues ADD COLUMN email_find_at TEXT",
         // #12: YouTube channels were stored as kind 'playlist'.
         "UPDATE radar_curators SET kind='channel' WHERE source='youtube' AND kind != 'channel'",
     ] {

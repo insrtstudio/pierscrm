@@ -6,6 +6,7 @@ pub mod deezer;
 pub mod radar;
 pub mod email;
 pub mod enrich;
+pub mod email_finder;
 pub mod fit;
 pub mod events;
 pub mod funnel;
