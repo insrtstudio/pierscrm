@@ -899,7 +899,7 @@ fn backfill_reply_texts(conn: &Connection, session: &mut ImapSession) {
         let _ = conn.execute("UPDATE email_replies SET body_excerpt = ?2 WHERE id = ?1", params![id, text]);
         let _ = conn.execute("DELETE FROM reply_insights WHERE email_reply_id = ?1 AND handled = 0", params![id]);
         let _ = conn.execute(
-            "DELETE FROM reply_desk WHERE email_reply_id = ?1 AND state = 'pending' AND edited = 0 AND sent_email_id IS NULL",
+            "DELETE FROM reply_desk WHERE email_reply_id = ?1 AND state IN ('pending','open','snoozed') AND edited = 0 AND sent_email_id IS NULL",
             params![id],
         );
         refusal_from_text(conn, &mid, &text);
