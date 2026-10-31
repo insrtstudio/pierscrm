@@ -587,7 +587,9 @@ pub fn read_inbound(raw: &[u8]) -> InboundHeaders {
         subject: decode_words(get("subject")),
         message_id: extract_ids(get("message-id")).into_iter().next(),
         refs,
-        content_type: get("content-type").to_ascii_lowercase(),
+        // Original case: MIME boundaries are case-sensitive ("----=_Part_..."),
+        // comparisons lowercase on their side.
+        content_type: get("content-type").to_string(),
         transfer_encoding: get("content-transfer-encoding").trim().to_ascii_lowercase(),
         auto_submitted,
         failed_recipients: addresses_in(get("x-failed-recipients")),
@@ -628,9 +630,10 @@ pub fn classify(h: &InboundHeaders, own_addr: &str) -> Inbound {
     let local = from.split('@').next().unwrap_or("");
     let subj = h.subject.trim().to_lowercase();
     let daemon = ["mailer-daemon", "mailerdaemon", "mail-daemon", "postmaster"].contains(&local);
+    let ct = h.content_type.to_ascii_lowercase();
     if daemon
-        || h.content_type.contains("report-type=delivery-status")
-        || h.content_type.contains("report-type=\"delivery-status\"")
+        || ct.contains("report-type=delivery-status")
+        || ct.contains("report-type=\"delivery-status\"")
         || !h.failed_recipients.is_empty()
         || BOUNCE_SUBJECTS.iter().any(|s| subj.starts_with(s))
     {
@@ -862,6 +865,45 @@ pub fn reply_text(content_type: &str, transfer_encoding: &str, body: &str) -> St
     let text = found.0.filter(|t| !t.trim().is_empty()).or(found.1).unwrap_or_default();
     let clean = strip_quoted(&text.replace("\r\n", "\n"));
     clean.chars().take(EXCERPT_MAX).collect()
+}
+
+/// Recent replies stored without their text (lost to the lowercased-boundary
+/// bug, or a fetch that failed): found again by Message-ID and read. A reply
+/// read this way is classified again, and its untouched draft answer is
+/// rebuilt from the real text. At most 20 per sync; a reply whose text stays
+/// empty is not retried after 3 tries.
+fn backfill_reply_texts(conn: &Connection, session: &mut ImapSession) {
+    let rows: Vec<(i64, String)> = conn
+        .prepare(
+            "SELECT id, message_id FROM email_replies
+             WHERE kind IN ('reply','auto_reply') AND COALESCE(body_excerpt,'') = ''
+               AND message_id NOT LIKE '<imap-%' AND COALESCE(text_tries, 0) < 3
+               AND COALESCE(received_at, created_at) >= datetime('now','-30 days')
+             ORDER BY id DESC LIMIT 20",
+        )
+        .and_then(|mut st| st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect())
+        .unwrap_or_default();
+    for (id, mid) in rows {
+        let _ = conn.execute("UPDATE email_replies SET text_tries = COALESCE(text_tries,0) + 1 WHERE id = ?1", params![id]);
+        let needle = mid.replace('"', "");
+        let Ok(found) = session.uid_search(format!("HEADER Message-ID \"{}\"", needle)) else { continue };
+        let Some(uid) = found.into_iter().max() else { continue };
+        let Ok(fetches) = session.uid_fetch(uid.to_string(), "(UID BODY.PEEK[HEADER] BODY.PEEK[TEXT])") else { continue };
+        let Some(f) = fetches.iter().next() else { continue };
+        let (Some(head), Some(raw)) = (f.header(), f.text()) else { continue };
+        let h = read_inbound(head);
+        let text = reply_text(&h.content_type, &h.transfer_encoding, &String::from_utf8_lossy(raw));
+        if text.trim().is_empty() {
+            continue;
+        }
+        let _ = conn.execute("UPDATE email_replies SET body_excerpt = ?2 WHERE id = ?1", params![id, text]);
+        let _ = conn.execute("DELETE FROM reply_insights WHERE email_reply_id = ?1 AND handled = 0", params![id]);
+        let _ = conn.execute(
+            "DELETE FROM reply_desk WHERE email_reply_id = ?1 AND state = 'pending' AND edited = 0 AND sent_email_id IS NULL",
+            params![id],
+        );
+        refusal_from_text(conn, &mid, &text);
+    }
 }
 
 /// IMAP host to use: the explicit `imap_host` setting, else derived from the
@@ -1361,6 +1403,8 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
         refusal_from_text(conn, &mid, &text);
     }
 
+    backfill_reply_texts(conn, &mut session);
+
     let _ = session.logout();
     put_setting(
         conn,
@@ -1557,6 +1601,10 @@ Also quoting someone@else.com in the text.";
         // HTML only, base64.
         let html = "PHA+SGVsbG8gPGI+d29ybGQ8L2I+PC9wPjxibG9ja3F1b3RlPm9sZDwvYmxvY2txdW90ZT4=";
         assert_eq!(reply_text("text/html; charset=utf-8", "base64", html), "Hello  world");
+        // Boundaries keep their case (IONOS / JavaMail "----=_Part_...").
+        let h = read_inbound(b"Content-Type: multipart/alternative;\r\n\tboundary=\"----=_Part_3471793_1.1793406958133\"\r\n\r\n");
+        let body = "------=_Part_3471793_1.1793406958133\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nAvec plaisir, appelez-nous.\r\n------=_Part_3471793_1.1793406958133--";
+        assert_eq!(reply_text(&h.content_type, &h.transfer_encoding, body), "Avec plaisir, appelez-nous.");
         // Plain, with a quoted tail.
         assert_eq!(reply_text("", "", "Not now, maybe in March.\n\nOn Tue, Piers wrote:\n> hi"), "Not now, maybe in March.");
     }
