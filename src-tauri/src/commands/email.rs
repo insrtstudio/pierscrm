@@ -6,12 +6,10 @@ use lettre::{Message, SmtpTransport, Transport};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, State};
 
 use super::{campaigns, deliverability, funnel, organisations, outbox, status};
-
-static TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 fn setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
     // Routed through the Keychain for secret keys (see crate::secrets).
@@ -248,12 +246,6 @@ pub(crate) fn build_transport(cfg: &SmtpConfig) -> Result<SmtpTransport, String>
         _ => SmtpTransport::starttls_relay(&host).map_err(|e| e.to_string())?,
     };
     Ok(builder.port(cfg.port).credentials(creds).build())
-}
-
-fn gen_token() -> String {
-    let n = chrono::Utc::now().timestamp_micros() as u64;
-    let c = TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{:x}{:x}", n, c)
 }
 
 fn html_escape(s: &str) -> String {
@@ -671,7 +663,7 @@ fn send_one_full(
 
     // Guardrails first: a suppressed address is never mailed, and the daily cap
     // holds for single sends too.
-    let (tracking_base, signature, unsub_base) = {
+    let (tracking_base, signature, unsub) = {
         let conn = pool.get().map_err(|e| e.to_string())?;
         if let Some(reason) = outbox::suppression_reason(&conn, &addr) {
             return Ok((
@@ -701,15 +693,16 @@ fn send_one_full(
             return Ok((SendResult { ok: false, error: Some(reason), tracked: false, code: Some(code) }, None));
         }
         // Open-tracking: only if a public tracking base URL is configured.
-        (setting(&conn, "tracking_base_url"), load_signature(&conn), deliverability::unsubscribe_base(&conn))
+        (setting(&conn, "tracking_base_url"), load_signature(&conn), deliverability::unsubscribe_config(&conn))
     };
-    let token = gen_token();
+    // Signed when insrt is configured: the token is also the one-click link's.
+    let token = unsub.new_token();
     let tracked = tracking_base.is_some();
     let message_id = outbox::gen_message_id(&cfg.from_email);
 
     let email = build_message_full(
         &from_mbox, &to_mbox, subject, body, &signature, &tracking_base, &token, &message_id,
-        unsub_base.as_deref(), thread, attachments,
+        unsub.base.as_deref(), thread, attachments,
     )?;
 
     let transport = build_transport(&cfg)?;
@@ -922,7 +915,7 @@ fn send_bulk_blocking(
     if let Some(p) = deliverability::health::refresh(&conn, chrono::Utc::now()) {
         return Err(format!("Envois automatiques en pause : {}", p.reason));
     }
-    let unsub_base = deliverability::unsubscribe_base(&conn);
+    let unsub = deliverability::unsubscribe_config(&conn);
     let mut throttled: Vec<String> = Vec::new();
     let mut stop_reason: Option<String> = None;
     let tracking_base = setting(&conn, "tracking_base_url");
@@ -1163,12 +1156,12 @@ fn send_bulk_blocking(
             continue;
         }
 
-        let token = gen_token();
+        let token = unsub.new_token();
         let message_id = outbox::gen_message_id(&cfg.from_email);
         // One malformed message must not abort the batch (and hide what was sent).
         let msg = match build_message(
             &from_mbox, &to_mbox, &subj, &bod, &signature, &tracking_base, &token, &message_id,
-            unsub_base.as_deref(),
+            unsub.base.as_deref(),
         ) {
             Ok(m) => m,
             Err(e) => {

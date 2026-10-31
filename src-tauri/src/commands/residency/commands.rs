@@ -691,6 +691,9 @@ pub async fn insrt_sync_activity(state: State<'_, AppState>) -> Result<usize, St
         let client = insrt::client(&conn).ok_or_else(|| "Jeton insrt non configuré (Réglages, Intégrations).".to_string())?;
         let now = Utc::now();
         let n = report::poll_press(&conn, client.as_ref(), now)?;
+        if let Err(e) = crate::commands::deliverability::poll_insrt_unsubscribes(&conn, client.as_ref()) {
+            eprintln!("[deliverability] {}", e);
+        }
         engine::put(&conn, "insrt_last_poll", &fmt(now));
         Ok(n)
     })

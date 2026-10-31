@@ -1511,7 +1511,8 @@ export const fr = {
     complaints_hint: "Les plaintes spam ne sont pas encore remontées automatiquement : ce taux reste à 0 tant qu'aucune n'est enregistrée.",
     unsub_title: "Désinscription en un clic (RFC 8058)",
     unsub_on: "Actif : chaque email porte un lien HTTPS de désinscription et l'en-tête List-Unsubscribe-Post.",
-    unsub_off: "Inactif : seule la désinscription par email (mailto) est proposée. Renseignez l'URL du serveur de suivi pour l'activer.",
+    unsub_off: "Inactif : seule la désinscription par email (mailto) est proposée. Configurez le jeton insrt (Réglages, Intégrations) ou renseignez l'URL d'un serveur de désinscription pour l'activer.",
+    unsub_insrt: "Actif via insrt.studio : chaque email porte un lien de désinscription en un clic et l'en-tête List-Unsubscribe-Post. Les désinscriptions sont relevées toutes les 30 minutes et l'adresse est retirée des envois. Laissez le champ vide, ou renseignez l'URL d'un autre serveur.",
     unsub_https: "L'URL doit commencer par https://",
   },
   funnel: {
