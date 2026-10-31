@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 use super::zone::{iso_country, language_for, pays_values};
 use super::Config;
-use crate::commands::harvest::own_email_sql;
+use crate::commands::harvest::{own_email_sql, own_email_sql_local, shared_venue_emails};
 use crate::db::normalise;
 
 /// Days during which an address already mailed (by any campaign) is left alone.
@@ -385,8 +385,9 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
     let email_sql = format!(
         "SELECT valeur, score, personne_nom, role_devine FROM vi_contacts c
          WHERE c.venue_id = ?1 AND c.type = 'email' AND {}",
-        own_email_sql("c.valeur")
+        own_email_sql_local("c.valeur")
     );
+    let shared = shared_venue_emails(conn);
     let mut email_st = conn.prepare(&email_sql).map_err(|e| e.to_string())?;
     let mut art_st = conn
         .prepare(
@@ -413,7 +414,7 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
             .query_map(params![id], |r| {
                 Ok(EmailCand { addr: r.get(0)?, score: r.get(1)?, person: r.get(2)?, role: r.get(3)? })
             })
-            .map(|it| it.flatten().collect())
+            .map(|it| it.flatten().filter(|c: &EmailCand| !shared.contains(&c.addr.to_lowercase())).collect())
             .unwrap_or_default();
         let Some(best) = best_email(&cands, site.as_deref()) else {
             out.excluded_no_email += 1;

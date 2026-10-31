@@ -923,6 +923,34 @@ const VENUE_SHARED_EMAIL_MIN: i64 = 4;
 /// itself. Every place that reads a venue email (filter, list, counters,
 /// promotion, repair) goes through this, so they all agree.
 pub(crate) fn own_email_sql(col: &str) -> String {
+    let mut parts = not_own_parts(col);
+    // Uncorrelated, so SQLite builds this set once per statement.
+    parts.push(format!(
+        "lower({col}) IN (SELECT lower(valeur) FROM vi_contacts WHERE type='email'
+           GROUP BY lower(valeur) HAVING COUNT(DISTINCT venue_id) >= {VENUE_SHARED_EMAIL_MIN})"
+    ));
+    format!("NOT ({})", parts.join(" OR "))
+}
+
+/// `own_email_sql` without the shared-inbox set, for a statement executed once
+/// per venue: SQLite rebuilds that set on every execution (a GROUP BY over all
+/// venue emails each time). Filter the rows with `shared_venue_emails`, read
+/// once, to get the same answer.
+pub(crate) fn own_email_sql_local(col: &str) -> String {
+    format!("NOT ({})", not_own_parts(col).join(" OR "))
+}
+
+/// Lowercased addresses `own_email_sql` rejects as shared across venues.
+pub(crate) fn shared_venue_emails(conn: &rusqlite::Connection) -> std::collections::HashSet<String> {
+    let sql = format!(
+        "SELECT lower(valeur) FROM vi_contacts WHERE type='email'
+         GROUP BY lower(valeur) HAVING COUNT(DISTINCT venue_id) >= {VENUE_SHARED_EMAIL_MIN}"
+    );
+    let Ok(mut st) = conn.prepare(&sql) else { return Default::default() };
+    st.query_map([], |r| r.get::<_, String>(0)).map(|it| it.flatten().collect()).unwrap_or_default()
+}
+
+fn not_own_parts(col: &str) -> Vec<String> {
     use super::radar::{NON_PITCH_LOCALS, PLACEHOLDER_SQL};
     // One IN lookup on the local part instead of one LIKE per mailbox name:
     // this runs for every address of every venue the email filter walks, and
@@ -934,12 +962,7 @@ pub(crate) fn own_email_sql(col: &str) -> String {
     parts.extend(PLACEHOLDER_SQL.iter().map(|p| format!("lower({col}) LIKE {p}")));
     // Scraping artefact: a JSON-escaped string left a trailing backslash.
     parts.push(format!("{col} LIKE '%\\'"));
-    // Uncorrelated, so SQLite builds this set once per statement.
-    parts.push(format!(
-        "lower({col}) IN (SELECT lower(valeur) FROM vi_contacts WHERE type='email'
-           GROUP BY lower(valeur) HAVING COUNT(DISTINCT venue_id) >= {VENUE_SHARED_EMAIL_MIN})"
-    ));
-    format!("NOT ({})", parts.join(" OR "))
+    parts
 }
 
 // A venue is "contacted" when its CRM contact (or a contact matching it by
