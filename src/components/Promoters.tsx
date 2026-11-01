@@ -104,6 +104,22 @@ export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean 
     },
     onError: (e) => toast(backendError(e), "error"),
   });
+  // Every reachable collective of the current filter (not just the loaded
+  // page), minus those already in Outreach.
+  const promoteAll = useMutation({
+    mutationFn: async () => {
+      const all = await viListPromoters(filter, sort, 100_000, 0);
+      const ids = all.filter((p) => !p.crm_contact_id && (!!p.best_email || !!p.instagram)).map((p) => p.id);
+      return ids.length ? viPromotePromoters(ids) : null;
+    },
+    onSuccess: (s) => {
+      if (!s) return toast(t("scouting.promote_all_none"), "ok");
+      setSelected(new Set());
+      refresh();
+      toast(promoteSummaryText(t, s), "ok");
+    },
+    onError: (e) => toast(backendError(e), "error"),
+  });
   const enrich = useMutation({
     mutationFn: () => viStartPromoterEnrich(selected.size ? { ids: [...selected] } : {}),
     onSuccess: () => toast(t("promoters.enrich_started"), "ok"),
@@ -168,6 +184,15 @@ export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean 
         <button className="btn-outline ml-auto" onClick={() => recompute.mutate()} disabled={recompute.isPending}>
           <RefreshCw size={15} className={recompute.isPending ? "animate-spin" : ""} />
           {t("fit.recompute")}
+        </button>
+        <button
+          className="btn-outline"
+          onClick={() => promoteAll.mutate()}
+          disabled={promoteAll.isPending || !total}
+          title={t("scouting.promote_all_hint")}
+        >
+          <UserPlus size={15} />
+          {t("scouting.promote_all")}
         </button>
         <InstagramSearchButton ids={[...selected]} />
         <button
