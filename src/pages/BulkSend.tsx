@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -87,7 +88,13 @@ export function BulkSend() {
   const { data: templates = [] } = useQuery({ queryKey: ["templates"], queryFn: listTemplates });
 
   // Audience filters
-  const [campaignId, setCampaignId] = useState<number | "">("");
+  // `?campaign=` (a campaign card's "Préparer l'envoi") preselects it.
+  const [params] = useSearchParams();
+  const paramCampaign = Number(params.get("campaign")) || "";
+  const [campaignId, setCampaignId] = useState<number | "">(paramCampaign);
+  useEffect(() => {
+    if (paramCampaign !== "") setCampaignId(paramCampaign);
+  }, [paramCampaign]);
   const [category, setCategory] = useState("all");
   const [status, setStatus] = useState("all");
   const [priority, setPriority] = useState("all");
@@ -114,6 +121,14 @@ export function BulkSend() {
   useEffect(() => {
     if (campaignId === "") setSource("filters");
   }, [campaignId]);
+  // Opened from a campaign that already has planned recipients: start on them.
+  const autoPlanned = useRef(false);
+  useEffect(() => {
+    if (!autoPlanned.current && paramCampaign !== "" && campaignId === paramCampaign && planned.length > 0) {
+      autoPlanned.current = true;
+      setSource("planned");
+    }
+  }, [paramCampaign, campaignId, planned.length]);
 
   // Suppressed addresses are never mailed (the backend skips them too).
   const { data: suppressions = [] } = useQuery({ queryKey: ["suppressions"], queryFn: listSuppressions });

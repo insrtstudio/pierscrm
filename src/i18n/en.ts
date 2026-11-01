@@ -1035,6 +1035,7 @@ export const en = {
     aud_grouped_hint: "Not mailed directly: their organisation got the email through another contact",
     aud_unsubscribed: "Unsubscribed",
     audience_send_hint: "Bulk send, source \"planned recipients\", to mail them.",
+    prepare_send: "Prepare the send",
     tab: "Campaigns",
     title: "Campaigns",
     new: "New campaign",

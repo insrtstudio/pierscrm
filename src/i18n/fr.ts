@@ -1035,6 +1035,7 @@ export const fr = {
     aud_grouped_hint: "Pas écrit directement : son organisation a reçu l'email par un autre contact",
     aud_unsubscribed: "Désinscrit",
     audience_send_hint: "Envoi groupé, source « destinataires prévus », pour leur écrire.",
+    prepare_send: "Préparer l'envoi",
     tab: "Campagnes",
     title: "Campagnes",
     new: "Nouvelle campagne",

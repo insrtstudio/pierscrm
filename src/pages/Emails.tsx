@@ -518,9 +518,10 @@ function CampaignsTab() {
             return (
               <div
                 key={c.id}
-                className={clsx("card group overflow-hidden p-5", c.kind === "residency" && "cursor-pointer hover:border-fg-subtle")}
-                // A residency campaign lives on its own page.
-                onClick={c.kind === "residency" ? () => navigate(`/campaigns/${c.id}`) : undefined}
+                className="card group cursor-pointer overflow-hidden p-5 hover:border-fg-subtle"
+                // A residency campaign lives on its own page; a standard one is
+                // worked from the bulk send, preselected on it.
+                onClick={() => navigate(c.kind === "residency" ? `/campaigns/${c.id}` : bulkUrl(c.id!))}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
@@ -578,6 +579,12 @@ function CampaignsTab() {
                     <Users size={14} />
                     {t("campaigns.audience")} · {c.audience_count ?? 0}
                   </button>
+                  {c.kind !== "residency" && (
+                    <button className="btn-outline h-8 px-3" onClick={() => navigate(bulkUrl(c.id!))}>
+                      <Send size={13} />
+                      {t("campaigns.prepare_send")}
+                    </button>
+                  )}
                   <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                   <button className="btn-ghost px-2 py-1.5" onClick={() => setEditing(c)}>
                     <Pencil size={14} />
@@ -604,15 +611,21 @@ function CampaignsTab() {
           campaign={editing}
           artists={artists}
           onClose={() => setEditing(null)}
-          onSaved={() => {
+          onSaved={(id) => {
+            const created = !editing.id;
             setEditing(null);
             qc.invalidateQueries({ queryKey: ["campaigns"] });
+            // A new campaign is empty: go straight to choosing its recipients
+            // and writing its email.
+            if (created && id) navigate(bulkUrl(id));
           }}
         />
       )}
     </div>
   );
 }
+
+const bulkUrl = (id: number) => `/campaigns?tab=bulk&campaign=${id}`;
 
 function Stat({ label, value, accent }: { label: string; value: any; accent?: boolean }) {
   return (
@@ -634,7 +647,7 @@ function CampaignModal({
   campaign: Campaign;
   artists: { id?: number; name: string }[];
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (id: number) => void;
 }) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -645,9 +658,9 @@ function CampaignModal({
       toast(t("campaigns.name") + " " + t("common.required"), "error");
       return;
     }
-    await saveCampaign(form);
+    const id = await saveCampaign(form);
     toast(t("common.save"), "ok");
-    onSaved();
+    onSaved(form.id ?? id);
   });
   return (
     <Modal
