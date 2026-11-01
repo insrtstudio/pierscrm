@@ -839,6 +839,21 @@ pub fn target_info(conn: &Connection, contact_id: i64, cfg: &Config) -> Option<T
                 |r| r.get(0),
             )
             .ok();
+    } else if let Ok((ville, pays)) = conn.query_row(
+        // A collective (vi_promoter_orgs) has no room: its own city and
+        // country, else a Berlin crew would get the zone's French email.
+        "SELECT ville, pays FROM vi_promoter_orgs WHERE crm_contact_id = ?1 LIMIT 1",
+        params![contact_id],
+        |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+    ) {
+        if info.city.trim().is_empty() {
+            if let Some(v) = ville.filter(|v| !v.trim().is_empty()) {
+                info.city = v;
+            }
+        }
+        if let Some(p) = pays.filter(|p| !p.trim().is_empty()) {
+            country = iso_country(&p);
+        }
     }
     info.lang = language_for(&country, Some(&info.city), &cfg.lang).to_string();
     info.country = country;
@@ -998,6 +1013,26 @@ mod tests {
         let r = build(&c, 1, &cfg, &opts).unwrap();
         assert!(!r.candidates.iter().any(|x| x.key == "p:7"));
         assert_eq!(r.excluded_in_audience, 1);
+    }
+
+    #[test]
+    fn a_collective_is_written_to_in_its_own_country() {
+        let c = testdb::conn();
+        c.execute_batch(
+            "INSERT INTO campaigns (id, name, kind) VALUES (1, 'R', 'residency');
+             INSERT INTO vi_promoter_orgs (id, cle, nom, nom_normalise, ville, ville_norm, pays, nb_events_total)
+             VALUES (7, 'ra:7', 'Berlin Crew', 'berlincrew', 'Berlin', 'berlin', 'DE', 8);
+             INSERT INTO vi_promoter_contacts (promoter_id, valeur, score) VALUES (7, 'booking@crew.de', 100);",
+        )
+        .unwrap();
+        let picks = vec![Pick { venue_id: None, contact_id: None, email: "booking@crew.de".into(), first_name: None, promoter_id: Some(7) }];
+        add_targets(&c, 1, &picks).unwrap();
+        let cid: i64 = c.query_row("SELECT crm_contact_id FROM vi_promoter_orgs WHERE id = 7", [], |r| r.get(0)).unwrap();
+        // A zone of several countries defaults to FR: the collective's own wins.
+        let mut cfg = Config::default();
+        cfg.zone.countries = vec!["FR".into(), "DE".into()];
+        let info = target_info(&c, cid, &cfg).unwrap();
+        assert_eq!((info.country.as_str(), info.lang.as_str(), info.city.as_str()), ("DE", "en", "Berlin"));
     }
 
     /// On a copy of the real database (PIERSCRM_DB_COPY): migrations, then the

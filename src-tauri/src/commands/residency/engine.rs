@@ -270,11 +270,14 @@ pub fn campaign_sent_today(conn: &Connection, campaign_id: i64) -> i64 {
     .unwrap_or(0)
 }
 
-/// Time zone of a contact: the country of its Discovery venue, else the zone's.
+/// Time zone of a contact: the country of its Discovery venue (or collective),
+/// else the zone's.
 pub fn tz_of(conn: &Connection, contact_id: i64, cfg: &Config) -> Tz {
     let pays: Option<String> = conn
         .query_row(
-            "SELECT pays FROM vi_venues WHERE crm_contact_id = ?1 AND pays IS NOT NULL LIMIT 1",
+            "SELECT pays FROM vi_venues WHERE crm_contact_id = ?1 AND pays IS NOT NULL
+             UNION ALL
+             SELECT pays FROM vi_promoter_orgs WHERE crm_contact_id = ?1 AND pays IS NOT NULL LIMIT 1",
             params![contact_id],
             |r| r.get(0),
         )
