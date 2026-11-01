@@ -49,6 +49,14 @@
     --ok: 31 130 86;
     --warn: 176 104 20;
     --danger: 204 46 52;
+    /* ---- GLASS (macOS Tahoe) ---- */
+    --glass-tint: 255 255 255;
+    --glass-tint-a: 0.38;       /* wash over the native vibrancy */
+    --glass-edge: 11 11 11;
+    --glass-edge-a: 0.08;       /* hairline around the floating panels */
+    --glass-hi-a: 0.7;          /* inner top highlight */
+    --glass-float: 247 246 243; /* modals, popovers: elevated paper */
+    --glass-float-a: 0.78;
   }
 
   .dark {
@@ -73,6 +81,13 @@
     --ok: 63 178 127;
     --warn: 242 184 128;        /* amber */
     --danger: 229 72 77;
+    --glass-tint: 255 255 255;
+    --glass-tint-a: 0.035;
+    --glass-edge: 255 255 255;
+    --glass-edge-a: 0.1;
+    --glass-hi-a: 0.07;
+    --glass-float: 26 26 25;
+    --glass-float-a: 0.72;
   }
 
   * {
@@ -83,6 +98,13 @@
   body,
   #root {
     height: 100%;
+  }
+
+  /* Native window: the page is see-through so the macOS vibrancy shows in the
+     sidebar; every other area paints its own paper/ink (see .app-shell). */
+  html.native-glass,
+  html.native-glass body {
+    background: transparent;
   }
 
   body {
@@ -160,17 +182,60 @@
       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent;
   }
 
-  /* ---- Surfaces ---- */
+  /* ---- Surfaces (Tahoe grouped boxes: generous radius, hairline) ---- */
   .card {
-    @apply rounded-md border border-border bg-surface;
+    @apply rounded-xl border border-border bg-surface;
   }
   .panel {
-    @apply rounded-md border border-border bg-surface-2;
+    @apply rounded-xl border border-border bg-surface-2;
+  }
+
+  /* ---- Glass (macOS Tahoe) ----
+     .app-shell: the window. Opaque paper/ink in a browser, transparent in the
+     native window so the vibrancy can reach the sidebar.
+     .glass-sidebar: the floating sidebar container. Native vibrancy behind a
+     light wash, hairline edge and top highlight. Its last shadow is a wide
+     spread in the page colour: it paints the gutter around the panel, so only
+     the panel itself is see-through. */
+  .app-shell {
+    background: rgb(var(--bg));
+  }
+  .native-glass .app-shell {
+    background: transparent;
+  }
+  .glass-sidebar {
+    border-radius: 18px;
+    background: rgb(var(--surface));
+    box-shadow:
+      inset 0 0 0 0.5px rgb(var(--glass-edge) / calc(var(--glass-edge-a) * 1.4)),
+      inset 0 1px 0 rgb(255 255 255 / var(--glass-hi-a)),
+      0 1px 2px rgb(0 0 0 / 0.06),
+      0 8px 24px rgb(0 0 0 / 0.07),
+      0 0 0 80px rgb(var(--bg));
+  }
+  .native-glass .glass-sidebar {
+    background: rgb(var(--glass-tint) / var(--glass-tint-a));
+  }
+  /* Floating layers (modals, toasts, popovers): CSS glass over the content. */
+  .glass {
+    background: rgb(var(--glass-float) / var(--glass-float-a));
+    -webkit-backdrop-filter: blur(28px) saturate(1.7);
+    backdrop-filter: blur(28px) saturate(1.7);
+    box-shadow:
+      inset 0 0 0 0.5px rgb(var(--glass-edge) / calc(var(--glass-edge-a) * 1.4)),
+      inset 0 1px 0 rgb(255 255 255 / var(--glass-hi-a)),
+      0 18px 50px rgb(0 0 0 / 0.22);
+  }
+  /* Toolbar strip over scrolling content */
+  .glass-bar {
+    background: rgb(var(--bg) / 0.72);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
   }
 
   /* ---- Inputs ---- */
   .input {
-    @apply w-full rounded border border-border-strong bg-surface px-3 py-2 text-sm text-fg font-sans
+    @apply w-full rounded-lg border border-border-strong bg-surface px-3 py-2 text-sm text-fg font-sans
       placeholder:text-fg-faint outline-none transition-colors
       focus:border-fg hover:border-fg-subtle;
     min-height: 36px;
@@ -234,7 +299,7 @@
     @apply w-full border-collapse text-sm;
   }
   .tbl thead th {
-    @apply sticky top-0 z-10 border-b border-border bg-bg px-4 py-2.5 text-left font-mono text-[10.5px] font-normal uppercase text-fg-subtle;
+    @apply sticky top-0 z-10 border-b border-border glass-bar px-4 py-2.5 text-left font-mono text-[10.5px] font-normal uppercase text-fg-subtle;
     letter-spacing: 0.14em;
   }
   .tbl tbody td {

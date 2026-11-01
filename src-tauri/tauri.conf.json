@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "PiersCRM",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "identifier": "fr.insrt.pierscrm",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -19,9 +19,16 @@
         "minHeight": 700,
         "visible": false,
         "titleBarStyle": "Overlay",
-        "hiddenTitle": true
+        "hiddenTitle": true,
+        "transparent": true,
+        "trafficLightPosition": { "x": 20, "y": 20 },
+        "windowEffects": {
+          "effects": ["sidebar"],
+          "state": "followsWindowActiveState"
+        }
       }
     ],
+    "macOSPrivateApi": true,
     "security": {
       "csp": null
     }

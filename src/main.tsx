@@ -8,11 +8,16 @@ import "./i18n";
 import "./styles.css";
 import { App } from "./App";
 import { ToastProvider } from "./components/ui";
+import { syncNativeTheme } from "./lib/theme";
 
 // Apply saved theme before first paint. Paper is the default, like the
 // insrt.studio back office.
 const theme = localStorage.getItem("theme") || "light";
 document.documentElement.classList.toggle("dark", theme === "dark");
+syncNativeTheme(theme === "dark" ? "dark" : "light");
+// Native window: the page is transparent so the vibrancy shows through the
+// sidebar glass (see .glass-sidebar). A plain browser keeps the opaque paper.
+if ("__TAURI_INTERNALS__" in window) document.documentElement.classList.add("native-glass");
 
 const queryClient = new QueryClient({
   // A mutation without its own onError reports through the global toast instead

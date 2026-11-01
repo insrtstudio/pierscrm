@@ -154,8 +154,9 @@ function useMenuActions() {
   }, [navigate]);
 }
 
-/// Top bar: the macOS drag region (traffic lights sit on its left) carrying a
-/// discreet mono marquee of the next events, like the site's marquee.
+/// Toolbar of the content column (macOS drag region) carrying a discreet mono
+/// marquee of the next events, like the site's marquee. The traffic lights
+/// live in the sidebar container, as on macOS Tahoe.
 function TopBar() {
   const { t } = useTranslation();
   const day = today();
@@ -185,7 +186,7 @@ function TopBar() {
   return (
     <div
       data-tauri-drag-region
-      className="relative flex h-9 shrink-0 items-center border-b border-border bg-bg pl-[88px]"
+      className="relative flex h-11 shrink-0 items-center border-b border-border bg-bg pl-page"
     >
       {/* The edge fade is for the scrolling ticker only: on the static empty
           message it ate the first letters. */}
@@ -231,25 +232,30 @@ export function Layout() {
 
   const item = (isActive: boolean) =>
     clsx(
-      "relative flex items-center rounded py-1.5 text-[13.5px] transition-colors outline-none",
+      "relative flex items-center rounded-lg py-1.5 text-[13.5px] transition-colors outline-none",
       "focus-visible:ring-2 focus-visible:ring-accent",
       collapsed ? "justify-center px-0 py-2" : "gap-2.5 px-3",
-      isActive ? "bg-surface-2 font-medium text-fg" : "text-fg-subtle hover:bg-surface-2 hover:text-fg"
+      // Tahoe selection: a soft ink wash on the glass, not an opaque block.
+      isActive ? "bg-fg/[0.08] font-medium text-fg" : "text-fg-subtle hover:bg-fg/[0.05] hover:text-fg"
     );
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg text-fg">
-      <TopBar />
-      <div className="flex min-h-0 flex-1">
+    <div className="app-shell flex h-screen w-screen overflow-hidden text-fg">
+      {/* Tahoe sidebar: a floating glass container inset from the window edges.
+          The wrapper clips the panel's page-coloured spread shadow, which
+          paints this gutter (the window itself is transparent). */}
+      <div className="flex shrink-0 overflow-hidden p-2">
         <aside
           className={clsx(
-            "flex shrink-0 flex-col border-r border-border bg-bg transition-[width] duration-200",
-            collapsed ? "w-[60px]" : "w-[220px]"
+            "glass-sidebar flex flex-col transition-[width] duration-200",
+            collapsed ? "w-[78px]" : "w-[232px]"
           )}
         >
+          {/* Traffic lights sit here (trafficLightPosition in tauri.conf.json). */}
+          <div data-tauri-drag-region className="h-11 shrink-0" />
           <NavLink
             to="/"
-            className={clsx("block", collapsed ? "px-2.5 pb-5 pt-4" : "px-6 pb-6 pt-5")}
+            className={clsx("block", collapsed ? "px-2.5 pb-5 pt-2" : "px-5 pb-6 pt-2")}
             aria-label="Insrt"
           >
             <img
@@ -298,7 +304,7 @@ export function Layout() {
 
           <div
             className={clsx(
-              "flex border-t border-border p-3",
+              "flex border-t border-fg/[0.08] p-3",
               collapsed ? "flex-col items-center gap-1 px-2" : "items-center gap-1"
             )}
           >
@@ -332,15 +338,16 @@ export function Layout() {
             )}
           </div>
         </aside>
-
-        <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-bg">
-          <UpdateBanner />
-          <DeliverabilityBanner />
-          <div className="flex-1 overflow-y-auto">
-            <Outlet />
-          </div>
-        </main>
       </div>
+
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-bg">
+        <TopBar />
+        <UpdateBanner />
+        <DeliverabilityBanner />
+        <div className="flex-1 overflow-y-auto">
+          <Outlet />
+        </div>
+      </main>
     </div>
   );
 }

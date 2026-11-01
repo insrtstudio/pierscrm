@@ -437,7 +437,7 @@ function EventHoverCard({
 
   return createPortal(
     <div
-      className="pointer-events-none fixed z-[70] animate-fade-in border border-border bg-elevated p-4 shadow-pop"
+      className="pointer-events-none fixed z-[70] animate-fade-in glass rounded-xl p-4"
       style={{ top, left, width: W, borderTopColor: color }}
     >
       <div className="flex items-start justify-between gap-2">

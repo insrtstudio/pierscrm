@@ -78,7 +78,7 @@ export function Modal({
   if (!open) return null;
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/45 p-6"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-6 backdrop-blur-[2px]"
       onClick={onClose}
     >
       <div
@@ -87,7 +87,7 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={title !== undefined ? titleId : undefined}
         tabIndex={-1}
-        className={clsx("card w-full my-8 animate-fade-in overflow-hidden bg-bg shadow-pop outline-none", width)}
+        className={clsx("glass w-full my-8 animate-fade-in overflow-hidden rounded-2xl outline-none", width)}
         onClick={(e) => e.stopPropagation()}
       >
         {title !== undefined && (
@@ -191,7 +191,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               key={t.id}
               role={t.kind === "error" ? "alert" : "status"}
               className={clsx(
-                "flex items-center gap-2.5 rounded-md border px-4 py-3 text-sm shadow-pop animate-fade-in bg-surface",
+                "glass flex items-center gap-2.5 rounded-xl border px-4 py-3 text-sm animate-fade-in",
                 t.kind === "ok"
                   ? "border-ok/30 text-fg"
                   : "border-danger/30 text-fg"
