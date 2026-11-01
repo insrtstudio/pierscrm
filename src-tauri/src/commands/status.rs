@@ -68,6 +68,34 @@ pub fn on_email_sent(conn: &Connection, contact_id: Option<i64>, addr: &str) {
     let _ = conn.execute(&sql, params![contact_id, addr]);
 }
 
+/// A DM went out by hand (social.rs, "DM envoyé"): the same move as a sent
+/// email, for that contact only. Its touch is already in social_touches, so a
+/// second touch of any kind (email or DM) makes "contacted" a "followed_up".
+/// The follow-up comes due in FOLLOWUP_DAYS, which puts the contact in the
+/// follow-up queue (contacts::followups) when nothing came back.
+pub fn on_dm_sent(conn: &Connection, contact_id: i64) {
+    let sql = format!(
+        "UPDATE contacts AS c
+         SET status = CASE
+                 WHEN c.status IN ('to_contact','to_evaluate','low_priority') THEN 'contacted'
+                 WHEN c.status = 'no_answer' THEN 'followed_up'
+                 WHEN c.status = 'contacted' AND (
+                     (SELECT COUNT(*) FROM emails m WHERE m.status = 'sent' AND {same})
+                     + (SELECT COUNT(*) FROM social_touches s WHERE s.contact_id = c.id)
+                 ) >= 2 THEN 'followed_up'
+                 ELSE c.status END,
+             first_contact = COALESCE(NULLIF(trim(c.first_contact), ''), date('now')),
+             follow_up = CASE WHEN c.status IN ('confirmed','declined') THEN c.follow_up
+                              ELSE date('now', '+{days} days') END,
+             followup_dismissed = 0,
+             updated_at = datetime('now')
+         WHERE c.id = ?1",
+        same = SAME_RECIPIENT,
+        days = FOLLOWUP_DAYS
+    );
+    let _ = conn.execute(&sql, params![contact_id]);
+}
+
 /// A reply came in: the conversation is open, follow-ups stop. Contacts already
 /// further along (confirmed, declined) keep their status.
 pub fn on_reply(conn: &Connection, contact_id: Option<i64>, addr: &str) {

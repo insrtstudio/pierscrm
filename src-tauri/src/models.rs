@@ -35,6 +35,9 @@ pub struct Contact {
     /// Read-only, joined from `organisations` by the list/get queries.
     #[serde(default)]
     pub organisation_name: Option<String>,
+    /// Instagram handle without "@" (social.rs), for the assisted DM.
+    #[serde(default)]
+    pub instagram: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
@@ -77,6 +80,7 @@ impl Contact {
             // Tolerant: queries that do not select these columns still map.
             organisation_id: row.get("organisation_id").ok().flatten(),
             organisation_name: row.get("organisation_name").ok().flatten(),
+            instagram: row.get("instagram").ok().flatten(),
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
         })

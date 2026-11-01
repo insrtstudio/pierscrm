@@ -342,20 +342,9 @@ pub(crate) fn is_foreign_venue_site(url: &str) -> bool {
 }
 
 /// Instagram handle from a profile URL ("https://www.instagram.com/b21_brussels?igsh=..").
+/// Posts, reels, share links and generic accounts are refused (social.rs).
 pub(crate) fn instagram_handle(url: &str) -> Option<String> {
-    let low = url.trim().to_lowercase();
-    let i = low.find("instagram.com/")?;
-    let rest = &low[i + "instagram.com/".len()..];
-    let h: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.')
-        .collect();
-    let h = h.trim_matches('.').to_string();
-    if h.is_empty() || ["p", "reel", "explore", "stories", "accounts"].contains(&h.as_str()) {
-        None
-    } else {
-        Some(h)
-    }
+    super::social::handle_from_url(url)
 }
 
 /// Minimal SQL LIKE matcher ('%' any run, '_' any char) so the Rust write path
@@ -544,7 +533,14 @@ pub(crate) fn domain_core(domain: &str) -> String {
 /// Vault Paris, paris-society.com for La Pause Parisienne, solidnames.fr for
 /// La Casbah, gmail.com for anyone.
 pub(crate) fn domain_matches_name(domain: &str, name: &str, city: Option<&str>) -> bool {
-    let core = domain_core(domain);
+    core_matches_name(&domain_core(domain), name, city)
+}
+
+/// The rule of domain_matches_name on an already reduced label: a domain's
+/// registrable label, or an Instagram handle folded the same way
+/// (social::handle_matches_name).
+pub(crate) fn core_matches_name(core: &str, name: &str, city: Option<&str>) -> bool {
+    let core = core.to_string();
     if core.len() < 3 {
         return false;
     }
@@ -638,6 +634,14 @@ pub(crate) async fn resolve_website_via_search(
     city: Option<&str>,
     skip: &[&str],
 ) -> Option<String> {
+    let d = serper_search(client, api_key, query).await?;
+    pick_site_from_search(&d, name, city, skip)
+}
+
+/// One Serper (Google) search, the raw response. Callers that want both the
+/// site and an Instagram profile out of one paid query read it twice
+/// (pick_site_from_search, social::instagram_from_search).
+pub(crate) async fn serper_search(client: &reqwest::Client, api_key: &str, query: &str) -> Option<serde_json::Value> {
     let resp = client
         .post("https://google.serper.dev/search")
         .header("X-API-KEY", api_key)
@@ -648,8 +652,7 @@ pub(crate) async fn resolve_website_via_search(
     if !resp.status().is_success() {
         return None;
     }
-    let d: serde_json::Value = resp.json().await.ok()?;
-    pick_site_from_search(&d, name, city, skip)
+    resp.json().await.ok()
 }
 
 /// Deeper path list for the "retry the venues without an email" pass: the
@@ -759,6 +762,8 @@ fn store_venue_emails(
 struct CrawlOutcome {
     contact_page: Option<String>,
     kept: i64,
+    /// Instagram profiles linked from the crawled pages, with how many times.
+    handles: Vec<(String, usize)>,
 }
 
 /// Crawl a site (homepage + `paths` + contact-ish links found on the homepage)
@@ -806,7 +811,7 @@ async fn crawl_site(
         }
     }
 
-    let mut out = CrawlOutcome { contact_page: None, kept: 0 };
+    let mut out = CrawlOutcome { contact_page: None, kept: 0, handles: Vec::new() };
     let mut best_score = 0i64;
     let mut fetches = 0usize;
     for url in &urls {
@@ -827,6 +832,9 @@ async fn crawl_site(
             }
         };
         let (emails, phone) = extract_contacts(&body);
+        if own_site {
+            super::social::tally_handles(&mut out.handles, &body);
+        }
         if url != &base && !emails.is_empty() && out.contact_page.is_none() {
             out.contact_page = Some(url.clone());
         }
@@ -972,10 +980,12 @@ pub async fn process_enrich_task(
                     nom,
                     ville.clone().unwrap_or_default()
                 );
-                if let Some(found) =
-                    resolve_website_via_search(&crawl_client(), &key, &query, &nom, ville.as_deref(), THIRD_PARTY_HOSTS)
-                        .await
-                {
+                let d = serper_search(&crawl_client(), &key, &query).await;
+                // The same results often carry the venue's Instagram profile.
+                if insta.is_none() {
+                    insta = d.as_ref().and_then(|d| super::social::instagram_from_search(d, &nom, ville.as_deref()));
+                }
+                if let Some(found) = d.as_ref().and_then(|d| pick_site_from_search(d, &nom, ville.as_deref(), THIRD_PARTY_HOSTS)) {
                     if let Ok(conn) = pool.get() {
                         let _ = conn.execute(
                             "UPDATE vi_venues SET site_web = CASE WHEN ?3 THEN ?2 ELSE COALESCE(site_web, ?2) END,
@@ -1002,6 +1012,17 @@ pub async fn process_enrich_task(
         let o = crawl_site(&client, pool, venue_id, raw, paths, budget, true, rule, None, 0).await;
         contact_page = o.contact_page;
         kept += o.kept;
+        // The profile the venue's own pages link to (a lone footer link is
+        // trusted, several need one matching the name).
+        if insta.is_none() {
+            insta = super::social::pick_instagram(&o.handles, &nom, ville.as_deref(), true);
+        }
+    }
+    if let (Some(h), Ok(conn)) = (&insta, pool.get()) {
+        let _ = conn.execute(
+            "UPDATE vi_venues SET instagram = ?2 WHERE id=?1 AND (instagram IS NULL OR trim(instagram) = '')",
+            params![venue_id, h],
+        );
     }
 
     // 3. Retry only: the venue's Instagram bio, then its main RA promoter's site.

@@ -54,6 +54,7 @@ import { InsrtActivityPanel } from "../components/InsrtActivity";
 import { ContactOffersPanel } from "../components/Offers";
 import { RoleBanner } from "../components/RoleBanner";
 import { viScoutingWaiting } from "../lib/targets";
+import { DmPanel } from "../components/InstagramDm";
 
 const PAGE_SIZE = 200;
 
@@ -911,6 +912,9 @@ function ContactModal({
         <Field label={t("contacts.website")}>
           <input {...inp("website")} />
         </Field>
+        <Field label={t("social.field")}>
+          <input {...inp("instagram")} placeholder={t("social.set_handle")} />
+        </Field>
         <Field label={t("contacts.first_contact")}>
           <input {...dateInp("first_contact")} />
         </Field>
@@ -934,6 +938,26 @@ function ContactModal({
         <OrganisationSiblings orgId={form.organisation_id} selfId={contact.id} />
       )}
       {!isNew && <ContactOffersPanel contactId={contact.id!} />}
+      {!isNew && (
+        <DmPanel
+          className="mt-5 border-t border-border pt-4"
+          target={{ contactId: contact.id! }}
+          handle={form.instagram || contact.instagram}
+          onRecorded={async () => {
+            // The DM moved status / dates server-side: keep the form in step,
+            // or saving the editor afterwards would put them back.
+            const c = await getContact(contact.id!);
+            if (c)
+              setForm((f) => ({
+                ...f,
+                status: c.status,
+                first_contact: c.first_contact,
+                follow_up: c.follow_up,
+                instagram: f.instagram || c.instagram,
+              }));
+          }}
+        />
+      )}
       {!isNew && <ContactHistory contactId={contact.id!} />}
       {!isNew && <InsrtActivityPanel contactId={contact.id!} />}
       <div className="mt-5 flex justify-end gap-2">

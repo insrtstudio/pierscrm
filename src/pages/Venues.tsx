@@ -82,6 +82,7 @@ import { AddToCampaign } from "../components/BulkActions";
 import { PromotersTab, promoteSummaryText } from "../components/Promoters";
 import { viPromoteVenues } from "../lib/targets";
 import { FitScore, TimingBadge } from "../components/FitTiming";
+import { DmPanel, IgHandle } from "../components/InstagramDm";
 
 type Tab = "venues" | "promoters" | "runs" | "areas" | "artists";
 
@@ -840,6 +841,7 @@ function VenuesTab({ initialEmail = false }: { initialEmail?: boolean }) {
                       {!v.enriched && (
                         <span className="badge bg-muted text-fg-faint">{t("venues.not_enriched")}</span>
                       )}
+                      <IgHandle handle={v.instagram} compact />
                     </div>
                   </td>
                   <td className="text-right font-bold tabular">{v.nb_evidence}</td>
@@ -1023,6 +1025,8 @@ function VenueFicheModal({ id, onClose }: { id: number; onClose: () => void }) {
               />
             )}
           </div>
+
+          <DmPanel target={{ venueId: fiche.id }} handle={fiche.instagram} />
 
           {/* Emails found */}
           <div>

@@ -83,6 +83,8 @@ export interface Contact {
   organisation_id?: number | null;
   /// Read-only, joined by the backend.
   organisation_name?: string | null;
+  /// Instagram handle without "@" (assisted DM, social.rs).
+  instagram?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -396,6 +398,8 @@ export interface ViVenueRow {
   fit_detail?: string | null;
   /** "Bon moment pour écrire" (timing.rs). */
   timing?: import("./targets").Timing;
+  /** Instagram handle without "@" (social.rs). */
+  instagram?: string | null;
 }
 
 export interface CountryCount {
