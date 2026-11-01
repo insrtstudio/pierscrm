@@ -63,6 +63,8 @@ export interface PromoterRow {
   fit_score?: number | null;
   fit_detail?: string | null;
   timing: Timing;
+  /** Instagram handle without "@" (social.rs). */
+  instagram?: string | null;
 }
 
 export interface PromoterFilter {

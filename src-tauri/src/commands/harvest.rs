@@ -377,6 +377,14 @@ fn describe_task(pool: &DbPool, task_type: &str, payload: &str) -> ProgressMsg {
         let name = nom.unwrap_or_else(|| format!("#{}", id));
         return ProgressMsg::new("radar_enrich", json!({ "name": name }), format!("Email search: {}", name));
     }
+    if task_type == "instagram_promoter" {
+        let id = v["promoter_id"].as_i64().unwrap_or(0);
+        let nom: Option<String> = pool.get().ok().and_then(|c| {
+            c.query_row("SELECT nom FROM vi_promoter_orgs WHERE id=?1", params![id], |r| r.get(0)).ok()
+        });
+        let name = nom.unwrap_or_else(|| format!("#{}", id));
+        return ProgressMsg::new("instagram", json!({ "name": name }), format!("Instagram search: {}", name));
+    }
     if task_type == "enrich_promoter" {
         let id = v["promoter_id"].as_i64().unwrap_or(0);
         let nom: Option<String> = pool.get().ok().and_then(|c| {
@@ -457,6 +465,7 @@ async fn drain(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i64, po
             "radar_harvest" => crate::commands::radar::process_harvest_task(&pool, &payload).await,
             "radar_enrich" => crate::commands::radar::process_enrich_task(&pool, &payload).await,
             "enrich_promoter" => crate::commands::promoters::process_enrich_task(&client, &pool, &payload).await,
+            "instagram_promoter" => crate::commands::social::process_instagram_task(&pool, &payload).await,
             _ => process_harvest_task(&client, &pool, &payload).await,
         };
         match result {
@@ -1012,6 +1021,8 @@ pub struct VenueRow {
     pub fit_detail: Option<String>,
     /// "Bon moment pour écrire" (timing.rs), computed for today.
     pub timing: crate::commands::timing::Timing,
+    /// Instagram handle (social.rs), shown as @handle and used for the DM.
+    pub instagram: Option<String>,
 }
 
 /// Normalised, de-duplicated audience cities (same folding as vi_venues.ville_norm).
@@ -1246,7 +1257,8 @@ fn list_venues(
                 v.crm_contact_id,
                 {contacted} AS is_contacted,
                 {played} AS has_played,
-                v.is_target, v.fit_score, v.fit_detail, v.lead_weeks, v.month_profile
+                v.is_target, v.fit_score, v.fit_detail, v.lead_weeks, v.month_profile,
+                NULLIF(trim(v.instagram), '')
          FROM (SELECT v.*, {target_expr} AS is_target FROM vi_venues v WHERE 1=1{filters}
                ORDER BY {order}{fit_order}v.score_qualif DESC, v.nb_events_periode DESC, v.nom COLLATE NOCASE
                LIMIT {limit} OFFSET {offset}) v
@@ -1292,6 +1304,7 @@ fn list_venues(
                 fit_score: r.get(21)?,
                 fit_detail: r.get(22)?,
                 timing: crate::commands::timing::window_for_row(today, lead, profile.as_deref()),
+                instagram: r.get(25)?,
             })
         })
         .map_err(|e| e.to_string())?;

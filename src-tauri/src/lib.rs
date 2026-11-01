@@ -304,6 +304,12 @@ pub fn run() {
             commands::promoters::vi_promoter_detail,
             commands::promoters::vi_promote_promoter,
             commands::promoters::vi_start_promoter_enrich,
+            // Instagram: handles, assisted DM (social.rs)
+            commands::social::vi_start_promoter_instagram,
+            commands::social::social_dm_draft,
+            commands::social::social_record_dm,
+            commands::social::list_social_touches,
+            commands::social::social_set_instagram,
             commands::fit::fit_recompute,
             commands::fit::fit_list_comparables,
             commands::fit::fit_add_comparable,

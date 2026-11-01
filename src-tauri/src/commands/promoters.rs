@@ -295,6 +295,8 @@ pub struct PromoterRow {
     pub fit_score: Option<i64>,
     pub fit_detail: Option<String>,
     pub timing: timing::Timing,
+    /// Instagram handle (social.rs), shown as @handle and used for the DM.
+    pub instagram: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -363,7 +365,7 @@ const ROW_SELECT: &str = "SELECT o.id, o.nom, o.ville, o.pays, o.ra_url, o.site_
           ORDER BY c.score DESC, c.id LIMIT 1),
         (SELECT COUNT(*) FROM vi_promoter_contacts c WHERE c.promoter_id = o.id AND c.type = 'email'),
         o.enriched_at IS NOT NULL, o.crm_contact_id, o.house_promoter, o.fit_score, o.fit_detail,
-        o.lead_weeks, o.month_profile
+        o.lead_weeks, o.month_profile, NULLIF(trim(o.instagram), '')
  FROM vi_promoter_orgs o";
 
 /// Rows of ROW_SELECT + `tail` (WHERE / ORDER / LIMIT), with their top venues.
@@ -405,6 +407,7 @@ fn query_rows(
                 fit_score: r.get(15)?,
                 fit_detail: r.get(16)?,
                 timing: timing::window_for_row(today, lead, prof.as_deref()),
+                instagram: r.get(19)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -700,15 +703,14 @@ pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, pay
             .filter(|k| !k.trim().is_empty());
         if let Some(key) = key {
             let q = format!("{} {} collective promoter", nom, ville.clone().unwrap_or_default());
-            site = super::enrich::resolve_website_via_search(
-                &super::enrich::crawl_client(),
-                &key,
-                &q,
-                &nom,
-                ville.as_deref(),
-                super::enrich::THIRD_PARTY_HOSTS,
-            )
-            .await;
+            let d = super::enrich::serper_search(&super::enrich::crawl_client(), &key, &q).await;
+            site = d
+                .as_ref()
+                .and_then(|d| super::enrich::pick_site_from_search(d, &nom, ville.as_deref(), super::enrich::THIRD_PARTY_HOSTS));
+            // The same results often list the collective's Instagram (social.rs).
+            if insta.is_none() {
+                insta = d.as_ref().and_then(|d| super::social::instagram_from_search(d, &nom, ville.as_deref()));
+            }
             searched = site.is_some();
             tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         }
@@ -723,6 +725,7 @@ pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, pay
 
     // 3. Crawl the site (homepage, contact / legal paths, contact links).
     let client = super::enrich::crawl_client();
+    let mut handles: Vec<(String, usize)> = Vec::new();
     if let Some(raw) = &site {
         let mut base = origin_of(raw);
         let mut home = String::new();
@@ -762,6 +765,7 @@ pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, pay
                 }
             };
             let (emails, _) = extract_contacts(&body);
+            super::social::tally_handles(&mut handles, &body);
             let kept = match pool.get() {
                 Ok(conn) => store_promoter_emails(&conn, id, emails, &url, Some(&host), &nom, ville.as_deref(), method),
                 Err(_) => 0,
@@ -772,11 +776,18 @@ pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, pay
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
     }
+    // The Instagram profile its site links to (social::pick_instagram).
+    if insta.is_none() {
+        insta = super::social::pick_instagram(&handles, &nom, ville.as_deref(), true);
+    }
     if let Ok(conn) = pool.get() {
         let _ = conn.execute(
             "UPDATE vi_promoter_orgs SET enriched_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1",
             [id],
         );
+        if let Some(h) = &insta {
+            super::social::store_promoter_instagram(&conn, id, h);
+        }
     }
     Ok(())
 }

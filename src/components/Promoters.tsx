@@ -23,6 +23,7 @@ import { EmptyState } from "./Layout";
 import { Modal, useToast } from "./ui";
 import { AddToCampaign } from "./BulkActions";
 import { FitLine, FitScore, TimingBadge } from "./FitTiming";
+import { DmPanel, IgHandle, InstagramSearchButton } from "./InstagramDm";
 
 const PAGE = 100;
 
@@ -145,6 +146,7 @@ export function PromotersTab() {
           <RefreshCw size={15} className={recompute.isPending ? "animate-spin" : ""} />
           {t("fit.recompute")}
         </button>
+        <InstagramSearchButton ids={[...selected]} />
         <button
           className="btn-primary"
           onClick={() => enrich.mutate()}
@@ -251,6 +253,7 @@ export function PromotersTab() {
                       <Globe size={13} className={p.site_web ? "text-fg-subtle" : "text-fg-faint"} />
                       {!p.enriched && <span className="badge bg-muted text-fg-faint">{t("venues.not_enriched")}</span>}
                     </div>
+                    <IgHandle handle={p.instagram} />
                   </td>
                   <td>
                     <TimingBadge timing={p.timing} />
@@ -330,6 +333,7 @@ function PromoterFicheModal({ id, onClose }: { id: number; onClose: () => void }
               </button>
             )}
           </div>
+          <DmPanel target={{ promoterId: f.row.id }} handle={f.instagram} />
           <section>
             <div className="eyebrow mb-1 text-fg">{t("promoters.contacts", { count: f.contacts.length })}</div>
             {f.contacts.length === 0 ? (

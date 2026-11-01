@@ -9,7 +9,7 @@ use tauri::State;
 const LIST_COLUMNS: &str = "c.id, c.artist_id, c.category, c.priority, c.name, c.promoter, c.venue,
     c.type, c.area, c.scale, c.date, c.time, c.format, NULL AS reason, c.contact_channel, c.email,
     c.email_status, c.status, c.first_contact, c.follow_up, NULL AS notes, c.website, c.tags,
-    c.organisation_id, o.name AS organisation_name, c.created_at, c.updated_at";
+    c.organisation_id, o.name AS organisation_name, c.instagram, c.created_at, c.updated_at";
 
 /// Filters shared by `list_contacts` and `count_contacts`, so the count is
 /// exactly the size of the list.
@@ -147,14 +147,15 @@ pub fn create_contact(state: State<'_, AppState>, contact: Contact) -> Result<i6
         "INSERT INTO contacts
             (artist_id, category, priority, name, promoter, venue, type, area, scale, date, time, format,
              reason, contact_channel, email, email_status, status, first_contact, follow_up, notes, website, tags,
-             organisation_id)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)",
+             organisation_id, instagram)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
         params![
             contact.artist_id, contact.category, contact.priority, contact.name, contact.promoter, contact.venue,
             contact.type_, contact.area, contact.scale, contact.date, contact.time, contact.format,
             contact.reason, contact.contact_channel, contact.email, contact.email_status,
             contact.status, contact.first_contact, contact.follow_up, contact.notes, contact.website, contact.tags,
-            contact.organisation_id
+            contact.organisation_id,
+            contact.instagram.as_deref().and_then(crate::commands::social::normalize_handle_input)
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -170,14 +171,15 @@ pub fn update_contact(state: State<'_, AppState>, contact: Contact) -> Result<()
             category=?2, priority=?3, name=?4, promoter=?5, venue=?6, type=?7, area=?8, scale=?9,
             date=?10, time=?11, format=?12, reason=?13, contact_channel=?14, email=?15, email_status=?16,
             status=?17, first_contact=?18, follow_up=?19, notes=?20, website=?21, tags=?22, artist_id=?23,
-            organisation_id=?24, updated_at=datetime('now')
+            organisation_id=?24, instagram=?25, updated_at=datetime('now')
          WHERE id=?1",
         params![
             id, contact.category, contact.priority, contact.name, contact.promoter, contact.venue,
             contact.type_, contact.area, contact.scale, contact.date, contact.time, contact.format,
             contact.reason, contact.contact_channel, contact.email, contact.email_status,
             contact.status, contact.first_contact, contact.follow_up, contact.notes, contact.website, contact.tags,
-            contact.artist_id, contact.organisation_id
+            contact.artist_id, contact.organisation_id,
+            contact.instagram.as_deref().and_then(crate::commands::social::normalize_handle_input)
         ],
     )
     .map_err(|e| e.to_string())?;

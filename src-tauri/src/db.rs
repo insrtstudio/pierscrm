@@ -806,6 +806,11 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // Additive, see commands/playbook.rs and commands/autonomy.rs.
     crate::commands::playbook::migrate(conn);
     crate::commands::autonomy::migrate(conn);
+    // ---- Instagram (handles, assisted DM) ----
+    // contacts.instagram, vi_promoter_orgs.instagram_checked_at,
+    // social_touches and the triggers carrying a handle to its contact.
+    // Additive, see commands/social.rs.
+    crate::commands::social::migrate(conn);
 
     Ok(())
 }
