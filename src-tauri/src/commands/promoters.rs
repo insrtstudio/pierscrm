@@ -310,6 +310,7 @@ pub struct PromoterFilter {
     /// Include venues listed as the promoter of their own nights.
     #[serde(default)]
     pub include_house: Option<bool>,
+    /// true: promoted only; false: not promoted yet.
     #[serde(default)]
     pub in_pipeline: Option<bool>,
     /// Promoters with at least this many nights (12 months if known, else total).
@@ -334,14 +335,16 @@ fn filters(f: &PromoterFilter) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
         a.push(Box::new(p));
     }
     if f.has_email == Some(true) {
-        w.push_str(" AND EXISTS(SELECT 1 FROM vi_promoter_contacts c WHERE c.promoter_id = o.id AND c.type = 'email')");
+        w.push_str(&format!(" AND {HAS_EMAIL_SQL}"));
     }
     if let Some(m) = f.fit_min.filter(|m| *m > 0) {
         w.push_str(" AND o.fit_score >= ?");
         a.push(Box::new(m));
     }
-    if f.in_pipeline == Some(true) {
-        w.push_str(" AND o.crm_contact_id IS NOT NULL");
+    match f.in_pipeline {
+        Some(true) => w.push_str(" AND o.crm_contact_id IS NOT NULL"),
+        Some(false) => w.push_str(" AND o.crm_contact_id IS NULL"),
+        None => {}
     }
     if let Some(m) = f.min_events.filter(|m| *m > 0) {
         w.push_str(" AND MAX(o.nb_events_12m, o.nb_events_total) >= ?");
@@ -420,7 +423,12 @@ fn query_rows(
     Ok(out)
 }
 
-/// `sort`: "fit" (default), "events", "recent" or "name".
+/// SQL boolean: the promoter has at least one stored address.
+const HAS_EMAIL_SQL: &str = "EXISTS(SELECT 1 FROM vi_promoter_contacts c WHERE c.promoter_id = o.id AND c.type = 'email')";
+
+/// `sort`: "fit" (default), "events", "recent" or "name". The default puts the
+/// promoters with an address first: fit_score is often unset and the few dozen
+/// reachable collectives were buried among 40k sorted by nights.
 pub fn list_promoters(
     conn: &Connection,
     f: &PromoterFilter,
@@ -434,7 +442,12 @@ pub fn list_promoters(
         "events" => "MAX(o.nb_events_12m, o.nb_events_total) DESC, o.nom COLLATE NOCASE",
         "recent" => "o.last_event IS NULL, o.last_event DESC, o.nom COLLATE NOCASE",
         "name" => "o.nom COLLATE NOCASE",
-        _ => "o.fit_score IS NULL, o.fit_score DESC, MAX(o.nb_events_12m, o.nb_events_total) DESC, o.nom COLLATE NOCASE",
+        _ => "",
+    };
+    let order = if order.is_empty() {
+        format!("{HAS_EMAIL_SQL} DESC, o.fit_score IS NULL, o.fit_score DESC, MAX(o.nb_events_12m, o.nb_events_total) DESC, o.nom COLLATE NOCASE")
+    } else {
+        order.to_string()
     };
     let tail = format!("WHERE 1=1{w} ORDER BY {order} LIMIT {} OFFSET {}", limit.clamp(1, 1000), offset.max(0));
     query_rows(conn, &tail, &a, today)
@@ -623,6 +636,58 @@ pub(crate) fn promote_promoter_inner(conn: &Connection, id: i64) -> Result<i64, 
     )
     .map_err(|e| e.to_string())?;
     Ok(cid)
+}
+
+/// Outcome of a promotion over a selection, for the toast.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct PromoteSummary {
+    pub added: i64,
+    /// Already linked to a live contact.
+    pub already: i64,
+    /// No address to write to: left out.
+    pub no_email: i64,
+}
+
+/// Promote a selection of promoters, those with an address only, in one
+/// transaction.
+pub(crate) fn promote_promoters_inner(conn: &Connection, ids: &[i64]) -> Result<PromoteSummary, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut out = PromoteSummary::default();
+    for &id in ids {
+        let linked: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM vi_promoter_orgs o JOIN contacts ct ON ct.id = o.crm_contact_id WHERE o.id = ?1)",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if linked {
+            out.already += 1;
+        } else if best_promoter_email(&tx, id).is_none() {
+            out.no_email += 1;
+        } else {
+            promote_promoter_inner(&tx, id)?;
+            out.added += 1;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// Reachable targets still outside the pipeline, for the Outreach page's
+/// "N waiting in Scouting" hint.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScoutingWaiting {
+    pub venues: i64,
+    pub promoters: i64,
+}
+
+pub(crate) fn scouting_waiting(conn: &Connection) -> Result<ScoutingWaiting, String> {
+    let promoters = count_promoters(
+        conn,
+        &PromoterFilter { has_email: Some(true), in_pipeline: Some(false), ..Default::default() },
+    )?;
+    Ok(ScoutingWaiting { venues: crate::commands::harvest::promotable_venues(conn), promoters })
 }
 
 // ---------------------------------------------------------------------------
@@ -822,6 +887,18 @@ pub fn vi_promote_promoter(state: State<'_, AppState>, id: i64) -> Result<i64, S
     promote_promoter_inner(&conn, id)
 }
 
+#[tauri::command(async)]
+pub fn vi_promote_promoters(state: State<'_, AppState>, ids: Vec<i64>) -> Result<PromoteSummary, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    promote_promoters_inner(&conn, &ids)
+}
+
+#[tauri::command(async)]
+pub fn vi_scouting_waiting(state: State<'_, AppState>) -> Result<ScoutingWaiting, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    scouting_waiting(&conn)
+}
+
 /// Queue an email search over promoters (`ids`, else every non-house promoter
 /// with at least `min_events` nights and no stored address, not enriched yet
 /// unless `force`). Error codes the UI translates: "vi.enrich_none".
@@ -992,5 +1069,51 @@ mod tests {
         assert_eq!(email, "booking@collectifx.fr");
         assert!(notes.starts_with("Salles : Club A, Club B"));
         assert!(!notes.contains('\u{2014}'));
+    }
+
+    /// The default order puts collectives with an address first (fit_score is
+    /// unset for most), and a selection promotes only those with an address.
+    #[test]
+    fn email_first_order_and_bulk_promotion() {
+        let c = conn();
+        c.execute_batch(
+            "INSERT INTO vi_promoter_orgs (id, cle, nom, nom_normalise, nb_events_total) VALUES
+               (1, 'n:big', 'Big Nights', 'bignights', 90),
+               (2, 'n:mid', 'Mid Crew', 'midcrew', 40),
+               (3, 'n:small', 'Small Collective', 'smallcollective', 3),
+               (4, 'n:tiny', 'Tiny Club', 'tinyclub', 1);
+             INSERT INTO vi_promoter_contacts (promoter_id, valeur, score) VALUES
+               (3, 'booking@small.fr', 80),
+               (4, 'hello@tiny.fr', 50);",
+        )
+        .unwrap();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        let f = PromoterFilter::default();
+        let names = |sort: Option<&str>| -> Vec<String> {
+            list_promoters(&c, &f, sort, 50, 0, today).unwrap().into_iter().map(|r| r.nom).collect()
+        };
+        assert_eq!(names(None), vec!["Small Collective", "Tiny Club", "Big Nights", "Mid Crew"]);
+        // Explicit sorts are left alone.
+        assert_eq!(names(Some("events")), vec!["Big Nights", "Mid Crew", "Small Collective", "Tiny Club"]);
+        // A fit score still ranks within the "with an address" group.
+        c.execute("UPDATE vi_promoter_orgs SET fit_score = 70 WHERE id IN (2, 4)", []).unwrap();
+        assert_eq!(names(None), vec!["Tiny Club", "Small Collective", "Mid Crew", "Big Nights"]);
+
+        let waiting = scouting_waiting(&c).unwrap();
+        assert_eq!((waiting.promoters, waiting.venues), (2, 0));
+
+        let s = promote_promoters_inner(&c, &[1, 3, 4]).unwrap();
+        assert_eq!(s, PromoteSummary { added: 2, already: 0, no_email: 1 });
+        let s = promote_promoters_inner(&c, &[3, 4, 2]).unwrap();
+        assert_eq!(s, PromoteSummary { added: 0, already: 2, no_email: 1 });
+        let n: i64 = c.query_row("SELECT COUNT(*) FROM contacts WHERE category = 'promoter'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(scouting_waiting(&c).unwrap().promoters, 0);
+        assert_eq!(count_promoters(&c, &PromoterFilter { in_pipeline: Some(false), ..Default::default() }).unwrap(), 2);
+        assert_eq!(count_promoters(&c, &PromoterFilter { in_pipeline: Some(true), ..Default::default() }).unwrap(), 2);
+        // A contact deleted by hand frees the row for a new promotion.
+        c.execute("DELETE FROM contacts WHERE name = 'Tiny Club'", []).unwrap();
+        let s = promote_promoters_inner(&c, &[4]).unwrap();
+        assert_eq!(s.added, 1);
     }
 }

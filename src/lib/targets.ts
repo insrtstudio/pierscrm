@@ -98,6 +98,18 @@ export const viListPromoters = (filter: PromoterFilter, sort: PromoterSort, limi
 export const viCountPromoters = (filter: PromoterFilter) => invoke<number>("vi_count_promoters", { filter });
 export const viPromoterDetail = (id: number) => invoke<PromoterFiche>("vi_promoter_detail", { id });
 export const viPromotePromoter = (id: number) => invoke<number>("vi_promote_promoter", { id });
+/// Outcome of promoting a selection (promoters or venues): rows without an
+/// address are left out.
+export interface PromoteSummary {
+  added: number;
+  already: number;
+  no_email: number;
+}
+export const viPromotePromoters = (ids: number[]) => invoke<PromoteSummary>("vi_promote_promoters", { ids });
+export const viPromoteVenues = (ids: number[]) => invoke<PromoteSummary>("vi_promote_venues", { ids });
+/// Venues and collectives with an address, not in Outreach yet.
+export const viScoutingWaiting = () =>
+  invoke<{ venues: number; promoters: number }>("vi_scouting_waiting");
 export const viStartPromoterEnrich = (p: { ids?: number[]; force?: boolean; minEvents?: number } = {}) =>
   invoke<number>("vi_start_promoter_enrich", {
     ids: p.ids ?? null,

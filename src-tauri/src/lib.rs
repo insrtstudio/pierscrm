@@ -272,6 +272,7 @@ pub fn run() {
             commands::harvest::vi_venue_stats,
             commands::harvest::vi_promote_venue,
             commands::harvest::vi_promote_venues_bulk,
+            commands::harvest::vi_promote_venues,
             commands::harvest::vi_stop_run,
             commands::harvest::vi_run_tasks,
             // pulse (spotify snapshots + meta spend)
@@ -303,6 +304,8 @@ pub fn run() {
             commands::promoters::vi_count_promoters,
             commands::promoters::vi_promoter_detail,
             commands::promoters::vi_promote_promoter,
+            commands::promoters::vi_promote_promoters,
+            commands::promoters::vi_scouting_waiting,
             commands::promoters::vi_start_promoter_enrich,
             commands::fit::fit_recompute,
             commands::fit::fit_list_comparables,

@@ -5,6 +5,7 @@ import { Timeline } from "./Timeline";
 import { Actions } from "./Actions";
 import { Venues } from "./Venues";
 import { Radar } from "./Radar";
+import { RoleBanner } from "../components/RoleBanner";
 
 // Nav sections made of several former pages. Each page keeps its own logic;
 // TabbedPage shows the section title and its header collapses to its actions.
@@ -30,6 +31,14 @@ export function Discovery() {
     <TabbedPage
       title={t("nav.discovery")}
       subtitle={t("sections.discovery_subtitle")}
+      intro={
+        <RoleBanner
+          id="scouting"
+          text={t("scouting.banner")}
+          link={t("scouting.banner_link")}
+          to="/contacts"
+        />
+      }
       tabs={[
         { key: "venues", label: t("sections.discovery_venues"), render: () => <Venues /> },
         { key: "curators", label: t("sections.discovery_curators"), render: () => <Radar /> },

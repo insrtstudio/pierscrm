@@ -10,6 +10,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useSearchParams } from "react-router-dom";
 import {
   Play,
   RefreshCw,
@@ -78,7 +79,8 @@ import { PageHeader, EmptyState } from "../components/Layout";
 import { Field, Modal, useToast, useConfirm } from "../components/ui";
 import { useDebounced } from "../lib/hooks";
 import { AddToCampaign } from "../components/BulkActions";
-import { PromotersTab } from "../components/Promoters";
+import { PromotersTab, promoteSummaryText } from "../components/Promoters";
+import { viPromoteVenues } from "../lib/targets";
 import { FitScore, TimingBadge } from "../components/FitTiming";
 
 type Tab = "venues" | "promoters" | "runs" | "areas" | "artists";
@@ -102,8 +104,23 @@ const VENUE_STATUS_STYLE: Record<string, string> = {
 
 export function Venues() {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<Tab>("venues");
   const tabs: Tab[] = ["venues", "promoters", "runs", "areas", "artists"];
+  // Deep link from Outreach: ?view=promoters&email=1 opens a tab with the
+  // "with email" chip on. Read once, then dropped from the URL so the chips
+  // stay the only source of truth.
+  const [params, setParams] = useSearchParams();
+  const [tab, setTab] = useState<Tab>(() => {
+    const v = params.get("view") as Tab | null;
+    return v && tabs.includes(v) ? v : "venues";
+  });
+  const [initialEmail] = useState(() => params.get("email") === "1");
+  useEffect(() => {
+    if (!params.has("view") && !params.has("email")) return;
+    const next = new URLSearchParams(params);
+    next.delete("view");
+    next.delete("email");
+    setParams(next, { replace: true });
+  }, []);
   return (
     <div>
       <PageHeader title={t("venues.title")} subtitle={t("venues.subtitle")} />
@@ -115,8 +132,8 @@ export function Venues() {
             </button>
           ))}
         </div>
-        {tab === "venues" && <VenuesTab />}
-        {tab === "promoters" && <PromotersTab />}
+        {tab === "venues" && <VenuesTab initialEmail={initialEmail} />}
+        {tab === "promoters" && <PromotersTab initialEmail={initialEmail} />}
         {tab === "runs" && <RunsTab />}
         {tab === "areas" && <AreasTab />}
         {tab === "artists" && <ArtistsTab />}
@@ -127,7 +144,7 @@ export function Venues() {
 
 // ---------------- Venues ----------------
 
-function VenuesTab() {
+function VenuesTab({ initialEmail = false }: { initialEmail?: boolean }) {
   const { t } = useTranslation();
   const toast = useToast();
   const qc = useQueryClient();
@@ -136,7 +153,7 @@ function VenuesTab() {
   const [statut, setStatut] = useState("actif");
   const [pays, setPays] = useState("all");
   const [search, setSearch] = useState("");
-  const [hasEmail, setHasEmail] = useState(false);
+  const [hasEmail, setHasEmail] = useState(initialEmail);
   const [hasPhone, setHasPhone] = useState(false);
   const [hasWebsite, setHasWebsite] = useState(false);
   const [contactedF, setContactedF] = useState(false);
@@ -296,6 +313,14 @@ function VenuesTab() {
     }
     return ids;
   };
+  const promoteSelected = useMutation({
+    mutationFn: () => viPromoteVenues([...selected]),
+    onSuccess: (s) => {
+      afterAddToCampaign();
+      toast(promoteSummaryText(t, s), "ok");
+    },
+    onError: (e: any) => toast(backendError(e), "error"),
+  });
   const afterAddToCampaign = () => {
     setSelected(new Set());
     qc.invalidateQueries({ queryKey: ["vi_venues"] });
@@ -668,6 +693,15 @@ function VenuesTab() {
       {selected.size > 0 && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface px-4 py-2 text-sm">
           <span className="text-fg-subtle">{t("contacts.selected", { count: selected.size })}</span>
+          <button
+            className="btn-outline py-1.5"
+            onClick={() => promoteSelected.mutate()}
+            disabled={promoteSelected.isPending}
+            title={t("scouting.promote_selected_hint")}
+          >
+            <UserPlus size={13} />
+            {t("scouting.promote_selected", { count: selected.size })}
+          </button>
           <AddToCampaign resolve={selectedContactIds} onDone={afterAddToCampaign} />
           <span className="text-2xs text-fg-subtle">{t("venues.campaign_promote_hint")}</span>
           <button className="btn-ghost ml-auto py-1.5 text-xs" onClick={() => setSelected(new Set())}>

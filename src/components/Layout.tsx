@@ -391,11 +391,14 @@ export function TabbedPage({
   subtitle,
   kicker,
   tabs,
+  intro,
 }: {
   title: string;
   subtitle?: string;
   kicker?: string;
   tabs: PageTab[];
+  /** Shown above every tab (the page's role banner). */
+  intro?: React.ReactNode;
 }) {
   const [params, setParams] = useSearchParams();
   const [slot, setSlot] = useState<HTMLElement | null>(null);
@@ -425,6 +428,7 @@ export function TabbedPage({
         <div ref={setSlot} className="flex flex-wrap items-center justify-end gap-2 pb-2.5" />
         </div>
       </PageHeader>
+      {intro && <div className="px-page pt-5">{intro}</div>}
       <EmbeddedCtx.Provider value={slot}>
         <div key={active.key}>{active.render()}</div>
       </EmbeddedCtx.Provider>

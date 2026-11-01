@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import clsx from "clsx";
 import { ExternalLink, Globe, Mail, RefreshCw, Sparkles, UserPlus, Users } from "lucide-react";
@@ -12,11 +13,13 @@ import {
   viCountPromoters,
   viListPromoters,
   viPromotePromoter,
+  viPromotePromoters,
   viPromoterDetail,
   viStartPromoterEnrich,
   type PromoterFilter,
   type PromoterRow,
   type PromoterSort,
+  type PromoteSummary,
 } from "../lib/targets";
 import { viVenueStats } from "../lib/api";
 import { EmptyState } from "./Layout";
@@ -26,18 +29,29 @@ import { FitLine, FitScore, TimingBadge } from "./FitTiming";
 
 const PAGE = 100;
 
+/// Toast for a promoted selection: "3 added to Outreach · 1 was already there".
+export function promoteSummaryText(t: TFunction, s: PromoteSummary) {
+  return [
+    t("scouting.promoted", { count: s.added }),
+    s.already > 0 && t("scouting.already", { count: s.already }),
+    s.no_email > 0 && t("scouting.no_email", { count: s.no_email }),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 /// Discovery › Promoters: collectives and promoters seen on RA, with their
 /// nights over 12 months, the rooms they use, the address found for them, the
 /// fit score and the right moment to write. Promoting one creates a contact of
 /// category "promoter" that campaigns and residencies can target.
-export function PromotersTab() {
+export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean } = {}) {
   const { t } = useTranslation();
   const toast = useToast();
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const dSearch = useDebounced(search, 250);
   const [pays, setPays] = useState("all");
-  const [hasEmail, setHasEmail] = useState(false);
+  const [hasEmail, setHasEmail] = useState(initialEmail);
   const [fitOnly, setFitOnly] = useState(false);
   const [includeHouse, setIncludeHouse] = useState(false);
   const [sort, setSort] = useState<PromoterSort>("fit");
@@ -76,7 +90,16 @@ export function PromotersTab() {
     mutationFn: viPromotePromoter,
     onSuccess: () => {
       refresh();
-      toast(t("venues.promoted"), "ok");
+      toast(t("scouting.promoter_promoted"), "ok");
+    },
+    onError: (e) => toast(backendError(e), "error"),
+  });
+  const promoteSelected = useMutation({
+    mutationFn: () => viPromotePromoters([...selected]),
+    onSuccess: (s) => {
+      setSelected(new Set());
+      refresh();
+      toast(promoteSummaryText(t, s), "ok");
     },
     onError: (e) => toast(backendError(e), "error"),
   });
@@ -178,6 +201,15 @@ export function PromotersTab() {
       {selected.size > 0 && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface px-4 py-2 text-sm">
           <span className="text-fg-subtle">{t("contacts.selected", { count: selected.size })}</span>
+          <button
+            className="btn-outline py-1.5"
+            onClick={() => promoteSelected.mutate()}
+            disabled={promoteSelected.isPending}
+            title={t("scouting.promote_selected_hint")}
+          >
+            <UserPlus size={13} />
+            {t("scouting.promote_selected", { count: selected.size })}
+          </button>
           <AddToCampaign resolve={selectedContactIds} onDone={() => (setSelected(new Set()), refresh())} />
           <button className="btn-ghost ml-auto py-1.5 text-xs" onClick={() => setSelected(new Set())}>
             {t("common.cancel")}

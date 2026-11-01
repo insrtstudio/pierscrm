@@ -1398,6 +1398,58 @@ pub fn vi_promote_venues_bulk(state: State<'_, AppState>, with_email_only: Optio
     Ok(n)
 }
 
+/// Promote a selection of venues, those with an address of their own only, in
+/// one transaction.
+pub(crate) fn promote_venues_inner(
+    conn: &rusqlite::Connection,
+    ids: &[i64],
+) -> Result<crate::commands::promoters::PromoteSummary, String> {
+    let has_email = format!(
+        "SELECT EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=?1 AND c.type='email' AND {})",
+        own_email_sql("c.valeur")
+    );
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut out = crate::commands::promoters::PromoteSummary::default();
+    for &id in ids {
+        let linked: bool = tx
+            .query_row("SELECT crm_contact_id IS NOT NULL FROM vi_venues WHERE id=?1", params![id], |r| r.get(0))
+            .unwrap_or(false);
+        if linked {
+            out.already += 1;
+        } else if !tx.query_row(&has_email, params![id], |r| r.get::<_, bool>(0)).unwrap_or(false) {
+            out.no_email += 1;
+        } else {
+            promote_venue_inner(&tx, id)?;
+            out.added += 1;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+#[tauri::command(async)]
+pub fn vi_promote_venues(
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+) -> Result<crate::commands::promoters::PromoteSummary, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    promote_venues_inner(&conn, &ids)
+}
+
+/// Venues the "add all to pipeline" button would promote right now.
+pub(crate) fn promotable_venues(conn: &rusqlite::Connection) -> i64 {
+    conn.query_row(
+        &format!(
+            "SELECT COUNT(*) FROM vi_venues v WHERE statut IN ('qualifie','valide') AND crm_contact_id IS NULL
+               AND EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email' AND {})",
+            own_email_sql("c.valeur")
+        ),
+        [],
+        |r| r.get(0),
+    )
+    .unwrap_or(0)
+}
+
 /// Promoted venue contacts still waiting for a first email whose address is not
 /// the venue's own (a ticketing desk, a tourism office...). Rows: (venue, contact).
 fn stale_venue_contacts_sql() -> String {
@@ -1514,11 +1566,7 @@ pub fn vi_venue_stats(state: State<'_, AppState>) -> Result<VenueStats, String> 
         contacted: one(&format!("SELECT COUNT(*) FROM vi_venues v WHERE {}", CONTACTED_SQL)),
         played: one(&format!("SELECT COUNT(*) FROM vi_venues v WHERE {}", PLAYED_SQL)),
         countries: one("SELECT COUNT(DISTINCT pays) FROM vi_venues WHERE pays IS NOT NULL"),
-        promotable: one(&format!(
-            "SELECT COUNT(*) FROM vi_venues v WHERE statut IN ('qualifie','valide') AND crm_contact_id IS NULL
-               AND EXISTS(SELECT 1 FROM vi_contacts c WHERE c.venue_id=v.id AND c.type='email' AND {})",
-            own_email_sql("c.valeur")
-        )),
+        promotable: promotable_venues(&conn),
         stale_contacts: one(&format!("SELECT COUNT(*) FROM ({})", stale_venue_contacts_sql())),
         top_countries,
     })
@@ -1547,6 +1595,32 @@ mod tests {
         let ids: Vec<i64> = st.query_map(refs.as_slice(), |r| r.get(0)).unwrap().flatten().collect();
         assert_eq!(ids, vec![1, 2, 6]);
         assert!(target_sql(&[]).is_none());
+    }
+
+    #[test]
+    fn promote_venue_selection_skips_linked_and_unreachable() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate_for_tests(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO vi_venues (id, nom, nom_normalise, ville, pays, statut) VALUES
+               (1, 'Club A', 'cluba', 'Paris', 'FR', 'qualifie'),
+               (2, 'Club B', 'clubb', 'Lyon', 'FR', 'candidat'),
+               (3, 'Club C', 'clubc', 'Lille', 'FR', 'qualifie');
+             INSERT INTO vi_contacts (venue_id, type, valeur, score, source_url) VALUES
+               (1, 'email', 'booking@cluba.fr', 80, 'https://cluba.fr'),
+               (2, 'email', 'prog@clubb.fr', 60, 'https://clubb.fr');",
+        )
+        .unwrap();
+        assert_eq!(promotable_venues(&conn), 1);
+        let s = promote_venues_inner(&conn, &[1, 2, 3]).unwrap();
+        assert_eq!((s.added, s.already, s.no_email), (2, 0, 1));
+        let s = promote_venues_inner(&conn, &[1, 2]).unwrap();
+        assert_eq!((s.added, s.already, s.no_email), (0, 2, 0));
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM contacts WHERE category='venue'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(promotable_venues(&conn), 0);
     }
 
     /// #18: replaying a page (an overlapping re-harvest) must not count its

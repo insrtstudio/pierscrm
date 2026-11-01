@@ -19,6 +19,7 @@ import {
   Upload,
   Building2,
   X,
+  Radar as RadarIcon,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -51,6 +52,8 @@ import { AddToCampaign, AssignUnassignedArtist, SetOrganisation } from "../compo
 import { OrganisationsModal } from "../components/Organisations";
 import { InsrtActivityPanel } from "../components/InsrtActivity";
 import { ContactOffersPanel } from "../components/Offers";
+import { RoleBanner } from "../components/RoleBanner";
+import { viScoutingWaiting } from "../lib/targets";
 
 const PAGE_SIZE = 200;
 
@@ -137,6 +140,19 @@ export function Contacts() {
     queryFn: () => countContacts(filterArgs),
     placeholderData: keepPreviousData,
   });
+
+  // Bridge to Scouting: a Collectives or Venues filter that shows little here
+  // often means the reachable ones were found but never added.
+  const bridgeKind = category === "promoter" || category === "venue" ? category : null;
+  const { data: waiting } = useQuery({
+    queryKey: ["vi_scouting_waiting"],
+    queryFn: viScoutingWaiting,
+    enabled: bridgeKind != null,
+  });
+  const waitingN = bridgeKind === "promoter" ? waiting?.promoters ?? 0 : bridgeKind === "venue" ? waiting?.venues ?? 0 : 0;
+  const showBridge = bridgeKind != null && total != null && total <= 20 && waitingN > 0;
+  const openScouting = () =>
+    navigate(`/discovery?view=${bridgeKind === "promoter" ? "promoters" : "venues"}&email=1`);
 
   // Contact status feeds the follow-up queue, the dashboard and the Discovery
   // "contacted" flag: refresh all of them, not only this list.
@@ -289,6 +305,14 @@ export function Contacts() {
       />
 
       <div className="px-page pb-10 pt-6">
+        <div className="mb-4">
+          <RoleBanner
+            id="outreach"
+            text={t("scouting.outreach_banner")}
+            link={t("scouting.outreach_banner_link")}
+            to="/discovery"
+          />
+        </div>
         {/* Filters */}
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px]">
@@ -367,6 +391,23 @@ export function Contacts() {
             ))}
           </select>
         </div>
+
+        {showBridge && (
+          <div className="card mb-3 flex flex-wrap items-center gap-3 border-accent/40 px-4 py-3">
+            <RadarIcon size={16} className="shrink-0 text-accent" />
+            <div className="min-w-0 flex-1 text-xs">
+              <div className="font-semibold">
+                {t(bridgeKind === "promoter" ? "scouting.waiting_promoter" : "scouting.waiting_venue", {
+                  count: waitingN,
+                })}
+              </div>
+              <div className="text-2xs text-fg-subtle">{t("scouting.waiting_hint")}</div>
+            </div>
+            <button className="btn-outline" onClick={openScouting}>
+              {t("scouting.waiting_cta")}
+            </button>
+          </div>
+        )}
 
         {/* Bulk bar */}
         {visibleSelected.length > 0 && (
