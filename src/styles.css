@@ -57,6 +57,11 @@
     --glass-hi-a: 0.7;          /* inner top highlight */
     --glass-float: 247 246 243; /* modals, popovers: elevated paper */
     --glass-float-a: 0.78;
+    /* Sidebar glass: warm paper over the vibrancy, so the desktop only
+       breathes through instead of turning the panel cold grey. */
+    --sidebar-tint: 240 238 232;
+    --sidebar-tint-a: 0.78;
+    --lift: 0 1px 2px rgb(11 11 11 / 0.05), 0 4px 14px rgb(11 11 11 / 0.04);
   }
 
   .dark {
@@ -88,6 +93,9 @@
     --glass-hi-a: 0.07;
     --glass-float: 26 26 25;
     --glass-float-a: 0.72;
+    --sidebar-tint: 22 22 21;
+    --sidebar-tint-a: 0.7;
+    --lift: 0 1px 2px rgb(0 0 0 / 0.3);
   }
 
   * {
@@ -166,8 +174,10 @@
   .btn-primary {
     @apply btn bg-accent text-accent-fg hover:bg-fg hover:text-bg;
   }
+  /* Tahoe capsule: a glass-filled pill rather than a bare outline. */
   .btn-outline {
-    @apply btn border border-border-strong bg-transparent text-fg hover:border-fg;
+    @apply btn border border-border-strong bg-surface/60 text-fg hover:border-fg;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / var(--glass-hi-a)), var(--lift);
   }
   .btn-ghost {
     @apply btn text-fg-subtle hover:bg-surface-2 hover:text-fg;
@@ -185,6 +195,7 @@
   /* ---- Surfaces (Tahoe grouped boxes: generous radius, hairline) ---- */
   .card {
     @apply rounded-xl border border-border bg-surface;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / var(--glass-hi-a)), var(--lift);
   }
   .panel {
     @apply rounded-xl border border-border bg-surface-2;
@@ -214,7 +225,16 @@
       0 0 0 80px rgb(var(--bg));
   }
   .native-glass .glass-sidebar {
-    background: rgb(var(--glass-tint) / var(--glass-tint-a));
+    background: rgb(var(--sidebar-tint) / var(--sidebar-tint-a));
+  }
+  /* Sidebar selection, Tahoe style with the house accent: a sunset wash,
+     sunset icon. */
+  .nav-item[aria-current="page"] {
+    background: rgb(var(--accent) / 0.13);
+    @apply font-medium text-fg;
+  }
+  .nav-item[aria-current="page"] svg {
+    @apply text-accent-2;
   }
   /* Floating layers (modals, toasts, popovers): CSS glass over the content. */
   .glass {
@@ -275,7 +295,8 @@
 
   /* ---- Segmented control (tabs) ---- */
   .segmented {
-    @apply inline-flex items-center gap-0.5 rounded-full border border-border bg-surface p-0.5;
+    @apply inline-flex items-center gap-0.5 rounded-full border border-border bg-fg/[0.04] p-0.5;
+    box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.05);
   }
   .segmented-item {
     @apply rounded-full px-3.5 py-1.5 font-mono text-[11px] uppercase text-fg-subtle transition-colors cursor-pointer whitespace-nowrap;
@@ -283,6 +304,7 @@
   }
   .segmented-item[data-active="true"] {
     @apply bg-fg text-bg;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.18);
   }
   .segmented-item:not([data-active="true"]):hover {
     @apply bg-surface-2 text-fg;

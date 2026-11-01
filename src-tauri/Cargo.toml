@@ -52,6 +52,11 @@ native-tls = "0.2"
 sha2 = "0.10"
 getrandom = "0.3"
 
+# Window chrome: re-place the traffic lights inside the glass sidebar (chrome.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWindow", "NSView", "NSResponder", "NSControl", "NSButton", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry"] }
+
 [profile.release]
 # NOT "abort": a panic in a background harvest/enrich worker must never take the
 # whole app down. With unwind, a panicked task aborts alone and the app survives.

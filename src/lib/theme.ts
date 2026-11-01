@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export type Theme = "light" | "dark";
@@ -13,6 +14,9 @@ export function syncNativeTheme(theme: Theme = getTheme()) {
   try {
     getCurrentWindow()
       .setTheme(theme)
+      // Changing the appearance re-lays the title bar and AppKit puts the
+      // traffic lights back at their default spot: re-place them (chrome.rs).
+      .then(() => invoke("place_window_controls"))
       .catch(() => {});
   } catch {
     // Plain browser (vite dev without Tauri): no native window.

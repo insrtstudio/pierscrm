@@ -186,7 +186,7 @@ function TopBar() {
   return (
     <div
       data-tauri-drag-region
-      className="relative flex h-11 shrink-0 items-center border-b border-border bg-bg pl-page"
+      className="relative flex h-11 shrink-0 items-center border-b border-fg/[0.06] bg-bg pl-page"
     >
       {/* The edge fade is for the scrolling ticker only: on the static empty
           message it ate the first letters. */}
@@ -232,11 +232,12 @@ export function Layout() {
 
   const item = (isActive: boolean) =>
     clsx(
-      "relative flex items-center rounded-lg py-1.5 text-[13.5px] transition-colors outline-none",
+      "nav-item relative flex items-center rounded-lg py-1.5 text-[13.5px] transition-colors outline-none",
       "focus-visible:ring-2 focus-visible:ring-accent",
       collapsed ? "justify-center px-0 py-2" : "gap-2.5 px-3",
       // Tahoe selection: a soft ink wash on the glass, not an opaque block.
-      isActive ? "bg-fg/[0.08] font-medium text-fg" : "text-fg-subtle hover:bg-fg/[0.05] hover:text-fg"
+      // Tahoe selection in the house accent: see .nav-item in styles.css.
+      !isActive && "text-fg-subtle hover:bg-fg/[0.05] hover:text-fg"
     );
 
   return (

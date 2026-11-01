@@ -3009,6 +3009,8 @@ dependencies = [
  "keyring",
  "lettre",
  "native-tls",
+ "objc2-app-kit",
+ "objc2-foundation",
  "r2d2",
  "r2d2_sqlite",
  "regex",

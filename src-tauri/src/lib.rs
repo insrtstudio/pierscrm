@@ -1,3 +1,4 @@
+mod chrome;
 mod commands;
 mod crm_links;
 mod db;
@@ -26,6 +27,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        .on_window_event(|window, event| {
+            use tauri::WindowEvent::*;
+            if matches!(event, Resized(_) | Focused(_) | ThemeChanged(_) | ScaleFactorChanged { .. }) {
+                chrome::place_traffic_lights(window);
+            }
+        })
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -49,6 +56,7 @@ pub fn run() {
                     let _ = win.center();
                 }
                 let _ = win.show();
+                chrome::place_traffic_lights(&win.as_ref().window());
                 let _ = win.set_focus();
             }
 
@@ -91,6 +99,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            chrome::place_window_controls,
             // artists
             commands::artists::list_artists,
             commands::artists::get_artist,
