@@ -33,6 +33,7 @@ import {
   Target,
   Undo2,
   type LucideIcon,
+  Instagram,
 } from "lucide-react";
 import {
   getContact,
@@ -171,6 +172,7 @@ const DONE_ICON: Record<Done["kind"], LucideIcon> = {
   offer_accepted: Handshake,
   paid: Banknote,
   gig: Disc3,
+  dm: Instagram,
 };
 
 /// Someone is waiting on these: the icon takes the accent.

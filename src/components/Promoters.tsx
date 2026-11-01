@@ -119,7 +119,7 @@ export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean 
     onError: (e) => toast(backendError(e), "error"),
   });
 
-  const selectable = (p: PromoterRow) => !!p.crm_contact_id || !!p.best_email;
+  const selectable = (p: PromoterRow) => !!p.crm_contact_id || !!p.best_email || !!p.instagram;
   const selectedContactIds = async () => {
     const ids: number[] = [];
     for (const p of rows) {
@@ -294,7 +294,7 @@ export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean 
                     {p.crm_contact_id ? (
                       <span className="badge bg-ok/15 text-ok">{t("radar.in_pipeline")}</span>
                     ) : (
-                      p.best_email && (
+                      (p.best_email || p.instagram) && (
                         <button
                           className="btn-outline py-1.5"
                           onClick={() => promote.mutate(p.id)}
@@ -377,7 +377,8 @@ function PromoterFicheModal({ id, onClose }: { id: number; onClose: () => void }
                     <Mail size={12} className="text-ok" />
                     <span className="font-medium">{c.valeur}</span>
                     <span className="text-fg-faint">
-                      {c.role_devine} · {c.source_method}
+                      {t(`venues.role_${c.role_devine || "autre"}`, c.role_devine || "")} ·{" "}
+                      {c.source_method === "indie_bible" ? "Indie Bible" : c.source_method}
                     </span>
                   </li>
                 ))}

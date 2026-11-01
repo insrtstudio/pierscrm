@@ -329,7 +329,8 @@ export interface DoneItem {
     | "routing"
     | "offer_sent"
     | "offer_accepted"
-    | "paid";
+    | "paid"
+    | "dm";
   day: string;
   count: number;
   campaign_id?: number | null;

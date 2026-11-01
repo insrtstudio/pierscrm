@@ -185,8 +185,65 @@ fn eligible(
     Ok((list, r.excluded_no_email))
 }
 
-/// Next zones to open for `source_id`, best first.
+/// How long computed suggestions are reused while nothing they depend on moved.
+const CACHE_SECS: u64 = 600;
+
+type Cached = (std::time::Instant, String, Vec<Suggestion>);
+static CACHE: std::sync::Mutex<Vec<Cached>> = std::sync::Mutex::new(Vec::new());
+
+/// What the suggestions depend on besides the source's filters: the clubs and
+/// their addresses, every audience, suppressions, sends and the active
+/// campaigns' zones. Cheap counters, so a change anywhere recomputes.
+fn fingerprint(conn: &Connection) -> String {
+    conn.query_row(
+        "SELECT (SELECT COALESCE(MAX(id), 0) FROM vi_contacts) || '|' ||
+                (SELECT COALESCE(MAX(updated_at), '') FROM vi_venues) || '|' ||
+                (SELECT COUNT(*) FROM campaign_contacts) || '|' ||
+                (SELECT COUNT(*) FROM suppressions) || '|' ||
+                (SELECT COUNT(*) FROM emails WHERE status = 'sent') || '|' ||
+                (SELECT COALESCE(MAX(updated_at), '') FROM contacts) || '|' ||
+                (SELECT COALESCE(group_concat(c.id || ':' || c.status || ':' || length(r.config)), '')
+                   FROM campaigns c JOIN residency_campaigns r ON r.campaign_id = c.id)",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap_or_default()
+}
+
+/// Next zones to open for `source_id`, best first. Campaigns with the same
+/// filters get the same answer (every active audience is excluded either
+/// way), so the Actions list running dry on three campaigns computes it once.
 pub fn suggestions(conn: &Connection, source_id: i64) -> Result<Vec<Suggestion>, String> {
+    // Tests run in parallel on databases that look alike: no sharing there.
+    if cfg!(test) {
+        return compute_suggestions(conn, source_id);
+    }
+    let r = load(conn, source_id).ok_or_else(|| "Campagne résidence introuvable.".to_string())?;
+    let c = &r.config;
+    let key = format!(
+        "{}|{}|{}|{}|{}",
+        c.capacity_min,
+        c.capacity_max,
+        c.min_events,
+        c.lang,
+        fingerprint(conn)
+    );
+    if let Ok(cache) = CACHE.lock() {
+        if let Some((_, _, v)) =
+            cache.iter().find(|(at, k, _)| *k == key && at.elapsed().as_secs() < CACHE_SECS)
+        {
+            return Ok(v.clone());
+        }
+    }
+    let out = compute_suggestions(conn, source_id)?;
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.retain(|(at, k, _)| *k != key && at.elapsed().as_secs() < CACHE_SECS);
+        cache.push((std::time::Instant::now(), key, out.clone()));
+    }
+    Ok(out)
+}
+
+fn compute_suggestions(conn: &Connection, source_id: i64) -> Result<Vec<Suggestion>, String> {
     let r = load(conn, source_id).ok_or_else(|| "Campagne résidence introuvable.".to_string())?;
     let cfg = &r.config;
     let (cov_cities, cov_countries) = covered(conn);

@@ -20,7 +20,7 @@ pub struct DoneItem {
     pub key: String,
     /// first_emails | followups | emails | reply | auto_reply | dismissed |
     /// handled | expand_later | campaign | thanks | rebook | routing |
-    /// offer_sent | offer_accepted | paid
+    /// offer_sent | offer_accepted | paid | dm
     pub kind: String,
     pub day: String,
     pub count: i64,
@@ -402,6 +402,20 @@ pub fn done(conn: &Connection, start: &str, end: &str) -> Result<Vec<DoneItem>, 
             if kind == "paid" {
                 x.campaign = Some(col.trim_end_matches("_paid_at").to_string());
             }
+            out.push(x);
+        }
+    }
+
+    // Instagram DMs noted as sent (commands/social.rs), one line each.
+    if let Ok(touches) = crate::commands::social::list_touches(conn, Some(start), Some(end), None, None, None) {
+        for s in touches {
+            let d: String = conn
+                .query_row(&format!("SELECT {}", local_day("?1")), params![s.sent_at], |r| r.get(0))
+                .unwrap_or_else(|_| s.sent_at.chars().take(10).collect());
+            let mut x = DoneItem::new(format!("dm{}", s.id), "dm", d);
+            x.name = Some(s.name);
+            x.contact_id = s.contact_id;
+            x.at = Some(s.sent_at);
             out.push(x);
         }
     }

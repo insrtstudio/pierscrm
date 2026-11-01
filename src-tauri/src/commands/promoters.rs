@@ -621,14 +621,16 @@ pub(crate) fn promote_promoter_inner(conn: &Connection, id: i64) -> Result<i64, 
     }
     conn.execute(
         "INSERT INTO contacts (category, name, venue, area, email, website, notes, contact_channel, status, reason, artist_id)
-         VALUES ('promoter', ?1, ?1, ?2, ?3, ?4, ?5, 'email', 'to_contact', 'Venue Intelligence (collectif)', ?6)",
+         VALUES ('promoter', ?1, ?1, ?2, ?3, ?4, ?5, ?7, 'to_contact', 'Venue Intelligence (collectif)', ?6)",
         params![
             nom,
             ville,
             email,
             site,
             (!notes.is_empty()).then(|| notes.join(" · ")),
-            crate::commands::artists::default_artist_id(conn)
+            crate::commands::artists::default_artist_id(conn),
+            // Reachable by DM only: the channel says so.
+            if email.is_some() { "email" } else { "instagram" }
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -647,12 +649,21 @@ pub struct PromoteSummary {
     pub added: i64,
     /// Already linked to a live contact.
     pub already: i64,
-    /// No address to write to: left out.
+    /// No address nor Instagram to write to: left out.
     pub no_email: i64,
 }
 
-/// Promote a selection of promoters, those with an address only, in one
-/// transaction.
+fn has_instagram(conn: &Connection, id: i64) -> bool {
+    conn.query_row(
+        "SELECT NULLIF(trim(instagram), '') IS NOT NULL FROM vi_promoter_orgs WHERE id = ?1",
+        [id],
+        |r| r.get(0),
+    )
+    .unwrap_or(false)
+}
+
+/// Promote a selection of promoters, those reachable (an address or an
+/// Instagram for a DM) only, in one transaction.
 pub(crate) fn promote_promoters_inner(conn: &Connection, ids: &[i64]) -> Result<PromoteSummary, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut out = PromoteSummary::default();
@@ -666,7 +677,7 @@ pub(crate) fn promote_promoters_inner(conn: &Connection, ids: &[i64]) -> Result<
             .unwrap_or(false);
         if linked {
             out.already += 1;
-        } else if best_promoter_email(&tx, id).is_none() {
+        } else if best_promoter_email(&tx, id).is_none() && !has_instagram(&tx, id) {
             out.no_email += 1;
         } else {
             promote_promoter_inner(&tx, id)?;
@@ -1126,5 +1137,13 @@ mod tests {
         c.execute("DELETE FROM contacts WHERE name = 'Tiny Club'", []).unwrap();
         let s = promote_promoters_inner(&c, &[4]).unwrap();
         assert_eq!(s.added, 1);
+        // Reachable by DM only: promoted too, the channel says Instagram.
+        c.execute("UPDATE vi_promoter_orgs SET instagram = 'midcrew' WHERE id = 2", []).unwrap();
+        let s = promote_promoters_inner(&c, &[1, 2]).unwrap();
+        assert_eq!(s, PromoteSummary { added: 1, already: 0, no_email: 1 });
+        let ch: String = c
+            .query_row("SELECT contact_channel FROM contacts WHERE name = 'Mid Crew'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ch, "instagram");
     }
 }
