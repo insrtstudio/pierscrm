@@ -32,6 +32,8 @@ export interface FitDetail {
   capacity?: number | null;
   genre_label: string;
   parts: FitParts;
+  /** Score borrowed from the venues a collective plays at (no nights of its own on record). */
+  via_venues?: string[];
 }
 
 export function parseFit(detail?: string | null): FitDetail | null {

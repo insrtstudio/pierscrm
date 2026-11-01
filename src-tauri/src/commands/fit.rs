@@ -81,6 +81,10 @@ pub struct FitResult {
     /// First genre word, for "14 soirées house".
     pub genre_label: String,
     pub parts: FitParts,
+    /// Set when the score is borrowed from the venues a collective plays at
+    /// (no night of its own on record): their names, most used first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via_venues: Vec<String>,
 }
 
 fn tokens(s: &str) -> Vec<String> {
@@ -167,11 +171,20 @@ pub fn score_fit(events: &[EventFacts], capacity: Option<i64>, p: &FitParams) ->
         capacity,
         genre_label: p.genre_words.first().cloned().unwrap_or_else(|| "house".into()),
         parts,
+        via_venues: Vec::new(),
     })
 }
 
 /// "a programmé X, Y ; 14 soirées house en 12 mois" (no em dash, ever).
 pub fn explain_fr(r: &FitResult) -> String {
+    if !r.via_venues.is_empty() {
+        let via = format!("d'après les lieux où ils jouent : {}", r.via_venues.join(", "));
+        if r.matched.is_empty() {
+            return via;
+        }
+        let names = r.matched.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+        return format!("{via} ; ces lieux ont programmé {names}");
+    }
     let mut parts = Vec::new();
     if !r.matched.is_empty() {
         parts.push(format!("a programmé {}", r.matched.iter().take(3).cloned().collect::<Vec<_>>().join(", ")));
@@ -572,6 +585,7 @@ pub fn recompute(conn: &Connection, artist_id: Option<i64>, today: NaiveDate) ->
             stats.promoters_scored += 1;
         }
     }
+    stats.promoters_scored += score_promoters_from_venues(&tx, &by_org)?;
     crate::commands::promoters::refresh_aggregates(&tx);
     tx.commit().map_err(|e| e.to_string())?;
     if let Some(id) = artist_id {
@@ -581,6 +595,90 @@ pub fn recompute(conn: &Connection, artist_id: Option<i64>, today: NaiveDate) ->
         );
     }
     Ok(stats)
+}
+
+/// Fallback for collectives without nights of their own on record (their
+/// event-level links come from RA harvests run since lineups are stored; older
+/// data only has "collective X played N times at venue Y"): the fit of the
+/// scored venues they play at, weighted by how often they play there.
+/// Returns how many collectives got a score this way.
+fn score_promoters_from_venues(conn: &Connection, scored_by_events: &HashMap<i64, Vec<i64>>) -> Result<i64, String> {
+    struct Acc {
+        w: f64,
+        score: f64,
+        parts: [f64; 4],
+        matched: HashMap<String, f64>,
+        venues: Vec<(f64, String)>,
+    }
+    let mut acc: HashMap<i64, Acc> = HashMap::new();
+    {
+        let mut st = conn
+            .prepare(
+                "SELECT p.org_id, MAX(p.nb_events, 1), v.nom, v.fit_score, v.fit_detail
+                 FROM vi_promoters p JOIN vi_venues v ON v.id = p.venue_id
+                 WHERE p.org_id IS NOT NULL AND v.fit_score IS NOT NULL",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = st
+            .query_map([], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?, r.get::<_, Option<String>>(4)?))
+            })
+            .map_err(|e| e.to_string())?;
+        for (org, n, venue, score, detail) in rows.flatten() {
+            if scored_by_events.contains_key(&org) {
+                continue;
+            }
+            let w = n as f64;
+            let d: Option<FitResult> = detail.as_deref().and_then(|s| serde_json::from_str(s).ok());
+            let a = acc.entry(org).or_insert_with(|| Acc {
+                w: 0.0,
+                score: 0.0,
+                parts: [0.0; 4],
+                matched: HashMap::new(),
+                venues: Vec::new(),
+            });
+            a.w += w;
+            a.score += w * score as f64;
+            if let Some(d) = d {
+                for (i, p) in [d.parts.overlap, d.parts.genre, d.parts.activity, d.parts.capacity].iter().enumerate() {
+                    a.parts[i] += w * *p as f64;
+                }
+                for m in d.matched {
+                    *a.matched.entry(m).or_default() += w;
+                }
+            }
+            a.venues.push((w, venue));
+        }
+    }
+    let mut up = conn
+        .prepare("UPDATE vi_promoter_orgs SET fit_score = ?2, fit_detail = ?3, fit_at = datetime('now') WHERE id = ?1")
+        .map_err(|e| e.to_string())?;
+    let mut n = 0;
+    for (org, mut a) in acc {
+        if a.w <= 0.0 {
+            continue;
+        }
+        let avg = |x: f64| (x / a.w).round() as i64;
+        let mut matched: Vec<(String, f64)> = a.matched.into_iter().collect();
+        matched.sort_by(|x, y| y.1.total_cmp(&x.1).then_with(|| x.0.cmp(&y.0)));
+        a.venues.sort_by(|x, y| y.0.total_cmp(&x.0));
+        let r = FitResult {
+            score: avg(a.score).clamp(0, 100),
+            matched: matched.into_iter().take(5).map(|m| m.0).collect(),
+            parts: FitParts {
+                overlap: avg(a.parts[0]),
+                genre: avg(a.parts[1]),
+                activity: avg(a.parts[2]),
+                capacity: avg(a.parts[3]),
+            },
+            via_venues: a.venues.into_iter().take(3).map(|v| v.1).collect(),
+            ..Default::default()
+        };
+        let detail = serde_json::to_string(&r).unwrap_or_default();
+        up.execute(params![org, r.score, detail]).map_err(|e| e.to_string())?;
+        n += 1;
+    }
+    Ok(n)
 }
 
 /// The artist the stored scores were last computed for.
@@ -803,7 +901,13 @@ mod tests {
              INSERT INTO vi_evidence (venue_id, artiste, date_event, source_url) VALUES (2, 'Sidney Charles', '2026-07-01', 'u');
              INSERT INTO vi_promoter_orgs (id, cle, nom, nom_normalise) VALUES (5, 'ra:5', 'Collectif X', 'collectifx');
              INSERT INTO vi_event_promoters (ra_event_id, promoter_id) VALUES (10, 5), (11, 5);
-             INSERT INTO vi_promoters (venue_id, nom, nb_events, org_id) VALUES (1, 'Collectif X', 2, 5);",
+             INSERT INTO vi_promoters (venue_id, nom, nb_events, org_id) VALUES (1, 'Collectif X', 2, 5);
+             -- No nights of their own on record: Y borrows the fit of A and B,
+             -- Z only plays at an unscored venue.
+             INSERT INTO vi_promoter_orgs (id, cle, nom, nom_normalise) VALUES
+               (6, 'ra:6', 'Collectif Y', 'collectify'), (7, 'ra:7', 'Collectif Z', 'collectifz');
+             INSERT INTO vi_promoters (venue_id, nom, nb_events, org_id) VALUES
+               (1, 'Collectif Y', 3, 6), (2, 'Collectif Y', 1, 6), (3, 'Collectif Z', 5, 7);",
         )
         .unwrap();
         // Suggestions: Prunk and Chris Stussy? Only Prunk shared a lineup with Piers.
@@ -822,7 +926,24 @@ mod tests {
         assert_eq!(st.artist_id, Some(1));
         assert_eq!(st.comparables, 3);
         assert_eq!(st.venues_scored, 2);
-        assert_eq!(st.promoters_scored, 1);
+        assert_eq!(st.promoters_scored, 2);
+        let (fy, dy): (i64, String) = c
+            .query_row("SELECT fit_score, fit_detail FROM vi_promoter_orgs WHERE id = 6", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        let (sa, sb): (i64, i64) = c
+            .query_row(
+                "SELECT (SELECT fit_score FROM vi_venues WHERE id = 1), (SELECT fit_score FROM vi_venues WHERE id = 2)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(fy, ((3 * sa + sb) as f64 / 4.0).round() as i64);
+        let ry: FitResult = serde_json::from_str(&dy).unwrap();
+        assert_eq!(ry.via_venues, vec!["Club A", "Club B"]);
+        assert!(explain_fr(&ry).starts_with("d'après les lieux où ils jouent : Club A, Club B"));
+        let fz: Option<i64> =
+            c.query_row("SELECT fit_score FROM vi_promoter_orgs WHERE id = 7", [], |r| r.get(0)).unwrap();
+        assert_eq!(fz, None);
         let (fa, da, lead, prof): (i64, String, i64, String) = c
             .query_row("SELECT fit_score, fit_detail, lead_weeks, month_profile FROM vi_venues WHERE id = 1", [], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))

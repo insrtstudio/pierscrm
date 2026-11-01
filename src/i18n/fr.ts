@@ -1702,6 +1702,8 @@ export const fr = {
     badge: "Fit {{n}}",
     none: "Pas assez de données sur 12 mois",
     explain_matched: "a programmé {{names}}",
+    explain_via: "d'après les lieux où ils jouent : {{venues}}",
+    explain_via_matched: "ces lieux ont programmé {{names}}",
     explain_genre_one: "{{count}} soirée {{genre}} en 12 mois",
     explain_genre_other: "{{count}} soirées {{genre}} en 12 mois",
     explain_nights_one: "{{count}} soirée en 12 mois",

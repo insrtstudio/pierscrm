@@ -9,6 +9,12 @@ export function useFitExplain() {
   const { t } = useTranslation();
   return (d: FitDetail | null): string => {
     if (!d) return t("fit.none");
+    if (d.via_venues?.length) {
+      const via = t("fit.explain_via", { venues: d.via_venues.join(", ") });
+      return d.matched.length
+        ? `${via} ; ${t("fit.explain_via_matched", { names: d.matched.slice(0, 3).join(", ") })}`
+        : via;
+    }
     const parts: string[] = [];
     if (d.matched.length) parts.push(t("fit.explain_matched", { names: d.matched.slice(0, 3).join(", ") }));
     parts.push(

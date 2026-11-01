@@ -1700,6 +1700,8 @@ export const en = {
     col_timing: "Timing",
     badge: "Fit {{n}}",
     none: "Not enough data over 12 months",
+    explain_via: "from the venues they play at: {{venues}}",
+    explain_via_matched: "those venues booked {{names}}",
     explain_matched: "booked {{names}}",
     explain_genre_one: "{{count}} {{genre}} night in 12 months",
     explain_genre_other: "{{count}} {{genre}} nights in 12 months",
