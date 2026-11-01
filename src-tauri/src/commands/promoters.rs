@@ -221,6 +221,8 @@ pub(crate) fn refresh_aggregates(conn: &Connection) {
             pays = (SELECT v.pays FROM vi_promoters p JOIN vi_venues v ON v.id = p.venue_id
                      WHERE p.org_id = vi_promoter_orgs.id AND v.pays IS NOT NULL ORDER BY p.nb_events DESC LIMIT 1);",
     );
+    // Types follow the venues just recounted (org_type.rs).
+    super::org_type::classify_rules(conn);
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +299,12 @@ pub struct PromoterRow {
     pub timing: timing::Timing,
     /// Instagram handle (social.rs), shown as @handle and used for the DM.
     pub instagram: Option<String>,
+    /// org_type.rs: what it really is, who decided, why.
+    pub org_type: Option<String>,
+    pub org_type_source: Option<String>,
+    pub org_type_note: Option<String>,
+    /// A handle dropped as not theirs.
+    pub instagram_rejected: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -318,13 +326,25 @@ pub struct PromoterFilter {
     /// Promoters with at least this many nights (12 months if known, else total).
     #[serde(default)]
     pub min_events: Option<i64>,
+    /// "collectif", "club", ... (org_type.rs) or "all". Replaces include_house.
+    #[serde(default)]
+    pub org_type: Option<String>,
 }
 
 fn filters(f: &PromoterFilter) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
     let mut w = String::from(" AND o.statut = 'actif'");
     let mut a: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    if f.include_house != Some(true) {
-        w.push_str(" AND o.house_promoter = 0");
+    match f.org_type.as_deref().filter(|t| !t.is_empty()) {
+        Some("all") => {}
+        Some(t) => {
+            w.push_str(" AND COALESCE(o.org_type, 'collectif') = ?");
+            a.push(Box::new(t.to_string()));
+        }
+        None => {
+            if f.include_house != Some(true) {
+                w.push_str(" AND o.house_promoter = 0");
+            }
+        }
     }
     if let Some(q) = f.search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         w.push_str(" AND (o.nom LIKE ? OR o.ville LIKE ?)");
@@ -368,7 +388,8 @@ const ROW_SELECT: &str = "SELECT o.id, o.nom, o.ville, o.pays, o.ra_url, o.site_
           ORDER BY c.score DESC, c.id LIMIT 1),
         (SELECT COUNT(*) FROM vi_promoter_contacts c WHERE c.promoter_id = o.id AND c.type = 'email'),
         o.enriched_at IS NOT NULL, o.crm_contact_id, o.house_promoter, o.fit_score, o.fit_detail,
-        o.lead_weeks, o.month_profile, NULLIF(trim(o.instagram), '')
+        o.lead_weeks, o.month_profile, NULLIF(trim(o.instagram), ''),
+        o.org_type, o.org_type_source, o.org_type_note, o.instagram_rejected
  FROM vi_promoter_orgs o";
 
 /// Rows of ROW_SELECT + `tail` (WHERE / ORDER / LIMIT), with their top venues.
@@ -411,6 +432,10 @@ fn query_rows(
                 fit_detail: r.get(16)?,
                 timing: timing::window_for_row(today, lead, prof.as_deref()),
                 instagram: r.get(19)?,
+                org_type: r.get(20)?,
+                org_type_source: r.get(21)?,
+                org_type_note: r.get(22)?,
+                instagram_rejected: r.get(23)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -699,7 +724,12 @@ pub struct ScoutingWaiting {
 pub(crate) fn scouting_waiting(conn: &Connection) -> Result<ScoutingWaiting, String> {
     let promoters = count_promoters(
         conn,
-        &PromoterFilter { has_email: Some(true), in_pipeline: Some(false), ..Default::default() },
+        &PromoterFilter {
+            has_email: Some(true),
+            in_pipeline: Some(false),
+            org_type: Some("collectif".into()),
+            ..Default::default()
+        },
     )?;
     Ok(ScoutingWaiting { venues: crate::commands::harvest::promotable_venues(conn), promoters })
 }
@@ -937,7 +967,7 @@ pub async fn vi_start_promoter_enrich(
         Some(v) => v,
         None => {
             let mut sql = format!(
-                "SELECT o.id FROM vi_promoter_orgs o WHERE o.statut = 'actif' AND o.house_promoter = 0
+                "SELECT o.id FROM vi_promoter_orgs o WHERE o.statut = 'actif' AND o.house_promoter = 0 AND COALESCE(o.org_type, 'collectif') = 'collectif'
                    AND MAX(o.nb_events_12m, o.nb_events_total) >= {}
                    AND NOT EXISTS(SELECT 1 FROM vi_promoter_contacts c WHERE c.promoter_id = o.id AND c.type = 'email')",
                 min_events.unwrap_or(3).max(1)

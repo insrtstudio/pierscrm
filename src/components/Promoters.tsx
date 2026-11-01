@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import clsx from "clsx";
-import { ExternalLink, Globe, Mail, RefreshCw, Sparkles, UserPlus, Users } from "lucide-react";
+import { ExternalLink, Globe, Mail, RefreshCw, ShieldCheck, Sparkles, UserPlus, Users } from "lucide-react";
 import { backendError } from "../lib/backendMessages";
 import { formatDate } from "../lib/format";
 import { useDebounced } from "../lib/hooks";
@@ -16,6 +16,10 @@ import {
   viPromotePromoters,
   viPromoterDetail,
   viStartPromoterEnrich,
+  viClassifyPromoters,
+  viSetPromoterType,
+  ORG_TYPES,
+  type OrgType,
   type PromoterFilter,
   type PromoterRow,
   type PromoterSort,
@@ -29,6 +33,21 @@ import { FitLine, FitScore, TimingBadge } from "./FitTiming";
 import { DmPanel, IgHandle, InstagramSearchButton } from "./InstagramDm";
 
 const PAGE = 100;
+
+/// "type_label_" / "one_label_": `label` alone is already the "Type" caption.
+const typeKey = (prefix: "type" | "one", t: OrgType) => `promoters.${prefix}_${t === "label" ? "label_" : t}`;
+
+/// What a row really is, when it is not a party collective.
+function OrgTypeBadge({ type, note, source }: { type?: OrgType | null; note?: string | null; source?: string | null }) {
+  const { t } = useTranslation();
+  if (!type || type === "collectif") return null;
+  const by = source ? t(`promoters.type_by_${source}`) : "";
+  return (
+    <span className="badge mt-0.5 bg-warn/15 text-warn" title={[by, note].filter(Boolean).join(" : ")}>
+      {t(typeKey("one", type))}
+    </span>
+  );
+}
 
 /// Toast for a promoted selection: "3 added to Outreach · 1 was already there".
 export function promoteSummaryText(t: TFunction, s: PromoteSummary) {
@@ -54,7 +73,9 @@ export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean 
   const [pays, setPays] = useState("all");
   const [hasEmail, setHasEmail] = useState(initialEmail);
   const [fitOnly, setFitOnly] = useState(false);
-  const [includeHouse, setIncludeHouse] = useState(false);
+  // Only real party collectives by default (org_type.rs sorts out clubs,
+  // labels, agencies, festivals and media listed as promoters on RA).
+  const [orgType, setOrgType] = useState<OrgType | "all">("collectif");
   const [sort, setSort] = useState<PromoterSort>("fit");
   const [openId, setOpenId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -64,9 +85,9 @@ export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean 
     pays,
     has_email: hasEmail || undefined,
     fit_min: fitOnly ? 40 : undefined,
-    include_house: includeHouse || undefined,
+    org_type: orgType,
   };
-  useEffect(() => setSelected(new Set()), [dSearch, pays, hasEmail, fitOnly, includeHouse, sort]);
+  useEffect(() => setSelected(new Set()), [dSearch, pays, hasEmail, fitOnly, orgType, sort]);
 
   const { data: pages, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteQuery({
     queryKey: ["vi_promoters", filter, sort],
@@ -120,6 +141,19 @@ export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean 
     },
     onError: (e) => toast(backendError(e), "error"),
   });
+  const classify = useMutation({
+    mutationFn: () => viClassifyPromoters(false),
+    onSuccess: (s) => {
+      refresh();
+      toast(
+        s.checked
+          ? t("promoters.classified", { checked: s.checked, collectif: s.collectif, other: s.other, ig: s.instagram_rejected })
+          : t("promoters.classified_none"),
+        "ok"
+      );
+    },
+    onError: (e) => toast(backendError(e), "error"),
+  });
   const enrich = useMutation({
     mutationFn: () => viStartPromoterEnrich(selected.size ? { ids: [...selected] } : {}),
     onSuccess: () => toast(t("promoters.enrich_started"), "ok"),
@@ -153,7 +187,6 @@ export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean 
   const chips = [
     { on: hasEmail, set: setHasEmail, label: t("venues.s_with_email") },
     { on: fitOnly, set: setFitOnly, label: t("fit.chip") },
-    { on: includeHouse, set: setIncludeHouse, label: t("promoters.include_house") },
   ];
 
   return (
@@ -174,6 +207,19 @@ export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean 
             </option>
           ))}
         </select>
+        <select
+          className="input w-auto"
+          value={orgType}
+          onChange={(e) => setOrgType(e.target.value as OrgType | "all")}
+          aria-label={t("promoters.type_label")}
+        >
+          {ORG_TYPES.map((ty) => (
+            <option key={ty} value={ty}>
+              {t(typeKey("type", ty))}
+            </option>
+          ))}
+          <option value="all">{t("promoters.type_all")}</option>
+        </select>
         <select className="input w-auto" value={sort} onChange={(e) => setSort(e.target.value as PromoterSort)}>
           {(["fit", "events", "recent", "name"] as const).map((s) => (
             <option key={s} value={s}>
@@ -181,7 +227,16 @@ export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean 
             </option>
           ))}
         </select>
-        <button className="btn-outline ml-auto" onClick={() => recompute.mutate()} disabled={recompute.isPending}>
+        <button
+          className="btn-outline ml-auto"
+          onClick={() => classify.mutate()}
+          disabled={classify.isPending}
+          title={t("promoters.classify_hint")}
+        >
+          <ShieldCheck size={15} className={classify.isPending ? "animate-pulse" : ""} />
+          {t("promoters.classify")}
+        </button>
+        <button className="btn-outline" onClick={() => recompute.mutate()} disabled={recompute.isPending}>
           <RefreshCw size={15} className={recompute.isPending ? "animate-spin" : ""} />
           {t("fit.recompute")}
         </button>
@@ -287,10 +342,15 @@ export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean 
                     <div className="truncate text-2xs text-fg-subtle">
                       {[p.ville, p.pays].filter(Boolean).join(", ")}
                     </div>
+                    <OrgTypeBadge type={p.org_type} note={p.org_type_note} source={p.org_type_source} />
                     <FitLine detail={p.fit_detail} />
                   </td>
-                  <td className="text-right tabular" title={t("promoters.events_hint", { total: p.nb_events_total })}>
-                    {p.nb_events_12m > 0 ? p.nb_events_12m : <span className="text-fg-faint">{p.nb_events_total}</span>}
+                  <td
+                    className="text-right tabular"
+                    title={p.nb_events_12m > 0 ? t("promoters.events_hint", { total: p.nb_events_total }) : t("promoters.events_legacy_hint")}
+                  >
+                    {/* No 12-month detail: the old total, marked as such. */}
+                    {p.nb_events_12m > 0 ? p.nb_events_12m : <span className="text-fg-faint">~{p.nb_events_total}</span>}
                   </td>
                   <td className="max-w-[220px] truncate text-xs text-fg-subtle" title={p.venues.join(", ")}>
                     {p.venues.join(", ")}
@@ -352,7 +412,15 @@ export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean 
 
 function PromoterFicheModal({ id, onClose }: { id: number; onClose: () => void }) {
   const { t } = useTranslation();
+  const qc = useQueryClient();
   const { data: f } = useQuery({ queryKey: ["vi_promoter", id], queryFn: () => viPromoterDetail(id) });
+  const setType = useMutation({
+    mutationFn: (ty: OrgType | null) => viSetPromoterType(id, ty),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["vi_promoter", id] });
+      qc.invalidateQueries({ queryKey: ["vi_promoters"] });
+    },
+  });
   return (
     <Modal open onClose={onClose} title={f?.row.nom ?? "…"} width="max-w-2xl">
       {!f ? (
@@ -361,6 +429,28 @@ function PromoterFicheModal({ id, onClose }: { id: number; onClose: () => void }
         </div>
       ) : (
         <div className="space-y-4 text-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              className="input h-8 w-auto py-0 text-xs"
+              value={f.row.org_type ?? "collectif"}
+              onChange={(e) => setType.mutate(e.target.value === "" ? null : (e.target.value as OrgType))}
+              aria-label={t("promoters.type_label")}
+            >
+              {ORG_TYPES.map((ty) => (
+                <option key={ty} value={ty}>
+                  {t(typeKey("one", ty))}
+                </option>
+              ))}
+              {f.row.org_type_source === "manual" && <option value="">{t("promoters.type_reset")}</option>}
+            </select>
+            <span className="text-2xs text-fg-subtle">
+              {f.row.org_type_source && t(`promoters.type_by_${f.row.org_type_source}`)}
+              {f.row.org_type_note && ` : ${f.row.org_type_note}`}
+            </span>
+          </div>
+          {f.row.instagram_rejected && !f.instagram && (
+            <div className="text-2xs text-fg-faint">{t("promoters.ig_rejected", { handle: f.row.instagram_rejected })}</div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <FitScore score={f.row.fit_score} detail={f.row.fit_detail} />
             <FitLine detail={f.row.fit_detail} />

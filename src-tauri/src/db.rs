@@ -811,6 +811,9 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // social_touches and the triggers carrying a handle to its contact.
     // Additive, see commands/social.rs.
     crate::commands::social::migrate(conn);
+    // ---- Promoter types (collectif / club / label / ...) ----
+    // vi_promoter_orgs.org_type*, instagram_rejected. See commands/org_type.rs.
+    crate::commands::org_type::migrate(conn);
 
     Ok(())
 }

@@ -34,4 +34,5 @@ pub mod reply_desk;
 pub mod playbook;
 pub mod autonomy;
 pub mod deliverability;
+pub mod org_type;
 pub mod social;

@@ -67,7 +67,27 @@ export interface PromoterRow {
   timing: Timing;
   /** Instagram handle without "@" (social.rs). */
   instagram?: string | null;
+  /** What it really is (org_type.rs), who decided ("rules" | "ai" | "manual") and why. */
+  org_type?: OrgType | null;
+  org_type_source?: string | null;
+  org_type_note?: string | null;
+  /** A handle dropped as not theirs. */
+  instagram_rejected?: string | null;
 }
+
+export const ORG_TYPES = ["collectif", "club", "label", "agence", "festival", "media", "autre"] as const;
+export type OrgType = (typeof ORG_TYPES)[number];
+
+export interface ClassifySummary {
+  checked: number;
+  collectif: number;
+  other: number;
+  instagram_rejected: number;
+  failed_batches: number;
+}
+export const viClassifyPromoters = (force = false) => invoke<ClassifySummary>("vi_classify_promoters", { force });
+export const viSetPromoterType = (id: number, orgType: OrgType | null) =>
+  invoke<void>("vi_set_promoter_type", { id, orgType });
 
 export interface PromoterFilter {
   search?: string;
@@ -75,6 +95,8 @@ export interface PromoterFilter {
   has_email?: boolean;
   fit_min?: number;
   include_house?: boolean;
+  /** "collectif" by default in the Collectifs tab, or "all". */
+  org_type?: OrgType | "all";
   in_pipeline?: boolean;
   min_events?: number;
 }

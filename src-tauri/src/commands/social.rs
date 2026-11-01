@@ -426,7 +426,7 @@ pub async fn vi_start_promoter_instagram(
 pub(crate) fn instagram_candidates(conn: &Connection, min_events: i64) -> Result<Vec<i64>, String> {
     let sql = format!(
         "SELECT o.id FROM vi_promoter_orgs o
-         WHERE o.statut = 'actif' AND o.house_promoter = 0 AND o.enriched_at IS NOT NULL
+         WHERE o.statut = 'actif' AND o.house_promoter = 0 AND COALESCE(o.org_type, 'collectif') = 'collectif' AND o.enriched_at IS NOT NULL
            AND MAX(o.nb_events_12m, o.nb_events_total) >= {}
            AND trim(COALESCE(o.instagram, '')) = '' AND o.instagram_checked_at IS NULL
          ORDER BY o.fit_score IS NULL, o.fit_score DESC, o.nb_events_total DESC LIMIT 2000",

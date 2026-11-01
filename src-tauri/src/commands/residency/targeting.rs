@@ -522,7 +522,7 @@ fn promoter_candidates(
         "SELECT o.id, o.nom, o.ville, o.pays, o.crm_contact_id, MAX(o.nb_events_12m, o.nb_events_total), o.site_web,
                 o.fit_score, o.fit_detail, o.lead_weeks, o.month_profile
          FROM vi_promoter_orgs o
-         WHERE o.statut = 'actif' AND o.house_promoter = 0 AND ({zone})
+         WHERE o.statut = 'actif' AND o.house_promoter = 0 AND COALESCE(o.org_type, 'collectif') = 'collectif' AND ({zone})
            AND MAX(o.nb_events_12m, o.nb_events_total) >= {PROMOTER_MIN_EVENTS}",
         zone = zone_parts.join(" OR "),
     );
