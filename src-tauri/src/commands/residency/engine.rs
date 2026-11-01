@@ -722,7 +722,17 @@ fn run_once(pool: &DbPool, app: &tauri::AppHandle, last_tick: Option<DateTime<Ut
     if !matches!(apply_gates(&conn, smtp_ok(pool), now), Gate::Open) {
         return ticked;
     }
-    if let Some(m) = pick_next(&conn, now) {
+    if let Some(mut m) = pick_next(&conn, now) {
+        if m.step == 1 {
+            if let (Some(client), Some(r)) = (super::insrt::client(&conn), load(&conn, m.campaign_id)) {
+                match content::link_before_send(&conn, m.id, m.campaign_id, m.contact_id, &r.config, &m.body, Some(client.as_ref())) {
+                    Ok(Some(body)) => m.body = body,
+                    Ok(None) => {}
+                    // Sent with the plain links rather than held back.
+                    Err(e) => log(&conn, Some(m.campaign_id), "warn", "press_link_failed", &e),
+                }
+            }
+        }
         let mailer = SmtpMailer { pool: pool.clone() };
         let outcome = send_picked(&conn, &mailer, &m, now);
         if outcome != Sent::Wait {

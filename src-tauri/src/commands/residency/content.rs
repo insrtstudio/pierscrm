@@ -403,6 +403,47 @@ fn press_link_for(
     client.press_link(kit, info.contact_id, &recipient, &info.lang).map(|l| Some(l.url))
 }
 
+/// Right before a first email goes out: a draft written without a personal
+/// press link (insrt unreachable when it was drafted, or set up outside the
+/// app) gets one now, in place of the plain asset links, so its views and
+/// listens show up. Returns the new body, None when nothing changed (no kit,
+/// no client, link already there, or the asset lines were edited away).
+pub fn link_before_send(
+    conn: &Connection,
+    msg_id: i64,
+    campaign_id: i64,
+    contact_id: i64,
+    cfg: &Config,
+    body: &str,
+    insrt: Option<&dyn Insrt>,
+) -> Result<Option<String>, String> {
+    // Only a first email still without its link.
+    let needs: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM campaign_messages WHERE id = ?1 AND step = 1 AND COALESCE(press_url, '') = ''",
+            params![msg_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if needs.is_none() {
+        return Ok(None);
+    }
+    let Some(block) = assets_block(cfg) else { return Ok(None) };
+    if !body.contains(&block) {
+        return Ok(None);
+    }
+    let Some(info) = target_info(conn, contact_id, cfg) else { return Ok(None) };
+    let Some(url) = press_link_for(conn, campaign_id, cfg, &info, insrt)? else { return Ok(None) };
+    let new_body = body.replacen(&block, &format!("\n{}", url.trim()), 1);
+    conn.execute(
+        "UPDATE campaign_messages SET body = ?2, press_url = ?3, updated_at = datetime('now') WHERE id = ?1",
+        params![msg_id, new_body, url.trim()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(Some(new_body))
+}
+
 /// Step-1 drafts for the audience: every planned contact without one (or the
 /// given contacts, regenerated). Sent messages are never touched.
 pub fn generate(
@@ -690,5 +731,25 @@ mod tests {
         drop(seen);
         let used: String = c.query_row("SELECT playbook_ids FROM campaign_messages WHERE step = 1", [], |r| r.get(0)).unwrap();
         assert_eq!(used, format!("[{}]", ok));
+    }
+
+    #[test]
+    fn a_plain_draft_gets_its_press_link_right_before_sending() {
+        let (c, mut cfg) = setup();
+        cfg.press_kit_id = Some("pk1".into());
+        // Drafted without insrt: the plain asset links stand in.
+        generate(&c, 1, &cfg, None, false, None, None).unwrap();
+        let (id, body): (i64, String) =
+            c.query_row("SELECT id, body FROM campaign_messages WHERE step = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        let block = assets_block(&cfg).unwrap();
+        assert!(body.contains(&block));
+        let new = link_before_send(&c, id, 1, 10, &cfg, &body, Some(&FakeInsrt)).unwrap().expect("link added");
+        assert!(new.contains("\nhttps://insrt.studio/p/pk1-10-fr") && !new.contains(&block), "{}", new);
+        let press: String = c.query_row("SELECT press_url FROM campaign_messages WHERE id = ?1", [id], |r| r.get(0)).unwrap();
+        assert_eq!(press, "https://insrt.studio/p/pk1-10-fr");
+        // Once only; and nothing without a client.
+        assert!(link_before_send(&c, id, 1, 10, &cfg, &new, Some(&FakeInsrt)).unwrap().is_none());
+        c.execute("UPDATE campaign_messages SET press_url = NULL, body = ?2 WHERE id = ?1", rusqlite::params![id, body]).unwrap();
+        assert!(link_before_send(&c, id, 1, 10, &cfg, &body, None).unwrap().is_none());
     }
 }
