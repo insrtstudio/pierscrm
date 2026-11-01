@@ -18,6 +18,7 @@ export function invalidateAfterReplySync(qc: QueryClient) {
     "dashboard",
     "suppressions",
     "reply_sync_status",
+    "inbound",
   ])
     qc.invalidateQueries({ queryKey: [key] });
 }

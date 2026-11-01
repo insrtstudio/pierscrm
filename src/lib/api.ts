@@ -4,6 +4,7 @@ import type {
   AudienceRow,
   EmailFilter,
   EmailPage,
+  InboundRow,
   ReplySyncResult,
   ReplySyncStatus,
   SendQuota,
@@ -209,6 +210,7 @@ export const sendQuota = () => invoke<SendQuota>("send_quota");
 // Reply detection (read-only IMAP scan)
 export const syncReplies = () => invoke<ReplySyncResult>("sync_replies");
 export const replySyncStatus = () => invoke<ReplySyncStatus>("reply_sync_status");
+export const listInbound = (limit?: number) => invoke<InboundRow[]>("list_inbound", { limit: limit ?? null });
 
 // ---- Visa ----
 export const listVisaCountries = () =>

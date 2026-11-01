@@ -174,6 +174,68 @@ pub fn list_suppressions(state: State<'_, AppState>) -> Result<Vec<Suppression>,
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
+/// One message received in the sending mailbox about one of our emails.
+#[derive(Serialize)]
+pub struct InboundRow {
+    pub id: i64,
+    pub kind: String,
+    pub from_addr: String,
+    pub subject: String,
+    pub received_at: String,
+    pub text: String,
+    pub matched_by: Option<String>,
+    pub contact_id: Option<i64>,
+    pub contact_name: Option<String>,
+    pub campaign_id: Option<i64>,
+    pub campaign_name: Option<String>,
+    /// Subject of the email it answers.
+    pub sent_subject: Option<String>,
+    /// What the agent read in it (interested, refused...), when classified.
+    pub intent: Option<String>,
+    pub summary: Option<String>,
+}
+
+/// Everything the reply sync recorded (replies, auto-replies, bounces,
+/// unsubscribes), newest first.
+#[tauri::command(async)]
+pub fn list_inbound(state: State<'_, AppState>, limit: Option<i64>) -> Result<Vec<InboundRow>, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let mut st = conn
+        .prepare(
+            "SELECT r.id, r.kind, r.from_addr, COALESCE(r.subject,''), COALESCE(r.received_at, r.created_at),
+                    COALESCE(r.body_excerpt,''), r.matched_by, k.id, k.name, c.id, c.name, e.subject, i.intent, i.summary
+             FROM email_replies r
+             LEFT JOIN emails e ON e.id = r.email_id
+             LEFT JOIN contacts k ON k.id = COALESCE(r.contact_id, e.contact_id)
+             LEFT JOIN campaigns c ON c.id = e.campaign_id
+             LEFT JOIN reply_insights i ON i.email_reply_id = r.id
+             ORDER BY COALESCE(r.received_at, r.created_at) DESC, r.id DESC
+             LIMIT ?1",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = st
+        .query_map(params![limit.unwrap_or(500).clamp(1, 2000)], |r| {
+            Ok(InboundRow {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                from_addr: r.get(2)?,
+                subject: r.get(3)?,
+                received_at: r.get(4)?,
+                text: r.get(5)?,
+                matched_by: r.get(6)?,
+                contact_id: r.get(7)?,
+                contact_name: r.get(8)?,
+                campaign_id: r.get(9)?,
+                campaign_name: r.get(10)?,
+                sent_subject: r.get(11)?,
+                intent: r.get(12)?,
+                summary: r.get(13)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
 /// Add addresses by hand (one or several, separated by commas, spaces or new
 /// lines). A refusal or unsubscribe also closes the matching contacts.
 #[tauri::command(async)]
@@ -1058,6 +1120,37 @@ fn sent_by_address(conn: &Connection, addr: &str, received: &str) -> Option<Sent
     })
 }
 
+/// Last fallback: the subject quotes one of our subjects ("Re: X", "Merci
+/// pour ta proposition - Re: X", a colleague answering a forward from another
+/// address). Our subjects name the club, so a long one is specific enough.
+fn sent_by_subject(conn: &Connection, subject: &str, received: &str) -> Option<SentRef> {
+    let s = subject.trim();
+    if s.chars().count() < 12 {
+        return None;
+    }
+    conn.query_row(
+        "SELECT id, contact_id, campaign_id, to_addr FROM emails
+         WHERE status = 'sent' AND sent_at <= ?2 AND length(trim(subject)) >= 12
+           AND instr(lower(?1), lower(trim(subject))) > 0
+         ORDER BY sent_at DESC LIMIT 1",
+        params![s, received],
+        |r| Ok(SentRef { email_id: r.get(0)?, contact_id: r.get(1)?, campaign_id: r.get(2)?, to_addr: r.get(3)? }),
+    )
+    .ok()
+}
+
+/// The sent email an inbound message answers: its references, else the
+/// address we mailed, else the subject it quotes.
+fn sent_for(conn: &Connection, h: &InboundHeaders, from: &str, received: &str) -> Option<(SentRef, &'static str)> {
+    if let Some(s) = sent_by_message_ids(conn, &h.refs) {
+        return Some((s, "message_id"));
+    }
+    if let Some(s) = sent_by_address(conn, from, received) {
+        return Some((s, "address"));
+    }
+    sent_by_subject(conn, &h.subject, received).map(|s| (s, "subject"))
+}
+
 /// Record one inbound message. Returns false when it was already recorded
 /// (re-scans are idempotent thanks to the UNIQUE message_id).
 fn record_inbound(
@@ -1261,7 +1354,11 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
     let mark: SyncMark = get_setting(conn, "imap_sync_mark")
         .and_then(|j| serde_json::from_str(&j).ok())
         .unwrap_or_default();
-    let min_uid = if mark.uid_validity == validity { mark.last_uid } else { 0 };
+    // One full rescan of the window after the matching widened (auto-replies
+    // without references, replies from another address of the club): already
+    // recorded messages are skipped by their message-id.
+    let rescan = get_setting(conn, "imap_rescan_v1").is_none();
+    let min_uid = if mark.uid_validity == validity && !rescan { mark.last_uid } else { 0 };
 
     let mut uids: Vec<u32> = session
         .uid_search(format!("SINCE {}", imap_date(since)))
@@ -1290,7 +1387,7 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
     // Replies (and matched auto-replies) whose text is fetched afterwards, for
     // the residency agent: (uid, message-id, content-type, transfer-encoding).
     let mut text_uids: Vec<(u32, String, String, String)> = Vec::new();
-    let mut max_uid = min_uid;
+    let mut max_uid = if mark.uid_validity == validity { mark.last_uid } else { 0 };
     for chunk in uids.chunks(50) {
         let set = chunk.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
         let fetches = session
@@ -1313,11 +1410,7 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
             let from = h.from.clone().unwrap_or_default();
             match classify(&h, &own) {
                 Inbound::Reply => {
-                    let (sent, by) = match sent_by_message_ids(conn, &h.refs) {
-                        Some(s) => (Some(s), "message_id"),
-                        None => (sent_by_address(conn, &from, &received), "address"),
-                    };
-                    let Some(sent) = sent else { continue };
+                    let Some((sent, by)) = sent_for(conn, &h, &from, &received) else { continue };
                     if record_inbound(conn, Some(&sent), &from, &h.subject, &mid, "reply", by, &received) {
                         apply_reply(conn, &sent, &from, &received);
                         out.replies += 1;
@@ -1326,10 +1419,11 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
                 }
                 // An out-of-office to one of our emails is not a reply (nothing
                 // moves in the pipeline) but the residency sequence reschedules
-                // around it, so it is recorded when it points at a sent email.
+                // around it, so it is recorded when it answers a sent email
+                // (many auto-responders, Gmail's among them, quote no reference).
                 Inbound::AutoReply => {
-                    let Some(sent) = sent_by_message_ids(conn, &h.refs) else { continue };
-                    if record_inbound(conn, Some(&sent), &from, &h.subject, &mid, "auto_reply", "message_id", &received) {
+                    let Some((sent, by)) = sent_for(conn, &h, &from, &received) else { continue };
+                    if record_inbound(conn, Some(&sent), &from, &h.subject, &mid, "auto_reply", by, &received) {
                         text_uids.push((uid, mid.clone(), h.content_type.clone(), h.transfer_encoding.clone()));
                     }
                 }
@@ -1411,6 +1505,9 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
         "imap_sync_mark",
         &serde_json::to_string(&SyncMark { uid_validity: validity, last_uid: max_uid }).unwrap_or_default(),
     );
+    if rescan {
+        put_setting(conn, "imap_rescan_v1", "1");
+    }
     out.no_answer = status::apply_no_answer(conn);
     Ok(out)
 }
@@ -1481,6 +1578,38 @@ mod tests {
         // An opt-out keeps the address on file.
         assert!(suppress(&c, "other@club.fr", "unsubscribe", None));
         assert_eq!(n("SELECT COUNT(*) FROM vi_contacts"), 1);
+    }
+
+    #[test]
+    fn auto_reply_without_references_is_matched() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE emails (id INTEGER PRIMARY KEY, contact_id INTEGER, campaign_id INTEGER, to_addr TEXT,
+                                  subject TEXT, message_id TEXT, status TEXT, sent_at TEXT);
+             CREATE TABLE contacts (id INTEGER PRIMARY KEY, email TEXT);
+             INSERT INTO emails VALUES
+               (39, 7, 5, 'dir-artistique@penichemecanique.com', 'La Péniche Mécanique x Piers, une idée de résidence',
+                '<a@insrt.fr>', 'sent', '2026-10-30 15:46:54'),
+               (40, 8, 5, 'info@club.fr', 'Club x Piers, une idée de résidence', '<b@insrt.fr>', 'sent', '2026-10-30 16:00:00');",
+        )
+        .unwrap();
+        // Gmail's vacation responder: no In-Reply-To, no References.
+        let raw = b"From: Direction Artistique - PENICHE MECANIQUE <dir-artistique@penichemecanique.com>\r\n\
+Subject: Merci pour ta proposition - Thanks for your submission Re: La =?UTF-8?Q?P=C3=A9niche_M=C3=A9canique?= x Piers, une =?UTF-8?Q?id=C3=A9e?= de =?UTF-8?Q?r=C3=A9sidence?=\r\n\
+Message-ID: <CAHF8xtn@mail.gmail.com>\r\nAuto-Submitted: auto-replied\r\nPrecedence: bulk\r\n\
+Content-Type: text/html; charset=\"UTF-8\"\r\n\r\n";
+        let h = read_inbound(raw);
+        assert!(matches!(classify(&h, "booking@insrt.fr"), Inbound::AutoReply));
+        let from = h.from.clone().unwrap();
+        let (s, by) = sent_for(&c, &h, &from, "2026-10-30 15:46:56").unwrap();
+        assert_eq!((s.email_id, by), (39, "address"));
+        // A colleague answering from another address: found by the quoted subject.
+        let other = InboundHeaders { from: Some("prog@penichemecanique.com".into()), ..h };
+        let (s, by) = sent_for(&c, &other, "prog@penichemecanique.com", "2026-10-31 09:00:00").unwrap();
+        assert_eq!((s.email_id, by), (39, "subject"));
+        // An unrelated message stays out.
+        let spam = InboundHeaders { subject: "Newsletter de novembre".into(), ..other };
+        assert!(sent_for(&c, &spam, "prog@penichemecanique.com", "2026-10-31 09:00:00").is_none());
     }
 
     #[test]

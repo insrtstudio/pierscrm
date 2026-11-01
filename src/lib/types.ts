@@ -253,6 +253,24 @@ export interface SendQuota {
   remaining: number;
 }
 
+/// A message received in the sending mailbox about one of our emails.
+export interface InboundRow {
+  id: number;
+  kind: "reply" | "auto_reply" | "bounce" | "unsubscribe" | string;
+  from_addr: string;
+  subject: string;
+  received_at: string;
+  text: string;
+  matched_by?: string | null;
+  contact_id?: number | null;
+  contact_name?: string | null;
+  campaign_id?: number | null;
+  campaign_name?: string | null;
+  sent_subject?: string | null;
+  intent?: string | null;
+  summary?: string | null;
+}
+
 export interface ReplySyncResult {
   scanned: number;
   replies: number;

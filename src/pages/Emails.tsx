@@ -47,11 +47,12 @@ import {
   listSuppressions,
   removeSuppression,
   replySyncStatus,
+  listInbound,
   setSetting,
   listCampaignAudience,
   removeFromCampaign,
 } from "../lib/api";
-import type { Campaign, Contact, EmailFilter, Template } from "../lib/types";
+import type { Campaign, Contact, EmailFilter, InboundRow, Template } from "../lib/types";
 import { AUDIENCE_STATES, CAMPAIGN_STATUSES, SUPPRESSION_REASONS } from "../lib/types";
 import { PageHeader, EmptyState } from "../components/Layout";
 import { Modal, Field, useToast, useConfirm, useSubmit, errorMessage } from "../components/ui";
@@ -74,7 +75,7 @@ import { daysUntil, formatDateTime } from "../lib/format";
 
 const LINK_FIELDS = ["mix", "listen", "onepager", "epk"] as const;
 
-type Tab = "replies" | "compose" | "bulk" | "followups" | "campaigns" | "templates" | "log" | "guardrails";
+type Tab = "replies" | "inbox" | "compose" | "bulk" | "followups" | "campaigns" | "templates" | "log" | "guardrails";
 
 const CAMPAIGN_COLORS = [
   "#ff5a1f", "#f2b880", "#6f7782", "#3fb27f", "#d9430f", "#8b929c", "#4a4744", "#ffa66b",
@@ -92,7 +93,7 @@ const CAMPAIGN_STATUS_STYLE: Record<string, string> = {
 /// history, templates). Both render this component with their own tabs.
 const SECTIONS: Record<"campaigns" | "outbox", Tab[]> = {
   campaigns: ["campaigns", "bulk"],
-  outbox: ["replies", "followups", "compose", "log", "templates", "guardrails"],
+  outbox: ["replies", "inbox", "followups", "compose", "log", "templates", "guardrails"],
 };
 
 export function Emails({ section = "outbox" }: { section?: "campaigns" | "outbox" }) {
@@ -129,6 +130,7 @@ export function Emails({ section = "outbox" }: { section?: "campaigns" | "outbox
         </div>
 
         {tab === "replies" && <ReplyDeskTab />}
+        {tab === "inbox" && <InboxTab />}
         {tab === "compose" && <ComposeTab />}
         {tab === "bulk" && <BulkSend />}
         {tab === "followups" && <FollowupsTab />}
@@ -1001,6 +1003,101 @@ function useReplySyncAction(): [() => Promise<void>, boolean] {
     }
   };
   return [run, busy];
+}
+
+// ---------------- Received ----------------
+
+const INBOUND_KINDS = ["reply", "auto_reply", "bounce", "unsubscribe"] as const;
+const INBOUND_STYLE: Record<string, string> = {
+  reply: "bg-accent/10 text-accent-2",
+  auto_reply: "bg-chrome-dark/10 text-chrome-dark",
+  bounce: "bg-danger/10 text-danger",
+  unsubscribe: "bg-fg-faint/10 text-fg-muted",
+};
+
+/// Everything the mailbox received about our emails: replies, auto-replies,
+/// bounces and unsubscribes, with the text, the contact and the campaign.
+function InboxTab() {
+  const { t } = useTranslation();
+  const [syncNow, syncing] = useReplySyncAction();
+  const [kind, setKind] = useState<string>("");
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState<number | null>(null);
+  const { data: rows = [], isLoading } = useQuery({ queryKey: ["inbound"], queryFn: () => listInbound(500) });
+  const q = search.trim().toLowerCase();
+  const shown = rows.filter(
+    (r) =>
+      (!kind || r.kind === kind) &&
+      (!q || [r.from_addr, r.subject, r.contact_name, r.campaign_name, r.text].some((v) => v?.toLowerCase().includes(q)))
+  );
+  const counts = (k: string) => rows.filter((r) => r.kind === k).length;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          className="input w-56 py-1.5 text-xs"
+          placeholder={t("emails.inbox_search")}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <select className="input w-auto py-1.5 text-xs" value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="">{t("emails.inbox_all", { count: rows.length })}</option>
+          {INBOUND_KINDS.map((k) => (
+            <option key={k} value={k}>
+              {t(`emails.inbox_kind_${k}`)} ({counts(k)})
+            </option>
+          ))}
+        </select>
+        <div className="ml-auto">
+          <button className="btn-outline" onClick={syncNow} disabled={syncing}>
+            <Inbox size={14} className={syncing ? "animate-pulse" : ""} />
+            {syncing ? t("emails.syncing_replies") : t("emails.sync_replies")}
+          </button>
+        </div>
+      </div>
+      {!isLoading && shown.length === 0 ? (
+        <div className="card p-8 text-center text-sm text-fg-muted">{t("emails.inbox_empty")}</div>
+      ) : (
+        <div className="card divide-y divide-border">
+          {shown.map((r: InboundRow) => (
+            <div key={r.id} className="p-3">
+              <button className="flex w-full items-start gap-3 text-left" onClick={() => setOpen(open === r.id ? null : r.id)}>
+                <span className={clsx("mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[11px]", INBOUND_STYLE[r.kind] ?? INBOUND_STYLE.unsubscribe)}>
+                  {t(`emails.inbox_kind_${r.kind}`, { defaultValue: r.kind })}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline gap-x-2">
+                    <span className="font-medium">{r.contact_name || r.from_addr}</span>
+                    {r.contact_name && <span className="text-xs text-fg-muted">{r.from_addr}</span>}
+                    <span className="ml-auto shrink-0 text-xs tabular text-fg-muted">{formatDateTime(r.received_at)}</span>
+                  </div>
+                  <div className="truncate text-sm">{r.subject || t("emails.inbox_no_subject")}</div>
+                  <div className="truncate text-xs text-fg-muted">
+                    {r.summary || r.text.replace(/\s+/g, " ").slice(0, 160) || t("emails.inbox_no_text")}
+                  </div>
+                </div>
+              </button>
+              {open === r.id && (
+                <div className="mt-3 space-y-2 pl-3 text-sm">
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted">
+                    {r.campaign_name && <span>{t("emails.inbox_campaign", { name: r.campaign_name })}</span>}
+                    {r.sent_subject && <span>{t("emails.inbox_answers", { subject: r.sent_subject })}</span>}
+                    {r.matched_by && r.matched_by !== "message_id" && (
+                      <span>{t(`emails.inbox_matched_${r.matched_by}`, { defaultValue: "" })}</span>
+                    )}
+                  </div>
+                  <pre className="whitespace-pre-wrap break-words rounded bg-surface-2 p-3 font-sans text-sm">
+                    {r.text || t("emails.inbox_no_text")}
+                  </pre>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const LOG_PAGE = 100;

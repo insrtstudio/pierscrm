@@ -150,6 +150,7 @@ pub fn run() {
             commands::campaigns::list_campaign_audience,
             // outbox guardrails + reply detection
             commands::outbox::list_suppressions,
+            commands::outbox::list_inbound,
             commands::outbox::add_suppression,
             commands::outbox::remove_suppression,
             commands::outbox::send_quota,
