@@ -1188,7 +1188,7 @@ pub fn mark_sent(conn: &Connection, id: i64, email_id: Option<i64>, subject: &st
         params![id, email_id, subject, body],
     );
     let _ = conn.execute(
-        "UPDATE reply_insights SET handled = 1 WHERE email_reply_id = (SELECT email_reply_id FROM reply_desk WHERE id = ?1)",
+        "UPDATE reply_insights SET handled = 1, handled_at = COALESCE(handled_at, datetime('now')) WHERE email_reply_id = (SELECT email_reply_id FROM reply_desk WHERE id = ?1)",
         params![id],
     );
 }
@@ -1245,7 +1245,7 @@ pub fn desk_ignore(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     c.execute("UPDATE reply_desk SET state = 'ignored', updated_at = datetime('now') WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     let _ = c.execute(
-        "UPDATE reply_insights SET handled = 1 WHERE email_reply_id = (SELECT email_reply_id FROM reply_desk WHERE id = ?1)",
+        "UPDATE reply_insights SET handled = 1, handled_at = COALESCE(handled_at, datetime('now')) WHERE email_reply_id = (SELECT email_reply_id FROM reply_desk WHERE id = ?1)",
         params![id],
     );
     Ok(())

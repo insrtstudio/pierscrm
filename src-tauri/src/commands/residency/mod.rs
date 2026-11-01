@@ -14,10 +14,12 @@
 //! - `replies`   reply classification and what each answer triggers
 //! - `report`    daily report aggregation + synthesis
 //! - `commands`  the Tauri commands the campaign page calls
+//! - `agenda`    Agenda › Actions as a week: what to do and what was done, per day
 //!
 //! The agent never answers a human: interested / question replies become an
 //! Action with a suggested answer the user sends from ComposeModal.
 
+pub mod agenda;
 pub mod claude;
 pub mod commands;
 pub mod content;
@@ -59,6 +61,7 @@ use zone::{Window, Zone};
 ///                                the "Plus tard" of a proposal (expand.rs)
 /// - email_replies.body_excerpt   text of a reply, for classification
 /// - email_replies.text_tries     backfills of a reply stored without text
+/// - reply_insights.handled_at    when the action was done (week agenda)
 pub fn migrate(conn: &Connection) {
     for stmt in [
         "ALTER TABLE campaigns ADD COLUMN kind TEXT NOT NULL DEFAULT 'standard'",
@@ -163,6 +166,7 @@ pub fn migrate(conn: &Connection) {
             created_at         TEXT NOT NULL DEFAULT (datetime('now'))
         )",
         "CREATE INDEX IF NOT EXISTS idx_residency_expansions_source ON residency_expansions(source_campaign_id, kind)",
+        "ALTER TABLE reply_insights ADD COLUMN handled_at TEXT",
     ] {
         let _ = conn.execute(stmt, []);
     }

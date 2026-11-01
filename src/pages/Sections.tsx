@@ -18,8 +18,13 @@ export function AgendaSection() {
       subtitle={t("agenda.subtitle")}
       tabs={[
         { key: "calendar", label: t("sections.agenda_calendar"), render: () => <Agenda /> },
-        { key: "actions", label: t("sections.agenda_actions"), render: () => <Actions /> },
-        { key: "planning", label: t("sections.agenda_planning"), render: () => <Timeline /> },
+        { key: "actions", label: t("sections.agenda_actions"), subtitle: t("sections.agenda_actions_subtitle"), render: () => <Actions /> },
+        {
+          key: "planning",
+          label: t("sections.agenda_planning"),
+          subtitle: t("sections.agenda_planning_subtitle"),
+          render: () => <Timeline />,
+        },
       ]}
     />
   );

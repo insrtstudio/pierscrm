@@ -704,10 +704,19 @@ pub async fn insrt_sync_activity(state: State<'_, AppState>) -> Result<usize, St
 
 // ---------------- Agenda › Actions ----------------
 
-#[derive(Serialize)]
+/// A campaign a merged "expand" item follows on from.
+#[derive(Serialize, Debug, Clone)]
+pub struct ExpandSource {
+    pub id: i64,
+    pub name: String,
+    pub remaining: i64,
+}
+
+#[derive(Serialize, Debug)]
 pub struct ActionItem {
     pub key: String,
-    /// plan | reply | unread | later | wrong | hot
+    /// plan | reply | unread | later | wrong | hot | expand | expand_review,
+    /// and in the week agenda (agenda.rs) scheduled | snoozed
     pub kind: String,
     pub day: String,
     pub campaign_id: Option<i64>,
@@ -728,10 +737,19 @@ pub struct ActionItem {
     /// "expand": the next zone to open; first emails the campaign has left.
     pub expand: Option<expand::Suggestion>,
     pub remaining: Option<i64>,
+    /// "expand": every campaign running dry that this zone would follow on
+    /// from (one card per zone, not one per campaign).
+    pub sources: Option<Vec<ExpandSource>>,
+    /// "scheduled": how many of `count` are follow-ups.
+    pub followups: Option<i64>,
+    /// "snoozed": the Outbox › Replies item.
+    pub desk_id: Option<i64>,
+    /// Week agenda: due before today, shown on today.
+    pub overdue: bool,
 }
 
 impl ActionItem {
-    fn new(key: String, kind: &str, day: String, name: String) -> Self {
+    pub(crate) fn new(key: String, kind: &str, day: String, name: String) -> Self {
         ActionItem {
             key,
             kind: kind.into(),
@@ -753,6 +771,10 @@ impl ActionItem {
             next_at: None,
             expand: None,
             remaining: None,
+            sources: None,
+            followups: None,
+            desk_id: None,
+            overdue: false,
         }
     }
 }
@@ -786,20 +808,25 @@ pub fn actions(conn: &Connection) -> Result<Vec<ActionItem>, String> {
         out.push(a);
     }
     // Campaigns running dry: the next zone to open, or the drafts of the
-    // campaign the last proposal created, still to review.
+    // campaign the last proposal created, still to review. Several campaigns
+    // running dry usually point at the same zone: one card per zone, naming
+    // every campaign it would follow on from.
+    let mut zones: Vec<(String, Vec<(ExpandSource, expand::Suggestion)>)> = Vec::new();
+    let mut reviews = std::collections::HashSet::new();
     for id in super::active_ids(conn) {
         let name: String = conn.query_row("SELECT name FROM campaigns WHERE id = ?1", params![id], |x| x.get(0)).unwrap_or_default();
         match expand::proposal(conn, id) {
             Some(expand::Proposal::Expand { remaining, suggestion }) => {
-                let mut a = ActionItem::new(format!("ex{}", id), "expand", today.clone(), name.clone());
-                a.campaign_id = Some(id);
-                a.campaign = Some(name);
-                a.count = Some(suggestion.eligible);
-                a.remaining = Some(remaining);
-                a.expand = Some(suggestion);
-                out.push(a);
+                let src = (ExpandSource { id, name, remaining }, suggestion);
+                match zones.iter_mut().find(|(k, _)| *k == src.1.key) {
+                    Some((_, list)) => list.push(src),
+                    None => zones.push((src.1.key.clone(), vec![src])),
+                }
             }
             Some(expand::Proposal::Review { campaign_id, name: child, drafts }) => {
+                if !reviews.insert(campaign_id) {
+                    continue;
+                }
                 let mut a = ActionItem::new(format!("exr{}", id), "expand_review", today.clone(), name);
                 a.campaign_id = Some(campaign_id);
                 a.campaign = Some(child);
@@ -808,6 +835,20 @@ pub fn actions(conn: &Connection) -> Result<Vec<ActionItem>, String> {
             }
             None => {}
         }
+    }
+    for (_, list) in zones {
+        // Created from the campaign with the fewest first emails left (the
+        // first one on a tie), with that campaign's view of the zone.
+        let pick = (0..list.len()).min_by_key(|&i| (list[i].0.remaining, i)).unwrap_or(0);
+        let (src, suggestion) = list[pick].clone();
+        let mut a = ActionItem::new(format!("ex{}", src.id), "expand", today.clone(), src.name.clone());
+        a.campaign_id = Some(src.id);
+        a.campaign = Some(src.name);
+        a.count = Some(suggestion.eligible);
+        a.remaining = Some(src.remaining);
+        a.expand = Some(suggestion);
+        a.sources = Some(list.into_iter().map(|(s, _)| s).collect());
+        out.push(a);
     }
     // Classified replies still to handle.
     let mut st = conn
@@ -899,7 +940,7 @@ pub fn residency_actions(state: State<'_, AppState>) -> Result<Vec<ActionItem>, 
 #[tauri::command(async)]
 pub fn residency_mark_handled(state: State<'_, AppState>, insight_id: i64) -> Result<(), String> {
     let conn = conn(&state)?;
-    conn.execute("UPDATE reply_insights SET handled = 1 WHERE id = ?1", params![insight_id])
+    conn.execute("UPDATE reply_insights SET handled = 1, handled_at = datetime('now') WHERE id = ?1", params![insight_id])
         .map_err(|e| e.to_string())?;
     Ok(())
 }
