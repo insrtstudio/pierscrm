@@ -182,6 +182,7 @@ pub fn run() {
             commands::residency::commands::residency_report_now,
             commands::residency::commands::residency_log,
             commands::residency::commands::residency_actions,
+            commands::residency::agenda::agenda_week,
             commands::residency::commands::residency_mark_handled,
             commands::residency::commands::residency_expand,
             commands::residency::commands::residency_expand_create,

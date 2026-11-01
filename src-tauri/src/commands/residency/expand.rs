@@ -627,6 +627,48 @@ mod tests {
         assert!(proposal(&c, 1).is_none());
     }
 
+    /// Three campaigns running dry towards the same zone: one card naming the
+    /// three, created from the one with the fewest first emails left; once
+    /// created, its review shows once.
+    #[test]
+    fn one_card_per_zone_when_several_campaigns_run_dry() {
+        let c = setup();
+        c.execute_batch(
+            "INSERT INTO campaigns (id, name, kind, artist_id) VALUES (3, 'Résidence Bretagne', 'residency', 1);
+             INSERT INTO contacts (id, category, name, venue, area, email, status) VALUES
+                (12, 'venue', 'Club B1', 'Club B1', 'Brussels', 'booking@b1.be', 'to_contact');
+             INSERT INTO campaign_contacts (campaign_id, contact_id, state) VALUES (2, 12, 'planned');",
+        )
+        .unwrap();
+        let mut bzh = load(&c, 1).unwrap().config;
+        bzh.zone = Zone { cities: vec!["Rennes".into()], ..Default::default() };
+        save_config(&c, 3, &bzh).unwrap();
+        c.execute("UPDATE residency_campaigns SET autopilot = 1", []).unwrap();
+        // Paris 2 left, Belgique 1, Bretagne 0: all three dry, same best zone.
+        let key = |id| match proposal(&c, id) {
+            Some(Proposal::Expand { suggestion, .. }) => suggestion.key,
+            other => panic!("{:?}", other),
+        };
+        assert_eq!(key(1), key(2));
+        assert_eq!(key(1), key(3));
+        let a = crate::commands::residency::commands::actions(&c).unwrap();
+        let ex: Vec<_> = a.iter().filter(|x| x.kind == "expand").collect();
+        assert_eq!(ex.len(), 1, "{:?}", ex);
+        let x = ex[0];
+        let src: Vec<(i64, i64)> = x.sources.as_ref().unwrap().iter().map(|s| (s.id, s.remaining)).collect();
+        assert_eq!(src, vec![(1, 2), (2, 1), (3, 0)]);
+        assert_eq!((x.campaign_id, x.remaining, x.key.as_str()), (Some(3), Some(0), "ex3"));
+
+        // Created from Bretagne: one review, the other two have nothing left to open.
+        let zone = x.expand.as_ref().unwrap().zone.clone();
+        let r = create(&c, 3, zone, None, None, None).unwrap();
+        let a = crate::commands::residency::commands::actions(&c).unwrap();
+        let reviews: Vec<_> = a.iter().filter(|x| x.kind == "expand_review").collect();
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].campaign_id, Some(r.campaign_id));
+        assert!(!a.iter().any(|x| x.kind == "expand"));
+    }
+
     #[test]
     fn one_click_creates_the_campaign_up_to_drafts() {
         let c = setup();

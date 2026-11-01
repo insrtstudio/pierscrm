@@ -381,7 +381,8 @@ export function PageHeader({
   );
 }
 
-export type PageTab = { key: string; label: string; render: () => React.ReactNode };
+/// `subtitle` replaces the page's own while that tab is open.
+export type PageTab = { key: string; label: string; subtitle?: string; render: () => React.ReactNode };
 
 /// A section made of several former pages (Accueil = overview + goals,
 /// Découverte = venues + curators...). The active tab lives in `?tab=` so the
@@ -402,7 +403,7 @@ export function TabbedPage({
   const active = tabs.find((tb) => tb.key === params.get("tab")) ?? tabs[0];
   return (
     <div>
-      <PageHeader title={title} subtitle={subtitle} kicker={kicker}>
+      <PageHeader title={title} subtitle={active.subtitle ?? subtitle} kicker={kicker}>
         <div className="flex flex-wrap items-end justify-between gap-x-4">
         <div role="tablist" className="-mb-px flex gap-6 overflow-x-auto">
           {tabs.map((tb) => (

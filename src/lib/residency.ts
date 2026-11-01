@@ -281,7 +281,7 @@ export interface PressKit {
 
 export interface ResidencyAction {
   key: string;
-  kind: "plan" | "reply" | "unread" | "later" | "wrong" | "hot" | "expand" | "expand_review";
+  kind: "plan" | "reply" | "unread" | "later" | "wrong" | "hot" | "expand" | "expand_review" | "scheduled" | "snoozed";
   day: string;
   campaign_id?: number | null;
   campaign?: string | null;
@@ -301,6 +301,60 @@ export interface ResidencyAction {
   /** "expand": the next zone to open, and the first emails left. */
   expand?: ExpandSuggestion | null;
   remaining?: number | null;
+  /** "expand": every campaign running dry this zone would follow on from. */
+  sources?: { id: number; name: string; remaining: number }[] | null;
+  /** "scheduled": how many of `count` are follow-ups. */
+  followups?: number | null;
+  /** "snoozed": the Outbox › Réponses item. */
+  desk_id?: number | null;
+  /** Week agenda: due before today, shown on today. */
+  overdue?: boolean;
+}
+
+/// One line of what was done (commands/residency/agenda.rs), already grouped.
+export interface DoneItem {
+  key: string;
+  kind:
+    | "first_emails"
+    | "followups"
+    | "emails"
+    | "reply"
+    | "auto_reply"
+    | "dismissed"
+    | "handled"
+    | "expand_later"
+    | "campaign"
+    | "thanks"
+    | "rebook"
+    | "routing"
+    | "offer_sent"
+    | "offer_accepted"
+    | "paid";
+  day: string;
+  count: number;
+  campaign_id?: number | null;
+  /** Campaign name ("paid": "deposit" | "balance"). */
+  campaign?: string | null;
+  contact_id?: number | null;
+  name?: string | null;
+  names: string[];
+  at?: string | null;
+  event_id?: number | null;
+}
+
+export interface AgendaDay {
+  day: string;
+  todo: ResidencyAction[];
+  done: DoneItem[];
+}
+
+/// Agenda › Actions, Monday to Sunday.
+export interface AgendaWeek {
+  start: string;
+  today: string;
+  days: AgendaDay[];
+  /** Contacts with a residency reply to handle (any day). */
+  reply_contacts: number[];
 }
 
 /// A zone no active residency campaign covers (commands/residency/expand.rs).
@@ -394,6 +448,7 @@ export const reportNow = (campaignId: number) => invoke<boolean>("residency_repo
 export const residencyLog = (campaignId?: number | null, limit?: number) =>
   invoke<LogRow[]>("residency_log", { campaignId: campaignId ?? null, limit: limit ?? 100 });
 export const residencyActions = () => invoke<ResidencyAction[]>("residency_actions");
+export const agendaWeek = (start: string) => invoke<AgendaWeek>("agenda_week", { start });
 export const markHandled = (insightId: number) => invoke<void>("residency_mark_handled", { insightId });
 export const residencyExpand = (campaignId: number) => invoke<ExpandView>("residency_expand", { campaignId });
 export const createExpansion = (campaignId: number, zone: Zone, name?: string | null) =>
