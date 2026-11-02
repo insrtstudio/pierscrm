@@ -770,9 +770,9 @@ pub struct PitchDraft {
     pub note: Option<String>,
 }
 
-const ROUTING_SYSTEM: &str = "You write a short booking email from a DJ/producer to a club or promoter. \
+const ROUTING_RULES: &str = "You write a short booking email from a DJ/producer to a club or promoter. \
 It goes out under the artist's own name, written by Thibault who plays as the artist name given, and must read \
-like he typed it himself between two studio sessions: warm, direct, a bit casual, confident without selling.
+like he typed it himself: cool, relaxed, direct, humble without sounding like a beginner, never selling.
 
 The kind of email is given:
 - routing: he already plays a confirmed date nearby (venue, city, day given) and offers the free day given to this club.
@@ -787,14 +787,16 @@ on its own line (the full signature is appended automatically, never write it).
 For routing, say the confirmed date plainly (\"Je joue à <city> le samedi 12, je serais dispo le vendredi 11\").
 - When the contact booked him before, say it simply, it is the reason for the email.
 - End with one simple, relaxed question.
-- Sound human: vary sentence length, spoken turns, contractions in English. At most one exclamation mark.
-- Never use: \"Je me permets\", \"N'hésitez pas\", \"correspond parfaitement\", \"passionné\", \"univers\", \"synergie\", \
-\"je serais ravi de\", \"Cordialement\", \"I hope this email finds you well\", \"I'm reaching out\", \"excited\", \"thrilled\", \
-\"passionate\", \"vibrant\", \"elevate\", \"journey\", \"unique opportunity\". No em dashes or en dashes.
-- Subject: under 60 characters, lowercase feel. No clickbait.
+{HOUSE}- Subject: under 60 characters, lowercase feel. No clickbait.
 - Write in the language requested.
 
 Answer with JSON only: {\"subject\": \"...\", \"body\": \"...\"}.";
+
+/// The routing rules with the house voice shared by every text written under
+/// Thibault's name (residency/content.rs).
+fn routing_system() -> String {
+    ROUTING_RULES.replace("{HOUSE}", crate::commands::residency::content::HOUSE_VOICE)
+}
 
 fn draft_schema() -> serde_json::Value {
     json!({
@@ -980,7 +982,7 @@ pub fn write_draft(conn: &Connection, llm: Option<&dyn Llm>, model: &str, facts:
     let req = LlmRequest {
         model: model.to_string(),
         max_tokens: 700,
-        system: vec![SystemBlock { text: ROUTING_SYSTEM.into(), cache: true }],
+        system: vec![SystemBlock { text: routing_system(), cache: true }],
         user: facts.prompt(),
         schema: Some(draft_schema()),
     };

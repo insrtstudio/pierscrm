@@ -257,8 +257,25 @@ rider, mix link, free weekends, press link) and move one concrete step toward a 
 - nudge: Thibault's last message got no answer for a few days while the conversation was going. Write a short, light \
 follow-up (40 to 80 words) that makes answering easy, optionally offering one or two free weekends.
 
-Voice: warm, direct, a bit casual, confident without selling, as if typed between two studio sessions. Keep the \
-formality of the thread (tu or vous as they wrote; vous by default in French).
+Voice: the same as Thibault's first emails. Cool, relaxed, direct, short sentences, humble without ever sounding \
+like a beginner, never selling. Keep the formality of the thread (tu or vous as they wrote; vous by default in French).
+
+Example of a good French reply (adapt, do not copy):
+---
+Hello Julie,
+
+Merci pour le retour, ça fait plaisir.
+
+Pour les dates, je suis libre les week-ends du 14 et du 28 novembre. Si une des deux vous va, je bloque.
+
+Mon dernier mix est juste en dessous si vous voulez le faire écouter à l'équipe.
+https://example.link
+
+On s'appelle cette semaine pour caler le reste ?
+
+À bientôt,
+Thibault
+---
 
 Rules:
 - 50 to 130 words for a reply. Plain text, short paragraphs, no markdown, no emojis, no lists, no subject line.
@@ -424,10 +441,10 @@ pub fn template_draft(input: &DraftInput) -> String {
     let link = f.epk_url.clone().or_else(|| f.mix_url.clone()).filter(|l| !l.trim().is_empty());
     let mut parts: Vec<String> = vec!["Hello,".into()];
     match (input.kind.unwrap_or(Kind::Reply), en) {
-        (Kind::Reply, false) => parts.push("Merci pour votre retour, ça me fait vraiment plaisir.".into()),
-        (Kind::Reply, true) => parts.push("Thanks a lot for getting back to me, really glad to hear from you.".into()),
-        (Kind::Nudge, false) => parts.push("Je reviens vers vous suite à mon dernier message, est-ce que vous avez pu en parler de votre côté ?".into()),
-        (Kind::Nudge, true) => parts.push("Just following up on my last message, have you had a chance to talk it over?".into()),
+        (Kind::Reply, false) => parts.push("Merci pour le retour, ça fait plaisir.".into()),
+        (Kind::Reply, true) => parts.push("Thanks for getting back to me, good to hear from you.".into()),
+        (Kind::Nudge, false) => parts.push("Petit message pour savoir si vous avez pu en parler de votre côté.".into()),
+        (Kind::Nudge, true) => parts.push("Quick one to see if you had a chance to talk it over.".into()),
     }
     if !days.is_empty() {
         let l = human_list(&days, &input.lang);
@@ -440,9 +457,9 @@ pub fn template_draft(input: &DraftInput) -> String {
         });
     }
     if let Some(l) = link {
-        parts.push(if en { format!("Everything is here if useful:\n{}", l.trim()) } else { format!("Tout est là si besoin :\n{}", l.trim()) });
+        parts.push(if en { format!("My latest mix is just below.\n{}", l.trim()) } else { format!("Mon dernier mix est juste en dessous.\n{}", l.trim()) });
     }
-    parts.push(if en { "Shall we have a quick call this week?".into() } else { "On s'appelle cette semaine pour en parler ?".into() });
+    parts.push(if en { "Up for a quick call this week?".into() } else { "On s'appelle cette semaine pour en parler ?".into() });
     parts.push(if en { "Cheers,\nThibault".into() } else { "À bientôt,\nThibault".into() });
     parts.join("\n\n")
 }

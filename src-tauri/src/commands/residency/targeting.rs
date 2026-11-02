@@ -44,8 +44,9 @@ const OFF_TOPIC_STEMS: &[&str] = &[
 /// Never picked as a venue's pitch address (best_email), whatever else is on
 /// file; press and reservations stay pickable at rank 4.
 const NEVER_PITCH_STEMS: &[&str] =
-    &["ticket", "billet", "shop", "boxoffice", "kassa", "vorverkauf", "recrut", "career", "bewerbung"];
-const NEVER_PITCH_WORDS: &[&str] = &["jobs", "job", "rh", "hr", "emploi"];
+    &["ticket", "billet", "shop", "boxoffice", "kassa", "vorverkauf", "recrut", "career", "bewerbung", "merch", "volunteer", "benevol"];
+/// A label's demo inbox is for unsigned tracks, not for bookings.
+const NEVER_PITCH_WORDS: &[&str] = &["jobs", "job", "rh", "hr", "emploi", "demo", "demos", "recordings", "store", "orders"];
 
 fn local_tokens(local: &str) -> Vec<&str> {
     local.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).collect()
@@ -492,7 +493,7 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
     // (typed by hand, imported): matched on their city.
     let with_promoters = opts.include_promoters == Some(true);
     if with_promoters {
-        promoter_candidates(conn, campaign_id, cfg, &cities, &pays, &mut seen_addr, &mut out)?;
+        promoter_candidates(conn, campaign_id, cfg, &cities, &pays, unmatched_ok, &mut seen_addr, &mut out)?;
     }
     pipeline_candidates(conn, campaign_id, cfg, &cities, &countries, with_promoters, &mut seen_addr, &mut out)?;
 
@@ -519,12 +520,14 @@ pub const PROMOTER_MIN_EVENTS: i64 = 3;
 /// Discovery promoters of the zone (main city in the zone's cities, or
 /// country in its countries) with an address of their own. Capacity does not
 /// apply: a collective rents rooms of every size.
+#[allow(clippy::too_many_arguments)]
 fn promoter_candidates(
     conn: &Connection,
     campaign_id: i64,
     cfg: &Config,
     cities: &[String],
     pays: &[String],
+    unmatched_ok: bool,
     seen_addr: &mut HashSet<String>,
     out: &mut BuildResult,
 ) -> Result<(), String> {
@@ -576,6 +579,13 @@ fn promoter_candidates(
     for (id, nom, ville, pays, crm, events, site, fit, fit_detail, lead, profile) in rows {
         if in_audience(conn, campaign_id, crm) {
             out.excluded_in_audience += 1;
+            continue;
+        }
+        // Same rule as the clubs: a collective is pitched only when it books
+        // the artist's style (a fit score, or reference artists in its nights).
+        let matched_count = crate::commands::fit::matched_artists(fit_detail.as_deref()).len() as i64;
+        if !unmatched_ok && !style_match(fit, matched_count) {
+            out.excluded_unmatched += 1;
             continue;
         }
         let cands: Vec<EmailCand> = email_st

@@ -695,8 +695,9 @@ confident without selling. Nothing like an email.
 
 Voice (French example, adapt, do not copy):
 ---
-Salut ! Moi c'est Thibault, je mixe sous le nom de Piers (house, tech house). J'ai vu passer DJ Seinfeld chez vous, \
-ça m'a donné envie de t'écrire. Si un jour vous cherchez quelqu'un pour une date, je te laisse mon dernier mix : https://example.link
+Salut, moi c'est Thibault, je joue sous le nom de Piers, house et tech house. J'ai vu passer DJ Seinfeld chez vous, \
+ça m'a donné envie d'écrire. Si un jour vous cherchez quelqu'un pour un warm-up ou pour dépanner, mon dernier mix est \
+ici https://example.link
 ---
 
 Rules:

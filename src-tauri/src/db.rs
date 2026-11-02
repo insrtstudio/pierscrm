@@ -823,14 +823,33 @@ pub(crate) fn migrate_for_tests(conn: &rusqlite::Connection) -> Result<(), Strin
     migrate(conn)
 }
 
-/// Vetted pack of professional booking templates, kept available on every launch.
-/// Inserted by name only when absent, so user edits are never overwritten and
-/// existing installs receive the pack too. Written to industry standards for
-/// artists in development: short (the "4-line" formula), one link, honest and
-/// humble tone, fit-first, plus the no-fee showcase that unlocks first dates.
-/// Multi-artist via {{artist}}; the recipient's promoter name is {{name}}.
+/// Booking templates kept available on every launch, in Thibault's validated
+/// voice (Nov 2026): cool, short, humble without sounding like a beginner, one
+/// link on its own line, no colon, no em dash. Inserted by name only when
+/// absent, so user edits are never overwritten; a copy still holding the
+/// previous wording word for word gets the new one. Multi-artist via
+/// {{artist}}; the recipient's first name is {{name}}.
 fn seed_defaults(conn: &rusqlite::Connection) -> Result<(), String> {
     const PACK: &[(&str, &str, &str)] = &[
+        (
+            "Prise de contact",
+            "{{venue}} x {{artist}}",
+            "Hello {{name}},\n\nMoi c'est Thibault, je joue sous le nom de {{artist}}, house et tech house. J'aime bien ce que vous faites à {{venue}}, et ça me ferait vraiment plaisir d'y jouer.\n\nUn warm-up, ça me va très bien, j'adore ouvrir une soirée. Et si un DJ vous lâche à la dernière minute, écrivez-moi, je peux dépanner.\n\nMon dernier mix est juste en dessous.\n{{mix}}\n\nSi ça vous parle, je vous envoie mes dispos.\n\nÀ bientôt,\nThibault",
+        ),
+        (
+            "Showcase (sans cachet)",
+            "une idée pour {{venue}}",
+            "Hello {{name}},\n\nUne petite idée pour {{venue}}, un showcase en début de soirée avec {{artist}} et deux ou trois amis, house et tech house. On ramène notre public, vous gardez le bar, pas de cachet de part et d'autre.\n\nMon dernier mix est juste en dessous pour vous faire une idée.\n{{mix}}\n\nSi ça vous tente, je vous envoie un plan avec les horaires et le line-up. Et si ce n'est pas le moment, aucun souci.\n\nÀ bientôt,\nThibault",
+        ),
+        (
+            "Relance",
+            "Re: {{venue}} x {{artist}}",
+            "Hello {{name}},\n\nPetite relance pour {{venue}}, je sais que vous recevez pas mal de messages.\n\nSi ce n'est pas vous qui gérez la prog, vous pourriez me dire à qui écrire ? Ça m'aiderait bien.\n\nLe mix est toujours ici.\n{{mix}}\n\nMerci,\nThibault",
+        ),
+    ];
+    // The first pack (agency voice, "artists in development"), to recognise
+    // copies the user never touched.
+    const OLD_PACK: &[(&str, &str, &str)] = &[
         (
             "Prise de contact",
             "{{artist}} · booking {{venue}}",
@@ -847,6 +866,13 @@ fn seed_defaults(conn: &rusqlite::Connection) -> Result<(), String> {
             "Hi {{name}},\n\nJust a short follow-up on my note about {{artist}} at {{venue}}, I know the inbox gets busy.\n\nSince I wrote: {{news}}. Still keen if a slot could work, even a small or early one.\n\nNo pressure at all, and thanks for reading.\n\nBest,",
         ),
     ];
+    for ((name, subject, body), (_, old_subject, old_body)) in PACK.iter().zip(OLD_PACK.iter()) {
+        conn.execute(
+            "UPDATE templates SET subject = ?2, body = ?3 WHERE name = ?1 AND subject = ?4 AND body = ?5",
+            rusqlite::params![name, subject, body, old_subject, old_body],
+        )
+        .map_err(|e| e.to_string())?;
+    }
     for (name, subject, body) in PACK {
         conn.execute(
             "INSERT INTO templates (name, subject, body)

@@ -54,7 +54,8 @@ pub fn assets_block(cfg: &Config) -> Option<String> {
             if a.title.trim().is_empty() {
                 a.url.trim().to_string()
             } else {
-                format!("{} : {}", a.title.trim(), a.url.trim())
+                // No colon in Thibault's emails: the title, the link under it.
+                format!("{}\n{}", a.title.trim(), a.url.trim())
             }
         })
         .collect();
@@ -106,7 +107,7 @@ pub fn render_step(cfg: &Config, idx: usize, lang: &str, vars: &HashMap<String, 
     let mut body = render_template(body, vars);
     if let Some(extra) = s.extra_asset.as_deref().filter(|e| !e.trim().is_empty()) {
         if let Some(a) = cfg.assets.iter().find(|a| a.title.trim() == extra.trim() && !a.url.trim().is_empty()) {
-            let line = format!("{} : {}", a.title.trim(), a.url.trim());
+            let line = format!("{}\n{}", a.title.trim(), a.url.trim());
             // Before the signature line when there is one.
             match body.rfind("\n\n") {
                 Some(i) => body.insert_str(i, &format!("\n\n{}", line)),
@@ -164,8 +165,14 @@ At most one exclamation mark, none is fine.
 - Never use these (AI tells): \"Je me permets\", \"N'hésitez pas\", \"à taille humaine\", \"correspond parfaitement\", \
 \"L'idée :\", \"passionné\", \"univers\", \"synergie\", \"collaboration fructueuse\", \"je serais ravi de\", \"Cordialement\", \
 \"I hope this email finds you well\", \"I'm reaching out\", \"excited\", \"thrilled\", \"passionate\", \"vibrant\", \"elevate\", \
-\"resonate\", \"journey\", \"unique opportunity\". No colon used to introduce an explanation, no neat three-part structure, \
-no em dashes or en dashes.
+\"resonate\", \"journey\", \"unique opportunity\", \"je me permets de relancer\", \"je reviens vers vous\", \
+\"suite à mon dernier message\". No colon at all (\":\") in the text, not even before a link: end the sentence with a \
+period and put the link on the next line. No neat three-part structure, no em dashes or en dashes.
+- Register: cool and relaxed, like a DJ texting a crew he respects. Not formal, not cheesy, no gushing compliments, \
+no big words about the night or the scene. Short sentences.
+- Humble but experienced: Thibault has played a lot. Never present him as a beginner or as \"starting out\" \
+(no \"je débute\", \"jeune artiste\", \"en développement\", \"just starting\", \"up-and-coming\"), and never brag either. \
+Happy to open a night, glad to step in when a DJ drops out.
 "
     };
 }
@@ -175,38 +182,35 @@ pub const HOUSE_VOICE: &str = house_voice!();
 
 const DRAFT_SYSTEM: &str = concat!("You write the first email from a DJ/producer to a club, proposing a residency. \
 It goes out under the artist's own name to the club's booking or programming team, so it must read like \
-the artist typed it himself between two studio sessions: warm, direct, a bit casual, confident without selling.
+the artist typed it himself: cool, relaxed, direct, humble without sounding like a beginner, never selling.
 
 Voice (copy it, in French or English as requested):
 ---
 Hello,
 
-Moi c'est Thibault, je mixe sous le nom de Piers (house, tech house). Je rentre d'ADE avec pas mal d'envie et un peu d'élan.
+Moi c'est Thibault, je joue sous le nom de Piers, house et tech house. J'aime bien ce que vous faites à Badaboum, \
+voir passer DJ Seinfeld et Shonky chez vous cette année, ça m'a vraiment parlé.
 
-Je cherche un club à Paris où poser une date tous les mois, quelque chose qui s'installe dans le temps. \
-Et Badaboum, honnêtement, c'est un des premiers endroits qui me sont venus en tête. Voir passer DJ Seinfeld et Shonky \
-chez vous cette année, ça m'a convaincu.
+Je cherche un club à Paris où jouer régulièrement, une date par mois, quelque chose qui s'installe. \
+Et je filme tout pour PIERS FM, donc chaque date chez vous devient un épisode qui tourne aussi en ligne.
 
-En parallèle je filme tout pour PIERS FM, ma série où je montre les morceaux en cours, les edits et les coulisses. \
-Chaque date chez vous deviendrait un épisode, donc un rendez-vous qui se voit aussi en ligne.
-
-Tout est là si vous voulez écouter (le Vol. 4, c'est mon dernier mix) :
+Mon dernier mix (PIERS FM Vol. 4) est juste en dessous.
 https://example.link
 
-Ça vous dirait qu'on en parle autour d'un café, ou juste au téléphone ?
+Si ça vous parle, on s'appelle cette semaine ?
 
 À bientôt,
 Thibault
 ---
 
 Rules:
-- 90 to 150 words in the body. Plain text, short paragraphs, no markdown, no emojis, no lists.
+- 70 to 130 words in the body. Plain text, short paragraphs, no markdown, no emojis, no lists.
 - Open with \"Hello,\" (or \"Hello <first name>,\" when a first name is given). The sender is Thibault, who plays as the artist: introduce himself as \"Thibault\" playing as the artist name. Close with \"À bientôt,\" / \"Cheers,\" then \"Thibault\" on its own line (the full signature with phone and website is appended automatically, never write it).
 - One concrete, true detail about this club taken only from the facts provided (artists who played there, its programming), \
 said the way a DJ would say it. Never invent a fact, a name or a number. If no fact is usable, skip it rather than flatter.
 - Mention PIERS FM and that each date becomes an episode. Mention Vol. 4 as the latest mix.
 - The press link exactly once, copied verbatim, on its own line.
-- End with one simple, relaxed question.
+- End with one simple, relaxed line (a light question, or offering to send his dates).
 ", house_voice!(), "- Subject: under 60 characters, lowercase feel, like \"<club> x <artist>, une idée de résidence\". No clickbait.
 - Write in the language requested.
 
@@ -670,9 +674,9 @@ mod tests {
         let vars = vars_for(&info, &cfg, "Piers", None);
         let (subj, body) = render_step(&cfg, 0, "fr", &vars).unwrap();
         assert!(unresolved(&body).is_empty(), "{}", body);
-        assert!(body.contains("Mix ADE : https://sc.com/mix") && subj.contains("Club A") && body.contains("tous les mois"));
+        assert!(body.contains("Mix ADE\nhttps://sc.com/mix") && subj.contains("Club A") && body.contains("tous les mois"));
         let (_, b2) = render_step(&cfg, 1, "en", &vars).unwrap();
-        assert!(b2.starts_with("Hello,") && b2.contains("Live : https://yt.com/v"));
+        assert!(b2.starts_with("Hey,") && b2.contains("Live\nhttps://yt.com/v"));
         assert!(!b2.contains('—'));
         // First name only when known.
         assert!(render_template("Bonjour {{first_name}}", &vars).contains("{{first_name}}"));

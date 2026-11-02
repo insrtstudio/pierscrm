@@ -220,7 +220,7 @@ pub struct Config {
     pub pitch_fr: String,
     #[serde(default)]
     pub pitch_en: String,
-    /// The monthly content plan ("en développement" series).
+    /// The monthly content plan (PIERS FM episodes).
     #[serde(default)]
     pub concept: String,
     /// "monthly" | "bimonthly"
@@ -299,31 +299,29 @@ impl Default for Config {
     }
 }
 
-/// The three-email sequence (J0, J+5, J+12). No em dash anywhere in the French.
+/// The three-email sequence (J0, J+5, J+12), in the voice validated on the
+/// collectives campaign (Nov 2026): cool, short, humble without sounding like
+/// a beginner, no colon, no em dash.
 pub fn default_steps() -> Vec<Step> {
     vec![
         Step {
             offset_days: 0,
-            subject: "{{venue}} x {{artist}}, une idée de résidence".into(),
+            subject: "{{venue}} x {{artist}}, une date par mois ?".into(),
             body: "Hello,\n\n\
-                   Moi c'est Thibault, je mixe sous le nom de {{artist}} (house, tech house). Je rentre d'ADE avec pas mal d'envie et un peu d'élan.\n\n\
-                   Je cherche un club à {{city}} où poser une date {{rhythm}}, quelque chose qui s'installe dans le temps. \
-                   Et {{venue}}, honnêtement, c'est un des premiers endroits qui me sont venus en tête.\n\n\
-                   En parallèle je filme tout pour PIERS FM, ma série où je montre les morceaux en cours, les edits et les coulisses. \
-                   Chaque date chez vous deviendrait un épisode, donc un rendez-vous qui se voit aussi en ligne.\n\n\
-                   Tout est là si vous voulez écouter (le Vol. 4, c'est mon dernier mix) :\n{{press_link}}\n\n\
-                   Ça vous dirait qu'on en parle autour d'un café, ou juste au téléphone ?\n\n\
+                   Moi c'est Thibault, je joue sous le nom de {{artist}}, house et tech house. J'aime bien ce que vous faites à {{venue}}, et ça me plairait vraiment d'y jouer.\n\n\
+                   Je cherche un club à {{city}} où jouer {{rhythm}}, quelque chose qui s'installe. \
+                   Et je filme tout pour PIERS FM, donc chaque date chez vous devient un épisode qui tourne aussi en ligne.\n\n\
+                   Mon dernier mix (PIERS FM Vol. 4) est juste en dessous.\n{{press_link}}\n\n\
+                   Si ça vous parle, on s'appelle cette semaine ?\n\n\
                    À bientôt,\nThibault"
                 .into(),
-            subject_en: "{{venue}} x {{artist}}, a residency idea".into(),
-            body_en: "Hello,\n\n\
-                      I'm Thibault, I play as {{artist}} (house, tech house). Just got back from ADE with a lot of drive.\n\n\
-                      I'm looking for a club in {{city}} to hold a night {{rhythm}}, something that builds over time. \
-                      And honestly, {{venue}} was one of the first places that came to mind.\n\n\
-                      I film everything for PIERS FM, my series where I share tracks in progress, edits and what happens behind the decks. \
-                      Every night at yours would become an episode, so the night gets seen online too.\n\n\
-                      Everything's here if you want a listen (Vol. 4 is my latest mix):\n{{press_link}}\n\n\
-                      Up for a quick call or a coffee to talk it through?\n\n\
+            subject_en: "{{venue}} x {{artist}}, a monthly night?".into(),
+            body_en: "Hey,\n\n\
+                      I'm Thibault, I play as {{artist}}, house and tech house. Really like what you're doing at {{venue}}, and I'd love to play there.\n\n\
+                      I'm looking for a club in {{city}} to play {{rhythm}}, something that builds over time. \
+                      I film everything for PIERS FM, so every night at yours becomes an episode that also lives online.\n\n\
+                      My latest mix (PIERS FM Vol. 4) is just below.\n{{press_link}}\n\n\
+                      If that sounds good, up for a quick call this week?\n\n\
                       Cheers,\nThibault"
                 .into(),
             extra_asset: None,
@@ -331,18 +329,18 @@ pub fn default_steps() -> Vec<Step> {
         },
         Step {
             offset_days: 5,
-            subject: "Re: {{venue}} x {{artist}}, une idée de résidence".into(),
+            subject: "Re: {{venue}} x {{artist}}, une date par mois ?".into(),
             body: "Hello,\n\n\
-                   Je remonte mon message pour {{venue}}, j'imagine que vos boîtes mail débordent en ce moment.\n\n\
-                   Si ce n'est pas vous qui gérez la prog, vous pouvez me dire à qui écrire ? Ça m'aiderait beaucoup.\n\n\
-                   Le mix et le reste sont toujours ici : {{press_link}}\n\n\
+                   Petite relance pour {{venue}}, je sais que vous recevez pas mal de messages.\n\n\
+                   Si ce n'est pas vous qui gérez la prog, vous pourriez me dire à qui écrire ? Ça m'aiderait bien.\n\n\
+                   Le mix est toujours ici.\n{{press_link}}\n\n\
                    Merci,\nThibault"
                 .into(),
-            subject_en: "Re: {{venue}} x {{artist}}, a residency idea".into(),
-            body_en: "Hello,\n\n\
-                      Bumping this up about {{venue}}, I'm guessing your inbox is pretty full right now.\n\n\
-                      If you're not the one handling bookings, could you tell me who to write to? That would help a lot.\n\n\
-                      The mix and everything else are still here: {{press_link}}\n\n\
+            subject_en: "Re: {{venue}} x {{artist}}, a monthly night?".into(),
+            body_en: "Hey,\n\n\
+                      Quick bump about {{venue}}, I know you get a lot of these.\n\n\
+                      If you're not the one handling bookings, could you point me to the right person? That would help a lot.\n\n\
+                      The mix is still up here.\n{{press_link}}\n\n\
                       Thanks,\nThibault"
                 .into(),
             extra_asset: None,
@@ -350,19 +348,19 @@ pub fn default_steps() -> Vec<Step> {
         },
         Step {
             offset_days: 12,
-            subject: "Re: {{venue}} x {{artist}}, une idée de résidence".into(),
+            subject: "Re: {{venue}} x {{artist}}, une date par mois ?".into(),
             body: "Hello,\n\n\
-                   Dernier message de ma part, promis. Si ce n'est pas le moment pour {{venue}}, aucun souci, je comprends très bien.\n\n\
-                   Et si ça peut se faire plus tard dans la saison, je serais vraiment content d'en reparler.\n\n\
+                   Dernier message de ma part, promis. Si ce n'est pas le moment pour {{venue}}, aucun souci.\n\n\
+                   Et si ça peut se faire plus tard dans la saison, ce sera avec plaisir.\n\n\
                    {{press_link}}\n\n\
                    Belle journée,\nThibault"
                 .into(),
-            subject_en: "Re: {{venue}} x {{artist}}, a residency idea".into(),
-            body_en: "Hello,\n\n\
+            subject_en: "Re: {{venue}} x {{artist}}, a monthly night?".into(),
+            body_en: "Hey,\n\n\
                       Last one from me, promise. If it's not the right time for {{venue}}, no worries at all.\n\n\
-                      And if it could work later in the season, I'd be really happy to pick it up again.\n\n\
+                      And if it could work later in the season, happy to pick it up again.\n\n\
                       {{press_link}}\n\n\
-                      Have a good one,\nThibault"
+                      Cheers,\nThibault"
                 .into(),
             extra_asset: None,
             ..Default::default()
@@ -370,13 +368,13 @@ pub fn default_steps() -> Vec<Step> {
     ]
 }
 
-/// Markers of the first default templates (v0.15.0, stiff and "AI-sounding").
-/// A saved campaign whose step still contains one gets the new default for that
-/// step; a step the user rewrote is left alone.
-const OLD_STEP_MARKERS: [&str; 3] = [
-    "Je suis {{artist}}, DJ et producteur. Après ADE",
-    "Je me permets de remonter mon message de la semaine dernière",
-    "Dernier petit message de ma part",
+/// Markers of earlier default templates, per step (v0.15.0 then v0.16 to
+/// v0.22). A saved campaign whose step still contains one gets the current
+/// default for that step; a step the user rewrote is left alone.
+const OLD_STEP_MARKERS: [&[&str]; 3] = [
+    &["Je suis {{artist}}, DJ et producteur. Après ADE", "Je rentre d'ADE avec pas mal d'envie et un peu d'élan"],
+    &["Je me permets de remonter mon message de la semaine dernière", "Je remonte mon message pour {{venue}}, j'imagine que vos boîtes mail débordent"],
+    &["Dernier petit message de ma part", "je serais vraiment content d'en reparler"],
 ];
 
 /// One-shot per launch, cheap: refresh untouched v0.15.0 templates in saved campaigns.
@@ -393,12 +391,27 @@ pub fn refresh_default_templates(conn: &Connection) {
         let Some(r) = load(conn, id) else { continue };
         let mut cfg = r.config;
         let mut changed = false;
-        for (i, marker) in OLD_STEP_MARKERS.iter().enumerate() {
+        for (i, markers) in OLD_STEP_MARKERS.iter().enumerate() {
             if let (Some(step), Some(new)) = (cfg.steps.get_mut(i), fresh.get(i)) {
-                if step.body.contains(marker) {
-                    let extra = step.extra_asset.take();
-                    *step = new.clone();
-                    step.extra_asset = extra;
+                if markers.iter().any(|m| step.body.contains(m)) {
+                    // Bodies only: the subjects stay, so a follow-up still
+                    // lands in the thread of a first email already sent.
+                    step.body = new.body.clone();
+                    step.body_en = new.body_en.clone();
+                    changed = true;
+                }
+            }
+        }
+        // The series was once called « en développement », which reads as a
+        // beginner: it is PIERS FM.
+        for (old, new) in [
+            ("la série « en développement »", "la série PIERS FM"),
+            ("Série mensuelle « en développement »", "PIERS FM"),
+            ("the \"in development\" series", "the PIERS FM series"),
+        ] {
+            for text in [&mut cfg.pitch_fr, &mut cfg.pitch_en, &mut cfg.concept] {
+                if text.contains(old) {
+                    *text = text.replace(old, new);
                     changed = true;
                 }
             }
@@ -410,37 +423,34 @@ pub fn refresh_default_templates(conn: &Connection) {
 }
 
 /// French pitch pre-filled by "Nouvelle campagne résidence" (the user edits it).
+/// Humble but experienced: never framed as a beginner (validated Nov 2026).
 pub fn default_pitch_fr(city: &str) -> String {
     format!(
-        "Après ADE, Piers cherche une résidence mensuelle (ou tous les deux mois) dans un club de {city} \
-         à taille humaine mais reconnu, entre 150 et 800 personnes.\n\n\
-         Le principe : une date régulière où Piers construit la soirée avec le club, et un contenu mensuel \
-         qui documente chaque édition, la série « en développement » (préparation, sélection, moments de la \
-         nuit, retours du public). Le club gagne une soirée qui grandit d'un mois sur l'autre et une visibilité \
-         régulière sur les réseaux de l'artiste.\n\n\
-         Ce que Piers apporte : l'élan post ADE, un public qui le suit, un mix récent, des vidéos de ses sets \
-         et ses chiffres d'écoute. Ce qu'il demande : une date fixe chaque mois ou tous les deux mois, et la \
-         possibilité de filmer.",
+        "Piers (Thibault) joue house et tech house depuis des années et cherche une date régulière, tous les mois \
+         ou tous les deux mois, dans un club de {city} entre 150 et 800 personnes.\n\n\
+         Chaque date est filmée pour PIERS FM, sa série où il montre les morceaux en cours, les edits et les \
+         coulisses. Le club y gagne une soirée qui grandit d'un mois sur l'autre et qui se voit aussi en ligne.\n\n\
+         Il apporte un mix récent (PIERS FM Vol. 4), des vidéos de ses sets et un public qui le suit. Il demande \
+         une date fixe et la possibilité de filmer. Ton humble, jamais débutant, jamais vendeur.",
         city = city
     )
 }
 
 pub fn default_pitch_en(city: &str) -> String {
     format!(
-        "After ADE, Piers is looking for a monthly (or every two months) residency at a mid-size but \
-         well-known club in {city}, 150 to 800 capacity.\n\n\
-         The idea: a regular night that Piers builds together with the club, plus monthly content documenting \
-         each edition, the \"in development\" series (prep, selection, moments of the night, crowd feedback). \
-         The club gets a night that grows month after month and regular exposure on the artist's channels.\n\n\
-         What Piers brings: the post-ADE momentum, a following, a recent mix, videos of his sets and his \
-         streaming numbers. What he asks for: a fixed date every month or two, and permission to film.",
+        "Piers (Thibault) has been playing house and tech house for years and is looking for a regular night, \
+         monthly or every two months, at a club in {city} with a 150 to 800 capacity.\n\n\
+         Every night is filmed for PIERS FM, his series showing tracks in progress, edits and what happens \
+         behind the decks. The club gets a night that grows month after month and also lives online.\n\n\
+         He brings a recent mix (PIERS FM Vol. 4), videos of his sets and a following. He asks for a fixed \
+         date and permission to film. Humble tone, never a beginner, never salesy.",
         city = city
     )
 }
 
 pub fn default_concept_fr() -> String {
-    "Série mensuelle « en développement » : un épisode par date (avant, pendant, après), publié sur les réseaux \
-     de Piers et du club, plus un mix enregistré à chaque édition."
+    "PIERS FM, un épisode par date (avant, pendant, après), publié sur les réseaux de Piers et du club, \
+     plus un mix enregistré à chaque édition."
         .into()
 }
 
