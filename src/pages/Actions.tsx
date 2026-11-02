@@ -409,7 +409,7 @@ export function Actions() {
           kind: "snoozed",
           title: t("actions.snoozed", { name: a.name }),
           detail: a.suggested_subject ?? undefined,
-          cta: { label: t("actions.agent_cta"), run: () => navigate(`/outbox?tab=replies&item=${a.desk_id}`) },
+          cta: { label: t("actions.agent_cta"), run: () => navigate(`/replies?item=${a.desk_id}`) },
         };
       case "reply":
       case "unread":
@@ -596,7 +596,7 @@ export function Actions() {
           day: today,
           kind: "visa",
           title: t("actions.visa_missing", { title: ev.title, country: v.country_name ?? v.country_code }),
-          cta: { label: t("actions.visa_cta"), run: () => navigate(`/visa?event=${ev.id}`) },
+          cta: { label: t("actions.visa_cta"), run: () => navigate(`/admin?tab=visa&event=${ev.id}`) },
         });
       }
     }
@@ -688,7 +688,7 @@ export function Actions() {
         kind: "visa",
         title: t("actions.visa_open", { title: d.title }),
         detail: t(`visa.st_${d.status}`, d.status),
-        cta: { label: t("actions.visa_open_cta"), run: () => navigate(`/visa?dossier=${d.id}`) },
+        cta: { label: t("actions.visa_open_cta"), run: () => navigate(`/admin?tab=visa&dossier=${d.id}`) },
       });
     }
     return out;

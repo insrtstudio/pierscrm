@@ -54,7 +54,7 @@ export function ReplyDeskWatcher() {
       const p = pending.current;
       if (!p) return;
       pending.current = null;
-      if (Date.now() - p.at < NOTIFIED_OPEN_MS) navigate(`/outbox?tab=replies&item=${p.id}`);
+      if (Date.now() - p.at < NOTIFIED_OPEN_MS) navigate(`/replies?item=${p.id}`);
     };
     window.addEventListener("focus", onFocus);
     return () => {

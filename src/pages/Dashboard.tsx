@@ -101,7 +101,7 @@ export function Dashboard() {
               <span className="h-1.5 w-1.5 rounded-full bg-accent animate-livepulse" />
               {months[new Date().getMonth()].slice(0, 3)} {new Date().getFullYear()}
             </span>
-            <button className="btn-outline" onClick={() => navigate("/emails")}>
+            <button className="btn-outline" onClick={() => navigate("/campaigns?tab=compose")}>
               <Mail size={15} />
               {t("artists.write_email")}
             </button>
@@ -134,7 +134,7 @@ export function Dashboard() {
                   country: v.country_name ?? v.country_code,
                 })}
               </span>
-              <Link to={`/visa?event=${v.event_id}`} className="kicker text-accent hover:underline">
+              <Link to={`/admin?tab=visa&event=${v.event_id}`} className="kicker text-accent hover:underline">
                 {t("actions.visa_cta")} →
               </Link>
             </div>

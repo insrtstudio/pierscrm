@@ -36,7 +36,7 @@ export function AudienceTile() {
     <div className="mt-8 border-t border-border pt-6">
       <div className="mb-4 flex items-baseline justify-between">
         <div className="kicker">{t("pulse.tile_title")}</div>
-        <Link to="/audience" className="kicker hover:text-accent">
+        <Link to="/artists?tab=audience" className="kicker hover:text-accent">
           {t("pulse.tile_open")} →
         </Link>
       </div>

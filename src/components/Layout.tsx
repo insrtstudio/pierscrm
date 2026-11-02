@@ -7,19 +7,17 @@ import { listen } from "@tauri-apps/api/event";
 import clsx from "clsx";
 import {
   Sun,
+  Sunrise,
   Moon,
   RefreshCw,
   AlertTriangle,
-  Home as HomeIcon,
   CalendarDays,
   Mic2,
   Activity,
   Users,
-  Radar as RadarIcon,
   Megaphone,
-  Send,
+  Inbox,
   Wallet,
-  Stamp,
   Settings as SettingsIcon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -43,43 +41,29 @@ type NavGroup = { key: string; tone: string; items: NavItem[] };
 // order for its Cmd+1..9 shortcuts.
 export const NAV_GROUPS: NavGroup[] = [
   {
-    key: "steer",
+    key: "daily",
     tone: "bg-accent",
     items: [
-      { to: "/", key: "home", icon: HomeIcon, end: true },
+      { to: "/", key: "today", icon: Sunrise, end: true },
+      { to: "/replies", key: "replies", icon: Inbox },
       { to: "/agenda", key: "agenda", icon: CalendarDays },
     ],
   },
   {
-    key: "roster",
-    tone: "bg-fg",
-    items: [
-      { to: "/artists", key: "artists", icon: Mic2 },
-      { to: "/audience", key: "audience", icon: Activity },
-    ],
-  },
-  {
-    key: "prospect",
+    key: "growth",
     tone: "bg-chrome-dark",
     items: [
-      { to: "/contacts", key: "pipeline", icon: Users },
-      { to: "/discovery", key: "discovery", icon: RadarIcon },
-    ],
-  },
-  {
-    key: "campaigns",
-    tone: "bg-warn",
-    items: [
+      { to: "/contacts", key: "prospect", icon: Users },
       { to: "/campaigns", key: "campaigns", icon: Megaphone },
-      { to: "/outbox", key: "outbox", icon: Send },
+      { to: "/artists", key: "artists", icon: Mic2 },
     ],
   },
   {
-    key: "ops",
+    key: "follow",
     tone: "bg-fg-faint",
     items: [
-      { to: "/budget", key: "budget", icon: Wallet },
-      { to: "/visa", key: "visa", icon: Stamp },
+      { to: "/results", key: "results", icon: Activity },
+      { to: "/admin", key: "admin", icon: Wallet },
     ],
   },
 ];
@@ -125,15 +109,20 @@ function useMenuActions() {
   useEffect(() => {
     const routes: Record<string, string> = {
       "nav:home": "/",
+      "nav:today": "/",
+      "nav:replies": "/replies",
       "nav:agenda": "/agenda",
       "nav:artists": "/artists",
-      "nav:audience": "/audience",
+      "nav:audience": "/artists?tab=audience",
       "nav:pipeline": "/contacts",
-      "nav:discovery": "/discovery",
+      "nav:prospect": "/contacts",
+      "nav:discovery": "/contacts?tab=venues",
       "nav:campaigns": "/campaigns",
-      "nav:outbox": "/outbox",
-      "nav:budget": "/budget",
-      "nav:visa": "/visa",
+      "nav:outbox": "/replies",
+      "nav:results": "/results",
+      "nav:admin": "/admin",
+      "nav:budget": "/admin",
+      "nav:visa": "/admin?tab=visa",
       "nav:import": "/import",
       "nav:settings": "/settings",
       "check-updates": "/settings",
@@ -294,7 +283,7 @@ export function Layout() {
                       >
                         <Icon size={collapsed ? 17 : 15} strokeWidth={1.75} className="shrink-0" />
                         {!collapsed && t(`nav.${key}`)}
-                        {key === "outbox" && <DeskBadge collapsed={collapsed} />}
+                        {key === "replies" && <DeskBadge collapsed={collapsed} />}
                       </NavLink>
                     </li>
                   ))}
@@ -369,22 +358,25 @@ export function PageHeader({
   subtitle?: string;
   kicker?: string;
   actions?: React.ReactNode;
-  /** Rendered under the title row (tabs). */
+  /** Rendered next to the title (the section's segmented tabs). */
   children?: React.ReactNode;
 }) {
   const slot = useContext(EmbeddedCtx);
   if (slot !== false) return slot && actions ? createPortal(actions, slot) : null;
+  // Tahoe toolbar: a compact title, the section's tabs beside it, the page's
+  // actions on the right. One line, the content starts right under it.
   return (
-    <div className="border-b border-border px-page pt-7">
-      <div className="flex flex-wrap items-end justify-between gap-4 pb-5">
+    <div className="border-b border-fg/[0.06] px-page pb-4 pt-5">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
         <div className="min-w-0">
-          {kicker && <div className="kicker mb-3">{kicker}</div>}
-          <h1 className="font-display text-[30px] xl:text-[38px]">{title}</h1>
-          {subtitle && <p className="mt-2.5 max-w-2xl text-sm text-fg-subtle">{subtitle}</p>}
+          {kicker && <div className="kicker mb-1.5">{kicker}</div>}
+          <h1 className="font-display text-[26px] leading-none xl:text-[28px]">{title}</h1>
         </div>
-        {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 pb-1">{actions}</div>}
+        {children}
+        <div className="flex-1" />
+        {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
       </div>
-      {children}
+      {subtitle && <p className="mt-2.5 max-w-3xl text-[13px] text-fg-subtle">{subtitle}</p>}
     </div>
   );
 }
@@ -392,9 +384,38 @@ export function PageHeader({
 /// `subtitle` replaces the page's own while that tab is open.
 export type PageTab = { key: string; label: string; subtitle?: string; render: () => React.ReactNode };
 
-/// A section made of several former pages (Accueil = overview + goals,
-/// Découverte = venues + curators...). The active tab lives in `?tab=` so the
-/// menu and links can deep-link into it.
+/// The one tab style of the app: a Tahoe segmented control.
+export function Segmented<K extends string>({
+  items,
+  value,
+  onChange,
+}: {
+  items: { key: K; label: string; badge?: React.ReactNode }[];
+  value: K;
+  onChange: (k: K) => void;
+}) {
+  return (
+    <div role="tablist" className="segmented max-w-full overflow-x-auto">
+      {items.map((it) => (
+        <button
+          key={it.key}
+          role="tab"
+          aria-selected={it.key === value}
+          data-active={it.key === value}
+          onClick={() => onChange(it.key)}
+          className="segmented-item flex items-center gap-1.5"
+        >
+          {it.label}
+          {it.badge}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/// A section made of several screens (Prospection = pipeline + places +
+/// curators...). The active tab lives in `?tab=` so the menu and links can
+/// deep-link into it. Embedded pages hand their actions to the header.
 export function TabbedPage({
   title,
   subtitle,
@@ -406,7 +427,7 @@ export function TabbedPage({
   subtitle?: string;
   kicker?: string;
   tabs: PageTab[];
-  /** Shown above every tab (the page's role banner). */
+  /** Shown above every tab. */
   intro?: React.ReactNode;
 }) {
   const [params, setParams] = useSearchParams();
@@ -414,28 +435,19 @@ export function TabbedPage({
   const active = tabs.find((tb) => tb.key === params.get("tab")) ?? tabs[0];
   return (
     <div>
-      <PageHeader title={title} subtitle={active.subtitle ?? subtitle} kicker={kicker}>
-        <div className="flex flex-wrap items-end justify-between gap-x-4">
-        <div role="tablist" className="-mb-px flex gap-6 overflow-x-auto">
-          {tabs.map((tb) => (
-            <button
-              key={tb.key}
-              role="tab"
-              aria-selected={tb.key === active.key}
-              onClick={() => setParams(tb.key === tabs[0].key ? {} : { tab: tb.key }, { replace: true })}
-              className={clsx(
-                "border-b pb-2.5 font-mono text-[11px] uppercase tracking-[0.14em] transition-colors",
-                tb.key === active.key
-                  ? "border-accent text-fg"
-                  : "border-transparent text-fg-subtle hover:text-fg"
-              )}
-            >
-              {tb.label}
-            </button>
-          ))}
-        </div>
-        <div ref={setSlot} className="flex flex-wrap items-center justify-end gap-2 pb-2.5" />
-        </div>
+      <PageHeader
+        title={title}
+        subtitle={active.subtitle ?? subtitle}
+        kicker={kicker}
+        actions={<div ref={setSlot} className="flex flex-wrap items-center justify-end gap-2" />}
+      >
+        {tabs.length > 1 && (
+          <Segmented
+            items={tabs.map((tb) => ({ key: tb.key, label: tb.label }))}
+            value={active.key}
+            onChange={(k) => setParams(k === tabs[0].key ? {} : { tab: k }, { replace: true })}
+          />
+        )}
       </PageHeader>
       {intro && <div className="px-page pt-5">{intro}</div>}
       <EmbeddedCtx.Provider value={slot}>

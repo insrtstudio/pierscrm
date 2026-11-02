@@ -16,8 +16,8 @@ import {
   testSmtp,
 } from "../lib/api";
 import type { SmtpConfig } from "../lib/types";
-import { PageHeader } from "../components/Layout";
-import clsx from "clsx";
+import { PageHeader, Segmented } from "../components/Layout";
+import { GuardrailsTab } from "./Emails";
 import { Field, errorMessage, useSubmit, useToast } from "../components/ui";
 import { ResidencySettingsCard } from "../components/ResidencySettings";
 import { PushSettingsCard } from "../components/PushSettings";
@@ -315,22 +315,11 @@ export function Settings() {
     <div>
       <PageHeader title={t("settings.title")} subtitle={t("settings.subtitle")}>
         {/* Grouped like the old single column, one concern per tab */}
-        <div role="tablist" className="-mb-px flex gap-6">
-          {SETTINGS_TABS.map((k) => (
-            <button
-              key={k}
-              role="tab"
-              aria-selected={tab === k}
-              onClick={() => setTab(k)}
-              className={clsx(
-                "border-b-2 pb-2.5 font-mono text-[11px] uppercase tracking-[0.14em] transition-colors",
-                tab === k ? "border-accent text-fg" : "border-transparent text-fg-subtle hover:text-fg"
-              )}
-            >
-              {t(`settings.tab_${k}`)}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          items={SETTINGS_TABS.map((k) => ({ key: k, label: t(`settings.tab_${k}`) }))}
+          value={tab}
+          onChange={setTab}
+        />
       </PageHeader>
       {/* Cards flow into columns on a wide window instead of one 768px strip. */}
       <div className="grid items-start gap-6 px-page pb-10 pt-6 xl:grid-cols-2">
@@ -545,7 +534,15 @@ export function Settings() {
 
         </>
         )}
-        {tab === "deliverability" && <DeliverabilityPanel />}
+        {tab === "deliverability" && (
+          <>
+            <DeliverabilityPanel />
+            {/* Quota, budget and suppressions (former Outbox › Guardrails). */}
+            <div className="xl:col-span-2">
+              <GuardrailsTab />
+            </div>
+          </>
+        )}
         {tab === "agent" && <AgentLibraryPanel />}
         {tab === "integrations" && (
         <>

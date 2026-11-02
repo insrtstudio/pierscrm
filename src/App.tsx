@@ -1,31 +1,29 @@
 import { lazy, Suspense } from "react";
-import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import { HashRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { ReplySync } from "./components/ReplySync";
 import { ReplyDeskWatcher } from "./components/ReplyDesk";
 
-import { Home } from "./pages/Home";
+import { Today } from "./pages/Today";
 
 // Lazy-load secondary routes so the initial payload stays tiny and each screen's
 // code is fetched on demand: faster cold start, lower memory footprint. The
 // multi-page sections share one chunk (Sections.tsx).
-const AgendaSection = lazy(() =>
-  import("./pages/Sections").then((m) => ({ default: m.AgendaSection }))
-);
-const Discovery = lazy(() => import("./pages/Sections").then((m) => ({ default: m.Discovery })));
-const Artists = lazy(() => import("./pages/Artists").then((m) => ({ default: m.Artists })));
+const section = <K extends string>(name: K) =>
+  lazy(() => import("./pages/Sections").then((m) => ({ default: (m as unknown as Record<K, React.ComponentType>)[name] })));
+const AgendaSection = section("AgendaSection");
+const Prospection = section("Prospection");
+const ArtistsSection = section("ArtistsSection");
+const Results = section("Results");
+const Admin = section("Admin");
 const ArtistDetail = lazy(() =>
   import("./pages/ArtistDetail").then((m) => ({ default: m.ArtistDetail }))
 );
-const Contacts = lazy(() => import("./pages/Contacts").then((m) => ({ default: m.Contacts })));
 const Import = lazy(() => import("./pages/Import").then((m) => ({ default: m.Import })));
 const Emails = lazy(() => import("./pages/Emails").then((m) => ({ default: m.Emails })));
 const ResidencyPage = lazy(() =>
   import("./pages/Residency").then((m) => ({ default: m.ResidencyPage }))
 );
-const Budget = lazy(() => import("./pages/Budget").then((m) => ({ default: m.Budget })));
-const Visa = lazy(() => import("./pages/Visa").then((m) => ({ default: m.Visa })));
-const Pulse = lazy(() => import("./pages/Pulse").then((m) => ({ default: m.Pulse })));
 const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
 
 function Fallback() {
@@ -38,15 +36,33 @@ function Fallback() {
   );
 }
 
-/// Former URLs, kept so old links and muscle memory still land somewhere.
-const REDIRECTS: [string, string][] = [
-  ["kpis", "/?tab=goals"],
-  ["timeline", "/agenda?tab=planning"],
-  ["venues", "/discovery"],
-  ["radar", "/discovery?tab=curators"],
-  ["pulse", "/audience"],
-  ["emails", "/outbox"],
+/// Former URLs (v0.22 and before), kept so old links, notifications and
+/// muscle memory still land on the right tab. The query string is carried
+/// over (?event=, ?dossier=, ?item=, ?view=...).
+const OUTBOX_CAMPAIGN_TABS = ["followups", "compose", "log", "templates", "bulk"];
+const REDIRECTS: [string, (tab: string | null) => [string, string | null]][] = [
+  ["kpis", () => ["/results", "goals"]],
+  ["timeline", () => ["/agenda", "planning"]],
+  ["venues", () => ["/contacts", "venues"]],
+  ["radar", () => ["/contacts", "curators"]],
+  ["discovery", (tab) => ["/contacts", tab === "curators" ? "curators" : "venues"]],
+  ["pulse", () => ["/artists", "audience"]],
+  ["audience", () => ["/artists", "audience"]],
+  ["budget", () => ["/admin", null]],
+  ["visa", () => ["/admin", "visa"]],
+  ["emails", (tab) => (tab && OUTBOX_CAMPAIGN_TABS.includes(tab) ? ["/campaigns", tab] : ["/replies", tab])],
+  ["outbox", (tab) => (tab && OUTBOX_CAMPAIGN_TABS.includes(tab) ? ["/campaigns", tab] : ["/replies", tab])],
 ];
+
+function Redirect({ to }: { to: (tab: string | null) => [string, string | null] }) {
+  const loc = useLocation();
+  const params = new URLSearchParams(loc.search);
+  const [path, tab] = to(params.get("tab"));
+  if (tab) params.set("tab", tab);
+  else params.delete("tab");
+  const q = params.toString();
+  return <Navigate to={q ? `${path}?${q}` : path} replace />;
+}
 
 const page = (el: React.ReactNode) => <Suspense fallback={<Fallback />}>{el}</Suspense>;
 
@@ -59,22 +75,20 @@ export function App() {
       <ReplyDeskWatcher />
       <Routes>
         <Route element={<Layout />}>
-          <Route index element={page(<Home />)} />
+          <Route index element={<Today />} />
+          <Route path="replies" element={page(<Emails section="replies" />)} />
           <Route path="agenda" element={page(<AgendaSection />)} />
-          <Route path="artists" element={page(<Artists />)} />
-          <Route path="artists/:id" element={page(<ArtistDetail />)} />
-          <Route path="audience" element={page(<Pulse />)} />
-          <Route path="contacts" element={page(<Contacts />)} />
-          <Route path="import" element={page(<Import />)} />
-          <Route path="discovery" element={page(<Discovery />)} />
+          <Route path="contacts" element={page(<Prospection />)} />
           <Route path="campaigns" element={page(<Emails section="campaigns" />)} />
           <Route path="campaigns/:id" element={page(<ResidencyPage />)} />
-          <Route path="outbox" element={page(<Emails section="outbox" />)} />
-          <Route path="budget" element={page(<Budget />)} />
-          <Route path="visa" element={page(<Visa />)} />
+          <Route path="artists" element={page(<ArtistsSection />)} />
+          <Route path="artists/:id" element={page(<ArtistDetail />)} />
+          <Route path="results" element={page(<Results />)} />
+          <Route path="admin" element={page(<Admin />)} />
+          <Route path="import" element={page(<Import />)} />
           <Route path="settings" element={page(<Settings />)} />
           {REDIRECTS.map(([from, to]) => (
-            <Route key={from} path={from} element={<Navigate to={to} replace />} />
+            <Route key={from} path={from} element={<Redirect to={to} />} />
           ))}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

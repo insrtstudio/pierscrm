@@ -692,8 +692,8 @@ function EventModal({
               onClick={() =>
                 navigate(
                   visa.dossier_id != null
-                    ? `/visa?dossier=${visa.dossier_id}`
-                    : `/visa?event=${event.id}`
+                    ? `/admin?tab=visa&dossier=${visa.dossier_id}`
+                    : `/admin?tab=visa&event=${event.id}`
                 )
               }
             >

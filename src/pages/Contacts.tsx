@@ -153,7 +153,7 @@ export function Contacts() {
   const waitingN = bridgeKind === "promoter" ? waiting?.promoters ?? 0 : bridgeKind === "venue" ? waiting?.venues ?? 0 : 0;
   const showBridge = bridgeKind != null && total != null && total <= 20 && waitingN > 0;
   const openScouting = () =>
-    navigate(`/discovery?view=${bridgeKind === "promoter" ? "promoters" : "venues"}&email=1`);
+    navigate(`/contacts?tab=venues&view=${bridgeKind === "promoter" ? "promoters" : "venues"}&email=1`);
 
   // Contact status feeds the follow-up queue, the dashboard and the Discovery
   // "contacted" flag: refresh all of them, not only this list.
@@ -311,7 +311,7 @@ export function Contacts() {
             id="outreach"
             text={t("scouting.outreach_banner")}
             link={t("scouting.outreach_banner_link")}
-            to="/discovery"
+            to="/contacts?tab=venues"
           />
         </div>
         {/* Filters */}

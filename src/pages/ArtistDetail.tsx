@@ -463,7 +463,7 @@ export function ArtistDetail() {
           <div className="card p-5">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-semibold">{t("artists.visa_dossiers")}</h3>
-              <button className="btn-ghost px-2 py-1" onClick={() => navigate("/visa")}>
+              <button className="btn-ghost px-2 py-1" onClick={() => navigate("/admin?tab=visa")}>
                 <ExternalLink size={13} />
               </button>
             </div>
@@ -474,7 +474,7 @@ export function ArtistDetail() {
                 {openDossiers.map((d) => (
                   <button
                     key={d.id}
-                    onClick={() => navigate(`/visa?dossier=${d.id}`)}
+                    onClick={() => navigate(`/admin?tab=visa&dossier=${d.id}`)}
                     className="flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left hover:bg-muted"
                   >
                     <div className="min-w-0">

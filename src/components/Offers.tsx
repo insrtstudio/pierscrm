@@ -802,7 +802,7 @@ export function OverduePaymentsAlert() {
   const total = overdue.reduce((s, p) => s + p.amount, 0);
   return (
     <Link
-      to="/budget"
+      to="/admin"
       className="flex items-center gap-3 border-b border-border bg-danger/10 px-8 py-3 text-sm font-semibold text-danger"
     >
       <AlertTriangle size={16} />

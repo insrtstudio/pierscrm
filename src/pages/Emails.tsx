@@ -54,7 +54,7 @@ import {
 } from "../lib/api";
 import type { Campaign, Contact, EmailFilter, InboundRow, Template } from "../lib/types";
 import { AUDIENCE_STATES, CAMPAIGN_STATUSES, SUPPRESSION_REASONS } from "../lib/types";
-import { PageHeader, EmptyState } from "../components/Layout";
+import { PageHeader, EmptyState, Segmented } from "../components/Layout";
 import { Modal, Field, useToast, useConfirm, useSubmit, errorMessage } from "../components/ui";
 import { useAppIntent, useDebounced } from "../lib/hooks";
 import { runReplySync } from "../components/ReplySync";
@@ -88,47 +88,59 @@ const CAMPAIGN_STATUS_STYLE: Record<string, string> = {
   archived: "bg-fg-faint/10 text-fg-faint",
 };
 
-/// The former Emails page is split in two sections of the nav:
-/// "campaigns" (campaigns + bulk send) and "outbox" (follow-ups, compose,
-/// history, templates). Both render this component with their own tabs.
-const SECTIONS: Record<"campaigns" | "outbox", Tab[]> = {
-  campaigns: ["campaigns", "bulk"],
-  outbox: ["replies", "inbox", "followups", "compose", "log", "templates", "guardrails"],
+/// The former Emails page feeds two sections of the nav: "replies" (the
+/// replies to handle, the inbox) and "campaigns" (campaigns, bulk send,
+/// follow-ups, templates, history). Writing a single email is the header's
+/// action; the sending guardrails live in Settings › Sending.
+type Section = "campaigns" | "replies";
+const SECTIONS: Record<Section, Tab[]> = {
+  campaigns: ["campaigns", "bulk", "followups", "templates", "log"],
+  replies: ["replies", "inbox"],
 };
 
-export function Emails({ section = "outbox" }: { section?: "campaigns" | "outbox" }) {
+export function Emails({ section = "replies" }: { section?: Section }) {
   const { t } = useTranslation();
   const tabs = SECTIONS[section];
   // `?tab=` lets other pages deep-link (Agenda › Actions opens the bulk send).
-  const [params] = useSearchParams();
-  const [selTab, setTab] = useState<Tab>(() => (params.get("tab") as Tab) || tabs[0]);
-  // Follow later deep links too (a notification opens ?tab=replies&item=…).
+  const [params, setParams] = useSearchParams();
   const paramTab = params.get("tab") as Tab | null;
-  useEffect(() => {
-    if (paramTab) setTab(paramTab);
-  }, [paramTab, params]);
-  // /campaigns and /outbox render this same component at the same spot, so React
-  // keeps the state across them: a tab of the other section rendered a blank page.
-  const tab = tabs.includes(selTab) ? selTab : tabs[0];
+  // Compose is reachable from the header, not a tab of its own.
+  const valid = (tb: Tab | null): tb is Tab => !!tb && (tabs.includes(tb) || tb === "compose");
+  const tab: Tab = valid(paramTab) ? paramTab : tabs[0];
+  const setTab = (tb: Tab) => {
+    const next = new URLSearchParams(params);
+    if (tb === tabs[0]) next.delete("tab");
+    else next.set("tab", tb);
+    next.delete("item");
+    setParams(next, { replace: true });
+  };
   const tabLabel = (tb: Tab) => (tb === "bulk" ? t("bulk.tab") : t(`emails.tab_${tb}`));
 
   return (
     <div>
-      <PageHeader title={t(`emails.title_${section}`)} subtitle={t(`emails.subtitle_${section}`)} />
-      <div className="px-page py-6">
-        <div className="segmented mb-6">
-          {tabs.map((tb) => (
-            <button
-              key={tb}
-              data-active={tab === tb}
-              onClick={() => setTab(tb)}
-              className="segmented-item"
-            >
-              {tabLabel(tb)}
+      <PageHeader
+        title={t(`emails.title_${section}`)}
+        actions={
+          tab === "compose" ? (
+            <button className="btn-ghost" onClick={() => setTab(tabs[0])}>
+              <X size={14} />
+              {t("common.close")}
             </button>
-          ))}
-        </div>
-
+          ) : (
+            <button className="btn-outline" onClick={() => setTab("compose")}>
+              <Pencil size={13} />
+              {t("emails.write")}
+            </button>
+          )
+        }
+      >
+        <Segmented
+          items={tabs.map((tb) => ({ key: tb, label: tabLabel(tb) }))}
+          value={tab}
+          onChange={setTab}
+        />
+      </PageHeader>
+      <div className="px-page py-6">
         {tab === "replies" && <ReplyDeskTab />}
         {tab === "inbox" && <InboxTab />}
         {tab === "compose" && <ComposeTab />}
@@ -137,7 +149,6 @@ export function Emails({ section = "outbox" }: { section?: "campaigns" | "outbox
         {tab === "campaigns" && <CampaignsTab />}
         {tab === "templates" && <TemplatesTab />}
         {tab === "log" && <LogTab />}
-        {tab === "guardrails" && <GuardrailsTab />}
       </div>
     </div>
   );
@@ -1336,7 +1347,7 @@ function LogTab() {
 // ---------------- Guardrails ----------------
 
 /// Daily cap, reply detection (IMAP) and the suppression list.
-function GuardrailsTab() {
+export function GuardrailsTab() {
   const { t } = useTranslation();
   return (
     <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,420px)_1fr]">

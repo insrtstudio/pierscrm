@@ -196,7 +196,7 @@ function StatusBar({ view }: { view: ResidencyView }) {
           <span className="flex-1">
             {t("residency.visa_needed", { countries: view.visas.map((v) => v.country_name).join(", ") })}
           </span>
-          <Link className="btn-outline py-1.5" to="/visa">
+          <Link className="btn-outline py-1.5" to="/admin?tab=visa">
             {t("residency.visa_cta")}
           </Link>
         </div>

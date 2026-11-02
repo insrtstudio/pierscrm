@@ -162,7 +162,7 @@ export function Budget() {
                 <td className="px-3 py-2.5 text-right tabular-nums text-fg-subtle">·</td>
                 <td className="px-3 py-2.5 text-right tabular-nums font-medium">{euro(adSpend)}</td>
                 <td className="px-5 py-2.5 text-xs">
-                  <Link to="/audience" className="text-fg-subtle hover:text-accent">
+                  <Link to="/artists?tab=audience" className="text-fg-subtle hover:text-accent">
                     {t("budget.from_audience")} →
                   </Link>
                 </td>

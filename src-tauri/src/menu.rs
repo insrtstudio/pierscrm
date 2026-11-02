@@ -71,20 +71,16 @@ pub fn build_lang<R: Runtime>(app: &AppHandle<R>, lang: &str) -> tauri::Result<M
     };
     let view_menu = Submenu::new(app, l("Aller à", "Go"), true)?;
     view_menu.append_items(&[
-        &go("nav:home", l("Accueil", "Home"), "1")?,
-        &go("nav:agenda", "Agenda", "2")?,
+        &go("nav:today", l("Aujourd'hui", "Today"), "1")?,
+        &go("nav:replies", l("Réponses", "Replies"), "2")?,
+        &go("nav:agenda", "Agenda", "3")?,
         &PredefinedMenuItem::separator(app)?,
-        &go("nav:artists", l("Artistes", "Artists"), "3")?,
-        &go("nav:audience", "Audience", "4")?,
+        &go("nav:prospect", l("Prospection", "Prospecting"), "4")?,
+        &go("nav:campaigns", l("Campagnes", "Campaigns"), "5")?,
+        &go("nav:artists", l("Artistes", "Artists"), "6")?,
         &PredefinedMenuItem::separator(app)?,
-        &go("nav:pipeline", l("Démarchage", "Outreach"), "5")?,
-        &go("nav:discovery", l("Repérage", "Scouting"), "6")?,
-        &PredefinedMenuItem::separator(app)?,
-        &go("nav:campaigns", l("Campagnes", "Campaigns"), "7")?,
-        &go("nav:outbox", l("Boîte d'envoi", "Outbox"), "8")?,
-        &PredefinedMenuItem::separator(app)?,
-        &go("nav:budget", "Budget", "9")?,
-        &go("nav:visa", l("Visas", "Visas"), "0")?,
+        &go("nav:results", l("Résultats", "Results"), "7")?,
+        &go("nav:admin", "Admin", "8")?,
         &PredefinedMenuItem::separator(app)?,
         &PredefinedMenuItem::fullscreen(app, None)?,
     ])?;
