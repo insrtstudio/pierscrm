@@ -577,6 +577,7 @@ function TargetTab({ view }: { view: ResidencyView }) {
                 declined: result.excluded_declined,
                 audience: result.excluded_in_audience,
                 noemail: result.excluded_no_email,
+                unmatched: result.excluded_unmatched ?? 0,
               })}
             </div>
             {(result.no_email_venue_ids.length > 0 || finder) && (

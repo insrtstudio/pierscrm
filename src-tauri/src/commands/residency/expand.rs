@@ -609,7 +609,9 @@ mod tests {
                 (10, 'email', 'booking@lyonarena.fr', 30, 'x'),
                 (11, 'email', 'booking@brusselsclub.be', 30, 'x'),
                 (12, 'email', 'booking@genevaclub.ch', 30, 'x'), (13, 'email', 'booking@zurichclub.ch', 30, 'x');
-             INSERT INTO suppressions (address, reason) VALUES ('gone@lilleparti.fr', 'bounce');",
+             INSERT INTO suppressions (address, reason) VALUES ('gone@lilleparti.fr', 'bounce');
+             -- Every club books the style (targeting.rs, style_match).
+             UPDATE vi_venues SET fit_score = 40;",
         )
         .unwrap();
         let mut paris = Config::default();
@@ -665,7 +667,8 @@ mod tests {
         c.execute_batch(
             "INSERT INTO vi_venues (id, nom, nom_normalise, ville, ville_norm, pays, statut, capacite_est, nb_events_periode, score_qualif)
                VALUES (14, 'Lausanne Club', 'lausanneclub', 'Lausanne', 'lausanne', 'CH', 'qualifie', 300, 90, 60);
-             INSERT INTO vi_contacts (venue_id, type, valeur, score, source_url) VALUES (14, 'email', 'booking@lausanneclub.ch', 30, 'x');",
+             INSERT INTO vi_contacts (venue_id, type, valeur, score, source_url) VALUES (14, 'email', 'booking@lausanneclub.ch', 30, 'x');
+             UPDATE vi_venues SET fit_score = 40 WHERE id = 14;",
         )
         .unwrap();
         let s = suggestions(&c, 1).unwrap();

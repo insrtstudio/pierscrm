@@ -1319,7 +1319,7 @@ export const fr = {
     build_help: "Clubs qualifiés ou validés de la zone, une seule adresse par club (booking ou programmation de préférence), sans les adresses en suppression, contactées depuis moins de 90 jours ou ayant refusé.",
     found_one: "{{count}} club trouvé",
     found_other: "{{count}} clubs trouvés",
-    excluded: "Écartés : {{suppressed}} en suppression, {{recent}} contactés récemment, {{declined}} refus, {{audience}} déjà dans la cible, {{noemail}} sans adresse propre",
+    excluded: "Écartés : {{suppressed}} en suppression, {{recent}} contactés récemment, {{declined}} refus, {{audience}} déjà dans la cible, {{noemail}} sans adresse propre, {{unmatched}} sans lien avec le style de l'artiste",
     no_email_clubs_one: "{{count}} club exclu faute d'email",
     no_email_clubs_other: "{{count}} clubs exclus faute d'email",
     finder_run: "Chercher les emails manquants",

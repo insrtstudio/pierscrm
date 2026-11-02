@@ -181,6 +181,10 @@ pub struct BuildOptions {
     /// Also list promoters / collectives of the zone (promoters.rs).
     #[serde(default)]
     pub include_promoters: Option<bool>,
+    /// Also list clubs with no sign they book the artist's style (no fit
+    /// score worth the name, no reference artist played there).
+    #[serde(default)]
+    pub include_unmatched: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -227,6 +231,8 @@ pub struct BuildResult {
     pub excluded_in_audience: i64,
     pub excluded_placeholder: i64,
     pub excluded_no_email: i64,
+    /// Clubs with nothing linking them to the artist's style.
+    pub excluded_unmatched: i64,
     /// The Discovery venues counted in excluded_no_email: what the missing-email
     /// finder goes over (email_finder.rs), so its count matches the banner.
     pub no_email_venue_ids: Vec<i64>,
@@ -380,6 +386,7 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
         it.collect::<Result<_, _>>().map_err(|e| e.to_string())?
     };
 
+    let unmatched_ok = opts.include_unmatched == Some(true);
     let mut out = BuildResult::default();
     let mut seen_addr: HashSet<String> = HashSet::new();
     let email_sql = format!(
@@ -400,6 +407,15 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
         if crate::commands::vi::is_placeholder_venue(&nom, ville.as_deref()) || not_a_club(&nom) {
             out.excluded_placeholder += 1;
             continue;
+        }
+        if !unmatched_ok {
+            let refs: i64 = conn
+                .query_row("SELECT COUNT(*) FROM vi_evidence WHERE venue_id = ?1", params![id], |r| r.get(0))
+                .unwrap_or(0);
+            if !style_match(fit, refs) {
+                out.excluded_unmatched += 1;
+                continue;
+            }
         }
         if !has_email {
             out.excluded_no_email += 1;
@@ -483,6 +499,17 @@ pub fn build(conn: &Connection, campaign_id: i64, cfg: &Config, opts: &BuildOpti
     out.candidates.sort_by(|a, b| b.rank.partial_cmp(&a.rank).unwrap_or(std::cmp::Ordering::Equal));
     out.candidates.truncate(limit);
     Ok(out)
+}
+
+/// Least "books artists like ours" score (fit.rs) that counts as a match on
+/// its own. Below it, a club needs a reference artist seen there: a rental
+/// barge with 27 nights of anything got a residency pitch (Péniche Éliane).
+pub const MIN_FIT: i64 = 15;
+
+/// Something links the club to the artist's style: a fit score, or a
+/// reference artist who played there.
+pub fn style_match(fit: Option<i64>, reference_artists: i64) -> bool {
+    fit.map_or(false, |f| f >= MIN_FIT) || reference_artists > 0
 }
 
 /// Least nights (12 months if known, else harvested total) for a promoter to
@@ -917,6 +944,9 @@ mod tests {
              INSERT INTO vi_evidence (venue_id, artiste, date_event, source_url) VALUES
                 (2, 'Artist X', '2026-05-01', 'u'), (2, 'Artist Y', '2026-06-01', 'u'), (2, 'Artist Z', '2026-07-01', 'u');
              INSERT INTO suppressions (address, reason) VALUES ('gone@clube.fr', 'bounce');
+             -- Club A: no fit score but a reference artist, so it matches.
+             INSERT INTO vi_evidence (venue_id, artiste, date_event, source_url) VALUES (1, 'Artist W', '2026-04-01', 'u');
+             UPDATE vi_venues SET fit_score = 40 WHERE id IN (3, 4, 5, 6, 7, 8);
              INSERT INTO contacts (id, category, name, area, email, status) VALUES
                 (50, 'venue', 'Bar Manuel', 'Paris', 'prog@barmanuel.fr', 'to_contact'),
                 (51, 'venue', 'Bar Lyon', 'Lyon', 'prog@barlyon.fr', 'to_contact'),
@@ -994,11 +1024,17 @@ mod tests {
         .unwrap();
         let cfg = Config::default();
         let r = build(&c, 1, &cfg, &BuildOptions::default()).unwrap();
-        // Without a score Club A would lead (60 > 50); the fit puts B first.
+        // Club A has neither a fit score nor a reference artist: left out.
         let keys: Vec<&str> = r.candidates.iter().map(|x| x.key.as_str()).collect();
-        assert_eq!(keys, vec!["v:2", "v:1"]);
+        assert_eq!(keys, vec!["v:2"]);
+        assert_eq!(r.excluded_unmatched, 1);
         assert_eq!(r.candidates[0].fit_explain.as_deref(), Some("a programmé Prunk ; 14 soirées house en 12 mois"));
-        assert_eq!(r.candidates[1].fit_score, None);
+        // Asked for anyway: without a score Club A would lead (60 > 50), the fit puts B first.
+        let all = build(&c, 1, &cfg, &BuildOptions { include_unmatched: Some(true), ..Default::default() }).unwrap();
+        let keys: Vec<&str> = all.candidates.iter().map(|x| x.key.as_str()).collect();
+        assert_eq!(keys, vec!["v:2", "v:1"]);
+        assert_eq!(all.candidates[1].fit_score, None);
+        assert!(style_match(Some(MIN_FIT), 0) && style_match(None, 1) && !style_match(Some(MIN_FIT - 1), 0) && !style_match(None, 0));
         let opts = BuildOptions { include_promoters: Some(true), ..Default::default() };
         let r = build(&c, 1, &cfg, &opts).unwrap();
         let p = r.candidates.iter().find(|x| x.source == "promoter").expect("promoter listed");

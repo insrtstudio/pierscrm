@@ -135,6 +135,8 @@ export interface BuildResult {
   excluded_in_audience: number;
   excluded_placeholder: number;
   excluded_no_email: number;
+  /** Clubs with nothing linking them to the artist's style (no fit, no reference artist). */
+  excluded_unmatched?: number;
   /** Discovery venues counted in excluded_no_email (what the email finder goes over). */
   no_email_venue_ids: number[];
 }

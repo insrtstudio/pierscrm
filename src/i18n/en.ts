@@ -1318,7 +1318,7 @@ export const en = {
     build_help: "Qualified or validated clubs of the zone, one address per club (booking or programming first), without suppressed addresses, those mailed in the last 90 days or who declined.",
     found_one: "{{count}} club found",
     found_other: "{{count}} clubs found",
-    excluded: "Left out: {{suppressed}} suppressed, {{recent}} mailed recently, {{declined}} declined, {{audience}} already targeted, {{noemail}} without an own address",
+    excluded: "Left out: {{suppressed}} suppressed, {{recent}} mailed recently, {{declined}} declined, {{audience}} already targeted, {{noemail}} without an own address, {{unmatched}} with nothing tying them to the artist's style",
     no_email_clubs_one: "{{count}} club left out for lack of an email",
     no_email_clubs_other: "{{count}} clubs left out for lack of an email",
     finder_run: "Find the missing emails",
