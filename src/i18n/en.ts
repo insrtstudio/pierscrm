@@ -356,6 +356,7 @@ export const en = {
     claude_help: "Anthropic does not expose the balance to apps. Copy the console balance after each top-up, the app then counts down what it spends.",
     claude_placeholder: "Console balance, in $",
     claude_save: "Save",
+    key_placeholder: "Paste the API key here",
     top_up: "Top up",
     banner: "Top up soon: {{list}}.",
     see: "See credits",

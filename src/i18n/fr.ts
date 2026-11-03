@@ -356,6 +356,7 @@ export const fr = {
     claude_help: "Anthropic ne donne pas le solde aux applis. Recopie celui de la console après chaque recharge, l'app décompte ensuite ce qu'elle dépense.",
     claude_placeholder: "Solde de la console, en $",
     claude_save: "Enregistrer",
+    key_placeholder: "Colle la clé API ici",
     top_up: "Recharger",
     banner: "À recharger bientôt : {{list}}.",
     see: "Voir les crédits",

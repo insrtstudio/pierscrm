@@ -7,6 +7,7 @@ import { Link } from "react-router-dom";
 import clsx from "clsx";
 import { AlertTriangle, ExternalLink, RefreshCw, Wallet } from "lucide-react";
 import { useSubmit, useToast } from "./ui";
+import { setSetting } from "../lib/api";
 
 export interface Credit {
   service: "claude" | "serper" | "millionverifier" | "pushover";
@@ -20,6 +21,12 @@ export interface Credit {
   spent_month?: number | null;
   manage_url: string;
 }
+
+/// Services whose key can be pasted right on their card.
+const KEY_OF: Partial<Record<Credit["service"], string>> = {
+  millionverifier: "email_verifier_key",
+  serper: "serper_api_key",
+};
 
 const fetchCredits = () => invoke<Credit[]>("credits_overview");
 const QK = ["credits_overview"];
@@ -63,6 +70,19 @@ function CreditCard({ c, onChange }: { c: Credit; onChange: (l: Credit[]) => voi
   const { t } = useTranslation();
   const toast = useToast();
   const [val, setVal] = useState("");
+  const [keyVal, setKeyVal] = useState("");
+  const qc = useQueryClient();
+  const keyName = KEY_OF[c.service];
+  const [saveKey, keyBusy] = useSubmit(async () => {
+    if (!keyName) return;
+    await setSetting(keyName, keyVal.trim());
+    setKeyVal("");
+    qc.invalidateQueries({ queryKey: ["setting", keyName] });
+    qc.invalidateQueries({ queryKey: ["email_check_stats"] });
+    qc.invalidateQueries({ queryKey: ["serper_status"] });
+    await qc.invalidateQueries({ queryKey: QK });
+    toast(t("settings.saved"), "ok");
+  });
   const [save, busy] = useSubmit(async () => {
     const usd = parseFloat(val.replace(",", "."));
     const list = await invoke<Credit[]>("credits_set_claude_balance", { usd });
@@ -96,6 +116,21 @@ function CreditCard({ c, onChange }: { c: Credit; onChange: (l: Credit[]) => voi
         {c.detail && <div>{c.detail}</div>}
         {c.service === "claude" && c.key_set && c.remaining == null && <div>{t("credits.claude_help")}</div>}
       </div>
+      {keyName && (!c.key_set || c.status === "error") && (
+        <div className="mt-3 flex items-center gap-2">
+          <input
+            type="password"
+            className="input h-8 flex-1 text-sm"
+            autoComplete="off"
+            placeholder={t("credits.key_placeholder")}
+            value={keyVal}
+            onChange={(e) => setKeyVal(e.target.value)}
+          />
+          <button className="btn btn-primary" onClick={saveKey} disabled={keyBusy || !keyVal.trim()}>
+            {t("credits.claude_save")}
+          </button>
+        </div>
+      )}
       {c.service === "claude" && c.key_set && (
         <div className="mt-3 flex items-center gap-2">
           <input

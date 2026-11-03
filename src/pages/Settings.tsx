@@ -546,6 +546,7 @@ export function Settings() {
           </>
         )}
         {tab === "agent" && <AgentLibraryPanel />}
+        {tab === "integrations" && <EmailVerifierCard />}
         {tab === "integrations" && (
         <>
         {/* Venue website resolution (Serper) */}
