@@ -216,6 +216,8 @@ fn collective_picks(conn: &Connection, campaign_id: i64, cfg: &Config, max: usiz
         .into_iter()
         .filter(|c| c.source == "promoter" && !c.email.trim().is_empty() && c.email_rank <= 2)
         .filter(|c| c.promoter_id.is_some_and(|id| grassroots(conn, id)))
+        // Checked before it enters a campaign: a dead address never takes a slot.
+        .filter(|c| crate::commands::deliverability::verify::pick_ok(conn, &c.email, chrono::Utc::now()))
         .take(max)
         .map(|c| Pick {
             venue_id: None,

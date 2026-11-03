@@ -11,9 +11,18 @@
 //!   Réglages, Intégrations): it asks the recipient's server whether the
 //!   mailbox exists, without sending anything.
 //!
-//! Verdicts are cached per address (`email_checks`, CHECK_TTL_DAYS). Only an
-//! "invalid" verdict stops a send; "risky" (catch-all servers) and "unknown"
-//! (service down, no key) let it go, so the check can never block a campaign.
+//! Verdicts are cached per address (`email_checks`, CHECK_TTL_DAYS). What a
+//! verdict does to a send (`gate_first_email`, booking@ reputation first):
+//! - invalid: never sent, dropped like a bounce, the campaign moves on;
+//! - risky (catch-all server, may bounce later): at most RISKY_PER_DAY first
+//!   emails a day, and none while the recent bounce rate is above
+//!   RISKY_MAX_BOUNCE_PCT; the rest wait for the next day;
+//! - unknown from the service (the server did not answer): waits and is
+//!   checked again the next day, then counts as risky after UNKNOWN_GRACE_DAYS;
+//! - no service set: only the local layer applies, unknown goes.
+//! Every send to an address never mailed before (manual, bulk, campaign) also
+//! goes through `guard_new_address`, and the collectives refill only picks
+//! addresses that passed (`pick_ok`).
 
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -27,6 +36,12 @@ pub const VERIFIER_KEY: &str = "email_verifier_key";
 pub const CHECK_TTL_DAYS: i64 = 45;
 /// Addresses checked ahead of time per engine tick.
 pub const PRECHECK_PER_TICK: usize = 10;
+/// First emails a day to catch-all addresses.
+pub const RISKY_PER_DAY: i64 = 3;
+/// No catch-all first email while the bounce rate of the last 14 days is above this.
+pub const RISKY_MAX_BOUNCE_PCT: f64 = 2.0;
+/// An address the service could not settle waits this long, then counts as risky.
+pub const UNKNOWN_GRACE_DAYS: i64 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -258,6 +273,8 @@ pub fn migrate(conn: &Connection) {
             checked_at TEXT NOT NULL DEFAULT (datetime('now'))
         );",
     );
+    // When the address was first checked (UNKNOWN_GRACE_DAYS counts from it).
+    let _ = conn.execute("ALTER TABLE email_checks ADD COLUMN first_seen TEXT", []);
 }
 
 fn norm(addr: &str) -> String {
@@ -288,9 +305,10 @@ pub fn cached(conn: &Connection, addr: &str, now: DateTime<Utc>) -> Option<Verdi
 
 pub fn store(conn: &Connection, addr: &str, v: &Verdict, now: DateTime<Utc>) {
     let _ = conn.execute(
-        "INSERT INTO email_checks (address, status, reason, source, checked_at) VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO email_checks (address, status, reason, source, checked_at, first_seen) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
          ON CONFLICT(address) DO UPDATE SET status = excluded.status, reason = excluded.reason,
-            source = excluded.source, checked_at = excluded.checked_at",
+            source = excluded.source, checked_at = excluded.checked_at,
+            first_seen = COALESCE(email_checks.first_seen, excluded.first_seen)",
         params![norm(addr), v.status.as_str(), v.reason, v.source, super::fmt(now)],
     );
 }
@@ -304,7 +322,11 @@ pub fn verdict_for(
     now: DateTime<Utc>,
 ) -> Verdict {
     if let Some(v) = cached(conn, addr, now) {
-        return v;
+        // A local-only "unknown" says nothing about the mailbox: once the
+        // service is set, ask it.
+        if !(service.is_some() && v.source == "local" && v.status != Status::Invalid) {
+            return v;
+        }
     }
     let v = check(addr, resolver, service);
     store(conn, addr, &v, now);
@@ -315,25 +337,125 @@ pub fn verdict_for(
 /// and the bounce rate tell it apart from a real bounce).
 pub const INVALID_NOTE: &str = "vérifiée avant envoi";
 
-/// Before a first email: false when the address must not be mailed. An
-/// invalid address is suppressed like a bounce (dropped from the contact,
-/// notified, the sequence stops) and the campaign goes on with the next one.
-pub fn gate_first_email(conn: &Connection, addr: &str, now: DateTime<Utc>) -> Result<(), String> {
-    // The engine tests run pick_next offline; the check itself is tested above.
-    if cfg!(test) {
-        return Ok(());
+/// What to do with a first email.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Gate {
+    Send,
+    /// Keep it scheduled, try again later (reason shown on the message).
+    Wait(String),
+    /// Never send: the address was suppressed (reason).
+    Drop(String),
+}
+
+fn days_since_first_seen(conn: &Connection, addr: &str, now: DateTime<Utc>) -> i64 {
+    conn.query_row("SELECT COALESCE(first_seen, checked_at) FROM email_checks WHERE address = ?1", params![norm(addr)], |r| {
+        r.get::<_, String>(0)
+    })
+    .ok()
+    .and_then(|at| super::parse_utc(&at))
+    .map(|at| (now - at).num_days())
+    .unwrap_or(0)
+}
+
+/// First emails sent today to addresses checked risky.
+pub fn risky_sent_today(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(DISTINCT lower(e.to_addr)) FROM emails e
+         JOIN email_checks c ON c.address = lower(trim(e.to_addr))
+         WHERE e.status = 'sent' AND c.status = 'risky'
+           AND date(e.sent_at, 'localtime') = date('now', 'localtime')",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap_or(0)
+}
+
+/// Bounces over sends of the last 14 days (or since the health reset), in
+/// percent (0 with few sends).
+pub fn recent_bounce_pct(conn: &Connection) -> f64 {
+    let (sent, bounced): (i64, i64) = conn
+        .query_row(
+            "WITH since AS (SELECT max(datetime('now', '-14 days'),
+                    COALESCE((SELECT value FROM settings WHERE key = 'deliverability_health_reset_at'), '')) AS at)
+             SELECT (SELECT COUNT(*) FROM emails, since WHERE status = 'sent' AND sent_at >= since.at),
+                    (SELECT COUNT(*) FROM suppressions, since WHERE reason = 'bounce' AND created_at >= since.at)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((0, 0));
+    if sent < 20 {
+        return 0.0;
     }
-    let resolver = super::dns::DohResolver::new().ok();
-    let svc = service(conn);
-    let v = match &resolver {
-        Some(r) => verdict_for(conn, addr, r, svc.as_deref(), now),
-        None => return Ok(()),
+    bounced as f64 * 100.0 / sent as f64
+}
+
+/// The rule of the module header for one verdict.
+pub fn decide(v: &Verdict, service_set: bool, waited_days: i64, risky_today: i64, bounce_pct: f64) -> Gate {
+    let risky = |why: &str| {
+        if bounce_pct > RISKY_MAX_BOUNCE_PCT {
+            Gate::Wait(format!("{why}, en attente tant que le taux de rebond dépasse {RISKY_MAX_BOUNCE_PCT} %"))
+        } else if risky_today >= RISKY_PER_DAY {
+            Gate::Wait(format!("{why}, quota du jour atteint ({RISKY_PER_DAY} par jour)"))
+        } else {
+            Gate::Send
+        }
     };
+    match v.status {
+        Status::Valid => Gate::Send,
+        Status::Invalid => Gate::Drop(v.reason.clone()),
+        Status::Risky => risky("adresse non vérifiable (serveur catch-all)"),
+        Status::Unknown if !service_set || v.source == "local" => Gate::Send,
+        Status::Unknown if waited_days >= UNKNOWN_GRACE_DAYS => risky("adresse non vérifiable"),
+        Status::Unknown => Gate::Wait(format!("vérification à refaire demain ({})", v.reason)),
+    }
+}
+
+/// Before a first email. An invalid address is suppressed like a bounce
+/// (dropped from the contact, notified, the sequence stops).
+pub fn gate_first_email(conn: &Connection, addr: &str, now: DateTime<Utc>) -> Gate {
+    // The engine tests run pick_next offline; the rule itself is tested below.
+    if cfg!(test) {
+        return Gate::Send;
+    }
+    let Ok(resolver) = super::dns::DohResolver::new() else { return Gate::Send };
+    let svc = service(conn);
+    let v = verdict_for(conn, addr, &resolver, svc.as_deref(), now);
+    let g = decide(&v, svc.is_some(), days_since_first_seen(conn, addr, now), risky_sent_today(conn), recent_bounce_pct(conn));
+    if let Gate::Drop(why) = &g {
+        crate::commands::outbox::suppress(conn, addr, "invalid", Some(&format!("{} : {}", INVALID_NOTE, why)));
+    }
+    g
+}
+
+/// Any send (Compose, bulk, campaigns) to an address never mailed before:
+/// Some(reason) when it must not go. Only a dead address is refused here;
+/// the risky quota is the autopilot's business.
+pub fn guard_new_address(conn: &Connection, addr: &str, now: DateTime<Utc>) -> Option<String> {
+    if cfg!(test) {
+        return None;
+    }
+    let mailed: bool = conn
+        .query_row("SELECT EXISTS (SELECT 1 FROM emails WHERE lower(trim(to_addr)) = ?1 AND status = 'sent')", params![norm(addr)], |r| {
+            r.get(0)
+        })
+        .unwrap_or(false);
+    if mailed {
+        return None;
+    }
+    let resolver = super::dns::DohResolver::new().ok()?;
+    let svc = service(conn);
+    let v = verdict_for(conn, addr, &resolver, svc.as_deref(), now);
     if v.status != Status::Invalid {
-        return Ok(());
+        return None;
     }
     crate::commands::outbox::suppress(conn, addr, "invalid", Some(&format!("{} : {}", INVALID_NOTE, v.reason)));
-    Err(v.reason)
+    Some(v.reason)
+}
+
+/// Collectives refill: whether an address may be added to a campaign. An
+/// invalid one is suppressed so it is never picked again.
+pub fn pick_ok(conn: &Connection, addr: &str, now: DateTime<Utc>) -> bool {
+    guard_new_address(conn, addr, now).is_none()
 }
 
 /// Engine tick: check ahead the addresses of first emails due within a day,
@@ -342,7 +464,7 @@ pub fn precheck(conn: &Connection, now: DateTime<Utc>) -> usize {
     if cfg!(test) {
         return 0;
     }
-    let horizon = super::fmt(now + Duration::days(1));
+    let horizon = super::fmt(now + Duration::days(2));
     let addrs: Vec<String> = conn
         .prepare(
             "SELECT DISTINCT lower(trim(k.email)) FROM campaign_messages m
@@ -355,12 +477,19 @@ pub fn precheck(conn: &Connection, now: DateTime<Utc>) -> usize {
         )
         .and_then(|mut st| st.query_map(params![horizon], |r| r.get(0)).map(|it| it.flatten().collect()))
         .unwrap_or_default();
-    let todo: Vec<String> = addrs.into_iter().filter(|a| cached(conn, a, now).is_none()).take(PRECHECK_PER_TICK).collect();
+    let svc = service(conn);
+    let todo: Vec<String> = addrs
+        .into_iter()
+        .filter(|a| match cached(conn, a, now) {
+            None => true,
+            Some(v) => svc.is_some() && v.source == "local" && v.status != Status::Invalid,
+        })
+        .take(PRECHECK_PER_TICK)
+        .collect();
     if todo.is_empty() {
         return 0;
     }
     let Ok(resolver) = super::dns::DohResolver::new() else { return 0 };
-    let svc = service(conn);
     for a in &todo {
         let v = check(a, &resolver, svc.as_deref());
         store(conn, a, &v, now);
@@ -458,6 +587,19 @@ mod tests {
         // A dead domain never reaches the (paid) service.
         assert_eq!(check("a@old.fr", &d, Some(&Svc("ok"))).status, Status::Invalid);
         assert!(parse_millionverifier(&serde_json::json!({ "result": "", "error": "Insufficient credits" })).is_err());
+    }
+
+    #[test]
+    fn send_rule() {
+        let v = |status, source| Verdict { status, reason: "r".into(), source };
+        assert_eq!(decide(&v(Status::Valid, "service"), true, 0, 9, 9.0), Gate::Send);
+        assert!(matches!(decide(&v(Status::Invalid, "local"), false, 0, 0, 0.0), Gate::Drop(_)));
+        assert_eq!(decide(&v(Status::Risky, "service"), true, 0, 0, 0.5), Gate::Send);
+        assert!(matches!(decide(&v(Status::Risky, "service"), true, 0, RISKY_PER_DAY, 0.5), Gate::Wait(_)));
+        assert!(matches!(decide(&v(Status::Risky, "service"), true, 0, 0, 3.0), Gate::Wait(_)));
+        assert_eq!(decide(&v(Status::Unknown, "local"), false, 0, 0, 0.0), Gate::Send);
+        assert!(matches!(decide(&v(Status::Unknown, "service"), true, 0, 0, 0.0), Gate::Wait(_)));
+        assert_eq!(decide(&v(Status::Unknown, "service"), true, UNKNOWN_GRACE_DAYS, 0, 0.0), Gate::Send);
     }
 
     #[test]

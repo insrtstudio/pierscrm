@@ -369,13 +369,26 @@ pub fn pick_next(conn: &Connection, now: DateTime<Utc>) -> Option<DueMsg> {
         // First email: a mailbox found dead is dropped like a bounce, the
         // campaign goes on with the next target (deliverability/verify.rs).
         if m.step == 1 {
-            if let Err(why) = crate::commands::deliverability::verify::gate_first_email(conn, &m.to, now) {
-                let name: String = conn
-                    .query_row("SELECT name FROM contacts WHERE id = ?1", params![m.contact_id], |r| r.get(0))
-                    .unwrap_or_default();
-                skip_remaining(conn, m.campaign_id, m.contact_id, &format!("adresse invalide ({})", why));
-                log(conn, Some(m.campaign_id), "warn", "invalid_address", &format!("{} : {} non envoyé, {}", name, m.to, why));
-                continue;
+            use crate::commands::deliverability::verify::{gate_first_email, Gate};
+            match gate_first_email(conn, &m.to, now) {
+                Gate::Send => {}
+                Gate::Drop(why) => {
+                    let name: String = conn
+                        .query_row("SELECT name FROM contacts WHERE id = ?1", params![m.contact_id], |r| r.get(0))
+                        .unwrap_or_default();
+                    skip_remaining(conn, m.campaign_id, m.contact_id, &format!("adresse invalide ({})", why));
+                    log(conn, Some(m.campaign_id), "warn", "invalid_address", &format!("{} : {} non envoyé, {}", name, m.to, why));
+                    continue;
+                }
+                Gate::Wait(why) => {
+                    // Stays scheduled; another target may go in its place.
+                    let note = format!("En attente : {why}");
+                    let _ = conn.execute(
+                        "UPDATE campaign_messages SET note = ?2, updated_at = datetime('now') WHERE id = ?1 AND COALESCE(note, '') <> ?2",
+                        params![m.id, note],
+                    );
+                    continue;
+                }
             }
         }
         return Some(m);

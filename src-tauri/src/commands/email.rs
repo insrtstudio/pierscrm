@@ -688,6 +688,18 @@ fn send_one_full(
                 None,
             ));
         }
+        // A never-mailed address that is dead is not tried (booking@ reputation).
+        if let Some(why) = deliverability::verify::guard_new_address(&conn, &addr, chrono::Utc::now()) {
+            return Ok((
+                SendResult {
+                    ok: false,
+                    error: Some(format!("{} : adresse invalide, non envoyé ({})", addr, why)),
+                    tracked: false,
+                    code: Some("invalid".into()),
+                },
+                None,
+            ));
+        }
         // The shared sending budget (warm-up ramp, hourly cap, per-domain cap).
         if let Some((code, reason)) = deliverability::send_block(&conn, &addr, chrono::Utc::now()) {
             return Ok((SendResult { ok: false, error: Some(reason), tracked: false, code: Some(code) }, None));
