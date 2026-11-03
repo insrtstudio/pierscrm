@@ -66,15 +66,33 @@ jobs:
       - name: Trust the signing certificate
         run: sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain src-tauri/signing/pierscrm-selfsigned.pem
 
+      # Tauri's own import (APPLE_CERTIFICATE) only resolves Apple-issued
+      # identity names ("Developer ID Application: ..."), so the certificate
+      # goes into a build keychain here and tauri.conf.json signs with its
+      # SHA-1 (codesign accepts a hash as identity).
+      - name: Import the signing identity
+        env:
+          P12_B64: ${{ secrets.APPLE_CERTIFICATE }}
+          P12_PASS: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          KC_PASS="$(uuidgen)"
+          echo "$P12_B64" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$KC_PASS" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KC_PASS" "$KC"
+          security import "$RUNNER_TEMP/signing.p12" -k "$KC" -P "$P12_PASS" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/signing.p12"
+          security find-identity -v -p codesigning "$KC"
+
       - name: Build & publish release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: "PiersCRM Self-Signed"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "PiersCRM ${{ github.ref_name }}"
