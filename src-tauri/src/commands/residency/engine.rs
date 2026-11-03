@@ -630,6 +630,8 @@ fn tick(pool: &DbPool, app: &tauri::AppHandle, now: DateTime<Utc>) {
                 Ok(_) => {}
                 Err(e) => log(&conn, None, "warn", "press_poll_failed", &e),
             }
+            // A target who really listened: the next follow-up goes tomorrow.
+            super::signals::act(&conn, now);
             // One-click unsubscribes recorded on insrt: suppress, sequences stop.
             match crate::commands::deliverability::poll_insrt_unsubscribes(&conn, client.as_ref()) {
                 Ok(n) if n > 0 => log(&conn, None, "info", "unsubscribe", &format!("{} désinscription(s) en un clic reçue(s)", n)),
@@ -671,6 +673,8 @@ fn tick(pool: &DbPool, app: &tauri::AppHandle, now: DateTime<Utc>) {
         }
     }
     drop(conn);
+    // Collectives prospection: refill, open countries, feed the lookup.
+    super::prospect::daily(pool, app, now);
     // Monday digest (commands/funnel.rs): once a week, from 08:00 local.
     crate::commands::funnel::on_tick(pool, local.naive_local());
     // iPhone notifications: EPK activity, opens, problems, daily summary.

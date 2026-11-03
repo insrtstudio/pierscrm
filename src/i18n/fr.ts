@@ -323,6 +323,13 @@ export const fr = {
     retry_one_started: "Recherche d'email relancée pour ce curateur.",
     emailed: "Email envoyé",
   },
+  dm_queue: {
+    title: "Messages Instagram du jour",
+    hint: "Des collectifs qui jouent ton style, sans adresse mail. Un message à la fois, envoyé depuis ton compte.",
+    booked: "a programmé {{names}}",
+    write: "Écrire",
+    close: "Fermer",
+  },
   verify: {
     title: "Vérification des adresses",
     help: "Avant chaque premier mail, l'app vérifie l'adresse. Une adresse invalide est retirée comme un rebond, sans rien envoyer, et la campagne passe à la suivante. Ça protège ton taux de rebond.",

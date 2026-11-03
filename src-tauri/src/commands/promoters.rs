@@ -997,21 +997,26 @@ pub async fn vi_start_promoter_enrich(
     if crate::secrets::read_setting(&conn, "serper_api_key").is_none_or(|k| k.trim().is_empty()) {
         return Err("vi.enrich_no_search".into());
     }
+    let run_id = start_enrich_run(&conn, &ids)?;
+    crate::commands::harvest::spawn_worker(state.pool.clone(), state.cancels.clone(), app, run_id);
+    Ok(run_id)
+}
+
+/// Queue a promoter lookup run over `ids` (the caller spawns its worker).
+/// Also used by the daily prospection (residency/prospect.rs).
+pub fn start_enrich_run(conn: &Connection, ids: &[i64]) -> Result<i64, String> {
     conn.execute(
         "INSERT INTO vi_runs (type, params, statut, started_at) VALUES ('enrich_promoters', ?1, 'en_cours', datetime('now'))",
         [json!({ "promoters": ids.len() }).to_string()],
     )
     .map_err(|e| e.to_string())?;
     let run_id = conn.last_insert_rowid();
-    {
-        let mut st = conn
-            .prepare("INSERT INTO vi_tasks (run_id, type, payload, statut) VALUES (?1, 'enrich_promoter', ?2, 'en_attente')")
-            .map_err(|e| e.to_string())?;
-        for id in &ids {
-            st.execute(params![run_id, json!({ "promoter_id": id }).to_string()]).map_err(|e| e.to_string())?;
-        }
+    let mut st = conn
+        .prepare("INSERT INTO vi_tasks (run_id, type, payload, statut) VALUES (?1, 'enrich_promoter', ?2, 'en_attente')")
+        .map_err(|e| e.to_string())?;
+    for id in ids {
+        st.execute(params![run_id, json!({ "promoter_id": id }).to_string()]).map_err(|e| e.to_string())?;
     }
-    crate::commands::harvest::spawn_worker(state.pool.clone(), state.cancels.clone(), app, run_id);
     Ok(run_id)
 }
 

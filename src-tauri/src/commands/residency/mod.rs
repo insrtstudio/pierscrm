@@ -27,7 +27,9 @@ pub mod engine;
 pub mod expand;
 pub mod insrt;
 pub mod replies;
+pub mod prospect;
 pub mod report;
+pub mod signals;
 pub mod targeting;
 pub mod zone;
 
@@ -63,6 +65,7 @@ use zone::{Window, Zone};
 /// - email_replies.text_tries     backfills of a reply stored without text
 /// - reply_insights.handled_at    when the action was done (week agenda)
 pub fn migrate(conn: &Connection) {
+    signals::migrate(conn);
     for stmt in [
         "ALTER TABLE campaigns ADD COLUMN kind TEXT NOT NULL DEFAULT 'standard'",
         "ALTER TABLE email_replies ADD COLUMN body_excerpt TEXT",

@@ -1228,3 +1228,69 @@ mod tests {
         assert_eq!(instagram_candidates(&c, 3).unwrap(), vec![1]);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Daily DM queue
+// ---------------------------------------------------------------------------
+
+/// A collective to DM today (Aujourd'hui screen).
+#[derive(Debug, Clone, Serialize)]
+pub struct DmQueueItem {
+    pub promoter_id: i64,
+    pub name: String,
+    pub city: Option<String>,
+    pub country: Option<String>,
+    pub handle: String,
+    pub fit_score: Option<i64>,
+    /// Reference artists they booked (fit detail), for the "why them".
+    pub matched: Vec<String>,
+}
+
+/// DMs suggested per day.
+pub const DM_QUEUE_SIZE: i64 = 5;
+
+/// The collectives worth a DM now: local crews (residency/prospect.rs size
+/// rules) that booked one of the reference artists, with an Instagram, no
+/// booking address to write to, never DM'd and in no campaign. Best fit first.
+pub fn dm_queue(conn: &Connection, limit: i64) -> Vec<DmQueueItem> {
+    use crate::commands::residency::prospect::{MAX_EVENTS, MAX_VENUES};
+    let Ok(mut st) = conn.prepare(
+        "SELECT o.id, o.nom, o.ville, o.pays, o.instagram, o.fit_score, o.fit_detail
+         FROM vi_promoter_orgs o
+         WHERE o.statut = 'actif' AND COALESCE(o.org_type, 'collectif') = 'collectif'
+           AND trim(COALESCE(o.instagram, '')) <> '' AND o.instagram_rejected IS NULL
+           AND o.fit_score >= 15 AND o.nb_venues <= ?2 AND o.nb_events_total <= ?3
+           AND COALESCE(json_array_length(json_extract(o.fit_detail, '$.matched')), 0) >= 1
+           AND NOT EXISTS (SELECT 1 FROM vi_promoter_contacts c WHERE c.promoter_id = o.id AND c.type = 'email')
+           AND NOT EXISTS (SELECT 1 FROM social_touches s WHERE s.promoter_id = o.id
+                           OR (o.crm_contact_id IS NOT NULL AND s.contact_id = o.crm_contact_id))
+           AND (o.crm_contact_id IS NULL OR NOT EXISTS (SELECT 1 FROM campaign_contacts cc WHERE cc.contact_id = o.crm_contact_id))
+         ORDER BY o.fit_score DESC, o.nb_events_12m DESC LIMIT ?1",
+    ) else {
+        return Vec::new();
+    };
+    st.query_map(params![limit, MAX_VENUES, MAX_EVENTS], |r| {
+        let detail: Option<String> = r.get(6)?;
+        let matched = detail
+            .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+            .and_then(|v| v["matched"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).take(3).collect()))
+            .unwrap_or_default();
+        Ok(DmQueueItem {
+            promoter_id: r.get(0)?,
+            name: r.get(1)?,
+            city: r.get(2)?,
+            country: r.get(3)?,
+            handle: r.get(4)?,
+            fit_score: r.get(5)?,
+            matched,
+        })
+    })
+    .map(|it| it.flatten().collect())
+    .unwrap_or_default()
+}
+
+#[tauri::command(async)]
+pub fn social_dm_queue(state: State<'_, AppState>, limit: Option<i64>) -> Result<Vec<DmQueueItem>, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    Ok(dm_queue(&conn, limit.unwrap_or(DM_QUEUE_SIZE).clamp(1, 30)))
+}

@@ -102,6 +102,7 @@ pub fn run() {
             chrome::place_window_controls,
             commands::org_type::vi_classify_promoters,
             commands::enrich::serper_status,
+            commands::social::social_dm_queue,
             commands::deliverability::verify::email_check_stats,
             commands::org_type::vi_set_promoter_type,
             // artists

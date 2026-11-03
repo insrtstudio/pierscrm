@@ -323,6 +323,13 @@ export const en = {
     retry_one_started: "Email search restarted for this curator.",
     emailed: "Email sent",
   },
+  dm_queue: {
+    title: "Today's Instagram messages",
+    hint: "Collectives that play your style and have no email. One message at a time, sent from your account.",
+    booked: "booked {{names}}",
+    write: "Write",
+    close: "Close",
+  },
   verify: {
     title: "Address check",
     help: "Before every first email the app checks the address. An invalid one is dropped like a bounce, nothing is sent, and the campaign moves on. This protects your bounce rate.",
