@@ -492,6 +492,36 @@ export interface ViRunStats {
   qualified?: number;
   emails_total?: number;
   venues_with_email?: number;
+  /** What the tasks found (null for RA harvests and runs before v0.28). */
+  outcome?: RunOutcome | null;
+}
+
+/** Per-result counts of a run (harvest::outcome_tally). */
+export interface RunOutcome {
+  found?: number;
+  had?: number;
+  none?: number;
+  later?: number;
+  emails?: number;
+  info?: number;
+  skip?: number;
+  new_emails?: number;
+  new_sites?: number;
+  new_handles?: number;
+}
+
+/** One collective or venue a run looked at, with what it found. */
+export interface RunReportItem {
+  task_id: number;
+  target_id: number;
+  kind: "promoter" | "venue";
+  name: string;
+  city?: string | null;
+  r: string;
+  handle?: string | null;
+  site?: string | null;
+  emails: string[];
+  error?: string | null;
 }
 
 export interface ViRunProgress {

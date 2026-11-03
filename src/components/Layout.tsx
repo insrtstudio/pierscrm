@@ -26,6 +26,7 @@ import {
 import { listArtists, listEvents } from "../lib/api";
 import { getTheme, toggleTheme, type Theme } from "../lib/theme";
 import { UpdateBanner } from "./UpdateBanner";
+import { RunDock } from "./RunReport";
 import { DeskBadge } from "./ReplyDesk";
 import { DeliverabilityBanner } from "./Deliverability";
 import { emitIntent } from "../lib/hooks";
@@ -337,6 +338,7 @@ export function Layout() {
         <div className="flex-1 overflow-y-auto">
           <Outlet />
         </div>
+        <RunDock />
       </main>
     </div>
   );

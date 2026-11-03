@@ -549,6 +549,8 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
         "ALTER TABLE campaigns ADD COLUMN event_name TEXT",
         "ALTER TABLE vi_venues ADD COLUMN telephone TEXT",
         "ALTER TABLE vi_venues ADD COLUMN enriched_at TEXT",
+        // What one task found (JSON, see harvest::run_outcome), for the run report.
+        "ALTER TABLE vi_tasks ADD COLUMN resultat TEXT",
         "ALTER TABLE artists ADD COLUMN mix_url TEXT",
         "ALTER TABLE artists ADD COLUMN tech_rider TEXT",
         "ALTER TABLE artists ADD COLUMN fee_range TEXT",

@@ -292,6 +292,7 @@ import type {
   ViReferenceArtist,
   ViRun,
   ViRunTask,
+  RunReportItem,
   ViVenueFiche,
   ViVenueRow,
   ViVenueStats,
@@ -322,6 +323,7 @@ export const viStopRun = (runId: number) => invoke<void>("vi_stop_run", { runId 
 export const viRunTasks = (runId: number, onlyFailed = true) =>
   invoke<ViRunTask[]>("vi_run_tasks", { runId, onlyFailed });
 export const viListRuns = () => invoke<ViRun[]>("vi_list_runs");
+export const viRunReport = (runId: number) => invoke<RunReportItem[]>("vi_run_report", { runId });
 export const viListVenues = (p: {
   statut?: string;
   pays?: string;

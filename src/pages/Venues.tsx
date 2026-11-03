@@ -83,6 +83,7 @@ import { PromotersTab, promoteSummaryText } from "../components/Promoters";
 import { viPromoteVenues } from "../lib/targets";
 import { FitScore, TimingBadge } from "../components/FitTiming";
 import { DmPanel, IgHandle } from "../components/InstagramDm";
+import { RunOutcomeSummary, RunReportList, fmtClock, fmtDuration, parseStats, runKindLabel, sqlDate } from "../components/RunReport";
 
 type Tab = "venues" | "promoters" | "runs" | "areas" | "artists";
 
@@ -117,11 +118,14 @@ export function Venues() {
   const [initialEmail] = useState(() => params.get("email") === "1");
   useEffect(() => {
     if (!params.has("view") && !params.has("email")) return;
+    const v = params.get("view") as Tab | null;
+    if (v && tabs.includes(v)) setTab(v);
     const next = new URLSearchParams(params);
     next.delete("view");
     next.delete("email");
     setParams(next, { replace: true });
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
   return (
     <div>
       <PageHeader title={t("venues.title")} subtitle={t("venues.subtitle")} />
@@ -1169,6 +1173,10 @@ function RunsTab() {
   const [yearTo, setYearTo] = useState(year);
   const [launching, setLaunching] = useState(false);
 
+  // ?run=<id> (from the dock or a notification): open that run's report.
+  const [params] = useSearchParams();
+  const focusRun = Number(params.get("run")) || null;
+
   // Live progress per run.
   const [progress, setProgress] = useState<Record<number, ViRunProgress>>({});
   useEffect(() => {
@@ -1179,23 +1187,13 @@ function RunsTab() {
         qc.invalidateQueries({ queryKey: ["vi_runs"] });
         qc.invalidateQueries({ queryKey: ["vi_venues"] });
         qc.invalidateQueries({ queryKey: ["vi_venue_stats"] });
-      }
-      // The final emit carries a message ("Terminé"/"Arrêté"): notify once.
-      if (done && e.payload.message) {
-        toast(
-          t("venues.run_finished", {
-            id: e.payload.run_id,
-            venues: e.payload.venues,
-            evidence: e.payload.evidence,
-          }),
-          "ok"
-        );
+        qc.invalidateQueries({ queryKey: ["vi_run_report", e.payload.run_id] });
       }
     });
     return () => {
       un.then((f) => f());
     };
-  }, [qc, toast, t]);
+  }, [qc]);
 
   const stop = async (id: number) => {
     try {
@@ -1308,6 +1306,7 @@ function RunsTab() {
               key={r.id}
               run={r}
               live={progress[r.id]}
+              focused={focusRun === r.id}
               onResume={() => resume(r.id)}
               onStop={() => stop(r.id)}
             />
@@ -1318,27 +1317,29 @@ function RunsTab() {
   );
 }
 
-function fmtDuration(secs?: number) {
-  if (!secs || secs < 0) return "-";
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  if (m < 60) return `${m}m ${s}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
-
 function RunCard({
   run,
   live,
+  focused,
   onResume,
   onStop,
 }: {
   run: ViRun;
   live?: ViRunProgress;
+  focused?: boolean;
   onResume: () => void;
   onStop: () => void;
 }) {
   const { t } = useTranslation();
   const [showLogs, setShowLogs] = useState(false);
+  const [showReport, setShowReport] = useState(!!focused);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focused) {
+      setShowReport(true);
+      ref.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
+  }, [focused]);
   const total = live?.tasks_total ?? run.tasks_total;
   const done = live?.tasks_done ?? run.tasks_done;
   const echec = live?.tasks_echec ?? run.tasks_echec;
@@ -1346,43 +1347,46 @@ function RunCard({
   const pct = total ? Math.round(((done + echec) / total) * 100) : 0;
   const active = statut === "en_cours";
   const canResume = statut !== "termine" && !active;
-  const isEnrich = run.type_ === "enrich";
-  const isRetry = isEnrich && !!run.params && run.params.includes('"retry":true');
+  const isRetry = run.type_ === "enrich" && !!run.params && run.params.includes('"retry":true');
+  const isHarvest = !["instagram_promoters", "enrich_promoters", "enrich"].includes(run.type_);
 
-  const stats: ViRunStats | null = run.stats ? safeParse(run.stats) : null;
+  const stats: ViRunStats | null = parseStats(run.stats);
   const { data: failed = [] } = useQuery({
     queryKey: ["vi_run_tasks", run.id],
     queryFn: () => viRunTasks(run.id, true),
     enabled: showLogs && echec > 0,
   });
 
-  const bento: { label: string; value: string | number; tone?: string }[] = stats
-    ? isEnrich
+  const started = sqlDate(run.started_at);
+  const finished = sqlDate(run.finished_at);
+  const when = active
+    ? t("report.when_running", { at: fmtClock(started) })
+    : finished
+    ? t("report.when_done", {
+        day: finished.toLocaleDateString("fr-FR", { day: "numeric", month: "short" }),
+        from: fmtClock(started),
+        to: fmtClock(finished),
+        dur: fmtDuration(stats?.duration_secs),
+      })
+    : "";
+
+  // RA harvests count new rows since the start (venues, nights).
+  const harvestBento: { label: string; value: string | number; tone?: string }[] =
+    stats && isHarvest
       ? [
-          { label: t("venues.b_with_email"), value: stats.venues_with_email ?? 0, tone: "text-ok" },
-          { label: t("venues.b_emails"), value: stats.emails_total ?? 0 },
-          { label: t("venues.b_duration"), value: fmtDuration(stats.duration_secs) },
-          { label: t("venues.errors"), value: stats.tasks_echec ?? 0, tone: (stats.tasks_echec ?? 0) > 0 ? "text-accent" : undefined },
-        ]
-      : [
           { label: t("venues.b_venues_new"), value: stats.venues_new ?? 0, tone: "text-accent" },
           { label: t("venues.b_evidence_new"), value: stats.evidence_new ?? 0, tone: "text-accent-2" },
-          { label: t("venues.b_qualified"), value: stats.qualified ?? 0, tone: "text-ok" },
-          { label: t("venues.b_duration"), value: fmtDuration(stats.duration_secs) },
+          { label: t("venues.errors"), value: stats.tasks_echec ?? 0, tone: (stats.tasks_echec ?? 0) > 0 ? "text-accent" : undefined },
         ]
-    : [];
+      : [];
 
   return (
-    <div className="card p-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
+    <div ref={ref} className={clsx("card scroll-mt-4 p-4", focused && "ring-1 ring-accent")}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
           {active && <RefreshCw size={14} className="animate-spin text-accent" />}
-          <span className="font-bold">
-            {t("venues.run")} #{run.id}
-          </span>
-          <span className="badge bg-muted text-fg-subtle">
-            {isEnrich ? t("venues.enrich") : t("venues.tab_runs")}
-          </span>
+          <span className="font-bold">{runKindLabel(t, run.type_)}</span>
+          <span className="text-2xs text-fg-faint">#{run.id}</span>
           {isRetry && <span className="badge bg-muted text-fg-subtle">{t("venues.enrich_retry_badge")}</span>}
           <span
             className={clsx(
@@ -1399,12 +1403,7 @@ function RunCard({
             {t(`venues.rs_${statut}`, statut)}
           </span>
         </div>
-        <div className="flex items-center gap-3 text-2xs tabular text-fg-subtle">
-          {active && live && (
-            <span>
-              {live.venues} {t("venues.venues_found")} · {live.evidence} {t("venues.evidence_found")}
-            </span>
-          )}
+        <div className="flex shrink-0 items-center gap-3 text-2xs tabular text-fg-subtle">
           {active && (
             <button className="btn-outline py-1.5 text-accent" onClick={onStop}>
               <Square size={12} />
@@ -1419,16 +1418,20 @@ function RunCard({
           )}
         </div>
       </div>
+      {when && <div className="mt-1 text-2xs text-fg-subtle">{when}</div>}
 
-      <div className="mt-3 flex items-center gap-3">
-        <div className="h-2 flex-1 overflow-hidden bg-muted">
-          <div className="h-full bg-accent transition-all" style={{ width: `${pct}%` }} />
+      {(active || statut !== "termine") && (
+        <div className="mt-3 flex items-center gap-3">
+          <div className="h-2 flex-1 overflow-hidden bg-muted">
+            <div className="h-full bg-accent transition-all" style={{ width: `${pct}%` }} />
+          </div>
+          <span className="text-2xs tabular text-fg-subtle">
+            {done}/{total} {t("venues.tasks")}
+            {echec > 0 && ` · ${echec} ${t("venues.errors")}`}
+          </span>
         </div>
-        <span className="text-2xs tabular text-fg-subtle">
-          {done}/{total} {t("venues.tasks")}
-          {echec > 0 && ` · ${echec} ${t("venues.errors")}`}
-        </span>
-      </div>
+      )}
+      {statut === "arrete" && <p className="mt-2 text-2xs text-warn">{t("report.stopped_note", { count: Math.max(0, total - done - echec) })}</p>}
 
       {/* Live activity: what the workers are doing right now */}
       {active && live?.message && (
@@ -1438,10 +1441,14 @@ function RunCard({
         </div>
       )}
 
-      {/* Bento summary once finished */}
-      {bento.length > 0 && (
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {bento.map((b, i) => (
+      {!active && stats?.outcome && <RunOutcomeSummary run={run} stats={stats} />}
+      {!active && stats && !isHarvest && !stats.outcome && statut === "termine" && (
+        <p className="mt-2 text-2xs text-fg-subtle">{t("report.legacy", { count: stats.tasks_done ?? done })}</p>
+      )}
+
+      {harvestBento.length > 0 && !active && (
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          {harvestBento.map((b, i) => (
             <div key={i} className="border border-border px-3 py-2">
               <div className={clsx("font-condensed text-lg tabular", b.tone ?? "text-fg")}>{b.value}</div>
               <div className="text-2xs uppercase tracking-wide text-fg-faint">{b.label}</div>
@@ -1450,8 +1457,21 @@ function RunCard({
         </div>
       )}
 
-      {/* Logs: failed tasks */}
-      {echec > 0 && (
+      {!isHarvest && (stats?.outcome || active) && (
+        <div className="mt-3">
+          <button
+            className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-accent"
+            onClick={() => setShowReport((v) => !v)}
+          >
+            {t(active ? "report.toggle_live" : "report.toggle", { count: done + echec })}
+            <ChevronDown size={12} className={clsx("transition-transform", showReport && "rotate-180")} />
+          </button>
+          {showReport && <RunReportList runId={run.id} live={active} />}
+        </div>
+      )}
+
+      {/* Logs: failed tasks (harvests; the report lists them for the rest) */}
+      {echec > 0 && isHarvest && (
         <div className="mt-3">
           <button
             className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-accent"
@@ -1477,14 +1497,6 @@ function RunCard({
       )}
     </div>
   );
-}
-
-function safeParse(s: string): ViRunStats | null {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
 }
 
 // Short human label for a task from its JSON payload (area window or venue id).

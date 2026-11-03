@@ -352,8 +352,111 @@ fn run_final_stats(pool: &DbPool, run_id: i64) -> String {
         "qualified": one("SELECT COUNT(*) FROM vi_venues WHERE statut='qualifie'", &[]),
         "emails_total": one("SELECT COUNT(*) FROM vi_contacts WHERE type='email'", &[]),
         "venues_with_email": one("SELECT COUNT(DISTINCT venue_id) FROM vi_contacts WHERE type='email'", &[]),
+        "outcome": outcome_tally(&conn, run_id),
     })
     .to_string()
+}
+
+/// What the run's tasks found, from vi_tasks.resultat: one count per result
+/// code ("found", "had", "none", "later", "emails", "info", "skip") plus the
+/// new emails, sites and Instagram handles. Null for runs whose tasks record
+/// nothing (RA harvest, Radar, runs from before v0.28).
+pub(crate) fn outcome_tally(conn: &rusqlite::Connection, run_id: i64) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    let mut any = false;
+    if let Ok(mut st) = conn.prepare(
+        "SELECT json_extract(resultat, '$.r'), COUNT(*) FROM vi_tasks
+         WHERE run_id = ?1 AND resultat IS NOT NULL GROUP BY 1",
+    ) {
+        if let Ok(rows) = st.query_map(params![run_id], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?))) {
+            for (code, n) in rows.flatten() {
+                any = true;
+                out.insert(code.unwrap_or_else(|| "other".into()), json!(n));
+            }
+        }
+    }
+    if !any {
+        return serde_json::Value::Null;
+    }
+    let sum = |sql: &str| -> i64 { conn.query_row(sql, params![run_id], |r| r.get(0)).unwrap_or(0) };
+    out.insert(
+        "new_emails".into(),
+        json!(sum("SELECT COALESCE(SUM(json_extract(resultat, '$.emails')), 0) FROM vi_tasks WHERE run_id = ?1 AND resultat IS NOT NULL")),
+    );
+    out.insert(
+        "new_sites".into(),
+        json!(sum("SELECT COUNT(*) FROM vi_tasks WHERE run_id = ?1 AND json_extract(resultat, '$.site') IS NOT NULL")),
+    );
+    out.insert(
+        "new_handles".into(),
+        json!(sum(
+            "SELECT COUNT(*) FROM vi_tasks WHERE run_id = ?1 AND json_extract(resultat, '$.handle') IS NOT NULL
+               AND json_extract(resultat, '$.r') IN ('found', 'emails', 'info')"
+        )),
+    );
+    serde_json::Value::Object(out)
+}
+
+/// One-line French summary of a finished run, for the macOS notification.
+fn finish_summary(rtype: &str, stats: &serde_json::Value) -> Option<(String, String)> {
+    let o = &stats["outcome"];
+    let n = |k: &str| o[k].as_i64().unwrap_or(0);
+    let fmt = |v: i64| {
+        let s = v.to_string();
+        let mut out = String::new();
+        for (i, c) in s.chars().enumerate() {
+            if i > 0 && (s.len() - i) % 3 == 0 {
+                out.push('\u{202f}');
+            }
+            out.push(c);
+        }
+        out
+    };
+    // "3 emails", "1 email": the count with its noun, plural from 2 up.
+    let q = |v: i64, one: &str, many: &str| format!("{} {}", fmt(v), if v > 1 { many } else { one });
+    let checked = stats["tasks_done"].as_i64().unwrap_or(0);
+    let errors = stats["tasks_echec"].as_i64().unwrap_or(0);
+    let mut body = match rtype {
+        "instagram_promoters" => format!(
+            "{} sur {} vus, {}",
+            q(n("found"), "Instagram trouvé", "Instagram trouvés"),
+            q(checked, "collectif", "collectifs"),
+            q(n("none"), "sans résultat", "sans résultat")
+        ),
+        "enrich_promoters" => format!(
+            "{} chez {} sur {} vus, {} et {} en plus",
+            q(n("new_emails"), "email trouvé", "emails trouvés"),
+            q(n("emails"), "collectif", "collectifs"),
+            fmt(checked),
+            q(n("new_sites"), "site", "sites"),
+            q(n("new_handles"), "Instagram", "Instagram")
+        ),
+        "enrich" => format!(
+            "{} chez {} sur {} vus",
+            q(n("new_emails"), "email trouvé", "emails trouvés"),
+            q(n("emails"), "lieu", "lieux"),
+            fmt(checked)
+        ),
+        "harvest" => format!(
+            "{}, {}",
+            q(stats["venues_new"].as_i64().unwrap_or(0), "nouveau lieu", "nouveaux lieux"),
+            q(stats["evidence_new"].as_i64().unwrap_or(0), "nouvelle soirée", "nouvelles soirées")
+        ),
+        _ => return None,
+    };
+    if n("later") > 0 {
+        body.push_str(&format!(", {} à refaire", fmt(n("later"))));
+    }
+    if errors > 0 {
+        body.push_str(&format!(", {}", q(errors, "erreur", "erreurs")));
+    }
+    let title = match rtype {
+        "instagram_promoters" => "Recherche Instagram terminée",
+        "enrich_promoters" => "Recherche d'emails collectifs terminée",
+        "enrich" => "Recherche d'emails lieux terminée",
+        _ => "Collecte RA terminée",
+    };
+    Some((title.into(), body))
 }
 
 /// Human-readable "what am I doing right now" line for the current task, shown
@@ -462,18 +565,18 @@ async fn drain(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i64, po
             "enrich_venue" => {
                 crate::commands::enrich::process_enrich_task(&client, &pool, &payload).await
             }
-            "radar_harvest" => crate::commands::radar::process_harvest_task(&pool, &payload).await,
-            "radar_enrich" => crate::commands::radar::process_enrich_task(&pool, &payload).await,
+            "radar_harvest" => crate::commands::radar::process_harvest_task(&pool, &payload).await.map(|_| None),
+            "radar_enrich" => crate::commands::radar::process_enrich_task(&pool, &payload).await.map(|_| None),
             "enrich_promoter" => crate::commands::promoters::process_enrich_task(&client, &pool, &payload).await,
             "instagram_promoter" => crate::commands::social::process_instagram_task(&pool, &payload).await,
-            _ => process_harvest_task(&client, &pool, &payload).await,
+            _ => process_harvest_task(&client, &pool, &payload).await.map(|_| None),
         };
         match result {
-            Ok(()) => {
+            Ok(outcome) => {
                 if let Ok(conn) = pool.get() {
                     let _ = conn.execute(
-                        "UPDATE vi_tasks SET statut='termine', locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
-                        params![task_id],
+                        "UPDATE vi_tasks SET statut='termine', resultat=?2, locked_at=NULL, updated_at=datetime('now') WHERE id=?1",
+                        params![task_id, outcome.map(|v| v.to_string())],
                     );
                 }
             }
@@ -594,7 +697,19 @@ pub fn spawn_worker(pool: DbPool, cancels: CancelSet, app: AppHandle, run_id: i6
             "UPDATE vi_runs SET statut=?2, finished_at=datetime('now'), stats=?3 WHERE id=?1",
             params![run_id, statut, stats],
         );
+        let rtype: String = conn
+            .query_row("SELECT type FROM vi_runs WHERE id=?1", params![run_id], |r| r.get(0))
+            .unwrap_or_default();
         drop(conn);
+        // A pass can take half an hour: say it is over even when the app is
+        // in the background.
+        if !cancelled {
+            let parsed: serde_json::Value = serde_json::from_str(&stats).unwrap_or_default();
+            if let Some((title, body)) = finish_summary(&rtype, &parsed) {
+                use tauri_plugin_notification::NotificationExt;
+                let _ = app.notification().builder().title(&title).body(&body).show();
+            }
+        }
         emit(
             &app,
             &pool,
@@ -617,6 +732,97 @@ pub struct TaskRow {
     pub tentatives: i64,
     pub erreur: Option<String>,
     pub payload: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ReportItem {
+    pub task_id: i64,
+    /// Collective (promoter) or venue id, per `kind`.
+    pub target_id: i64,
+    pub kind: String,
+    pub name: String,
+    pub city: Option<String>,
+    /// Result code (see outcome_tally), or "error".
+    pub r: String,
+    pub handle: Option<String>,
+    pub site: Option<String>,
+    pub emails: Vec<String>,
+    pub error: Option<String>,
+}
+
+/// Everything a run looked at, one line per collective or venue, with what
+/// it found (the emails it added, read back from the contacts created since
+/// the run started). Runs whose tasks record no result give an empty list.
+#[tauri::command(async)]
+pub fn vi_run_report(state: State<'_, AppState>, run_id: i64) -> Result<Vec<ReportItem>, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    run_report(&conn, run_id)
+}
+
+pub(crate) fn run_report(conn: &rusqlite::Connection, run_id: i64) -> Result<Vec<ReportItem>, String> {
+    let started: String = conn
+        .query_row("SELECT COALESCE(started_at, created_at) FROM vi_runs WHERE id=?1", params![run_id], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let mut st = conn
+        .prepare(
+            "SELECT t.id, t.type, t.statut, t.resultat, t.derniere_erreur,
+                    COALESCE(json_extract(t.payload, '$.promoter_id'), json_extract(t.payload, '$.venue_id')),
+                    COALESCE(o.nom, v.nom), COALESCE(o.ville, v.ville)
+             FROM vi_tasks t
+             LEFT JOIN vi_promoter_orgs o ON t.type IN ('enrich_promoter', 'instagram_promoter')
+                  AND o.id = json_extract(t.payload, '$.promoter_id')
+             LEFT JOIN vi_venues v ON t.type = 'enrich_venue' AND v.id = json_extract(t.payload, '$.venue_id')
+             WHERE t.run_id = ?1 AND t.type IN ('enrich_promoter', 'instagram_promoter', 'enrich_venue')
+               AND (t.resultat IS NOT NULL OR t.statut = 'echec')
+             ORDER BY t.id",
+        )
+        .map_err(|e| e.to_string())?;
+    type Raw = (i64, String, String, Option<String>, Option<String>, Option<i64>, Option<String>, Option<String>);
+    let raws: Vec<Raw> = st
+        .query_map(params![run_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+        })
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .collect();
+    let mut promoter_emails = conn
+        .prepare(
+            "SELECT valeur FROM vi_promoter_contacts WHERE promoter_id = ?1 AND type = 'email' AND created_at >= ?2
+             ORDER BY score DESC, id",
+        )
+        .map_err(|e| e.to_string())?;
+    let mut venue_emails = conn
+        .prepare(
+            "SELECT valeur FROM vi_contacts WHERE venue_id = ?1 AND type = 'email' AND created_at >= ?2 ORDER BY id",
+        )
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(raws.len());
+    for (task_id, ttype, statut, resultat, err, target, name, city) in raws {
+        let v: serde_json::Value = resultat.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
+        let r = if statut == "echec" { "error".to_string() } else { v["r"].as_str().unwrap_or("other").to_string() };
+        let target_id = target.unwrap_or(0);
+        let emails: Vec<String> = if v["emails"].as_i64().unwrap_or(0) > 0 {
+            let stmt = if ttype == "enrich_venue" { &mut venue_emails } else { &mut promoter_emails };
+            stmt.query_map(params![target_id, started], |r| r.get::<_, String>(0))
+                .map(|rows| rows.flatten().collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        out.push(ReportItem {
+            task_id,
+            target_id,
+            kind: if ttype == "enrich_venue" { "venue".into() } else { "promoter".into() },
+            name: name.unwrap_or_else(|| format!("#{target_id}")),
+            city,
+            r,
+            handle: v["handle"].as_str().map(str::to_string),
+            site: v["site"].as_str().map(str::to_string),
+            emails,
+            error: err.filter(|_| statut == "echec"),
+        });
+    }
+    Ok(out)
 }
 
 /// Task-level log for a run (failed tasks by default), so the UI can explain
@@ -1588,6 +1794,40 @@ pub fn vi_venue_stats(state: State<'_, AppState>) -> Result<VenueStats, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_outcome_tally_and_report() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate_for_tests(&c).unwrap();
+        c.execute_batch(
+            "INSERT INTO vi_runs (id, type, statut, started_at) VALUES (1, 'enrich_promoters', 'termine', '2026-01-01 00:00:00');
+             INSERT INTO vi_promoter_orgs (id, cle, nom, nom_normalise, ville) VALUES (10, 'a', 'Alpha', 'alpha', 'Paris'), (11, 'b', 'Beta', 'beta', 'Lyon'), (12, 'c', 'Gamma', 'gamma', NULL);
+             INSERT INTO vi_promoter_contacts (promoter_id, type, valeur) VALUES (10, 'email', 'hello@alpha.fr');
+             INSERT INTO vi_tasks (run_id, type, payload, statut, resultat) VALUES
+               (1, 'enrich_promoter', '{\"promoter_id\":10}', 'termine', '{\"r\":\"emails\",\"emails\":1,\"site\":\"https://alpha.fr\",\"handle\":null}'),
+               (1, 'enrich_promoter', '{\"promoter_id\":11}', 'termine', '{\"r\":\"none\",\"emails\":0,\"site\":null,\"handle\":null}'),
+               (1, 'enrich_promoter', '{\"promoter_id\":12}', 'echec', NULL);",
+        )
+        .unwrap();
+        c.execute("UPDATE vi_tasks SET derniere_erreur = 'boom' WHERE statut = 'echec'", []).unwrap();
+        let o = outcome_tally(&c, 1);
+        assert_eq!(o["emails"], 1);
+        assert_eq!(o["none"], 1);
+        assert_eq!(o["new_emails"], 1);
+        assert_eq!(o["new_sites"], 1);
+        assert_eq!(o["new_handles"], 0);
+        let rep = run_report(&c, 1).unwrap();
+        assert_eq!(rep.len(), 3);
+        assert_eq!(rep[0].name, "Alpha");
+        assert_eq!(rep[0].emails, vec!["hello@alpha.fr".to_string()]);
+        assert_eq!(rep[1].r, "none");
+        assert_eq!(rep[2].r, "error");
+        assert_eq!(rep[2].error.as_deref(), Some("boom"));
+        let stats = json!({ "tasks_done": 2, "tasks_echec": 1, "outcome": o });
+        let (_, body) = finish_summary("enrich_promoters", &stats).unwrap();
+        assert_eq!(body, "1 email trouvé chez 1 collectif sur 2 vus, 1 site et 0 Instagram en plus, 1 erreur");
+        assert_eq!(outcome_tally(&c, 99), serde_json::Value::Null);
+    }
 
     #[test]
     fn target_cities_fold_accents_and_match_both_ways() {

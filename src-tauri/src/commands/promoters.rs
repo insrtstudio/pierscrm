@@ -771,7 +771,7 @@ pub(crate) fn store_promoter_emails(
     kept
 }
 
-pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, payload: &str) -> Result<(), ra::RaError> {
+pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, payload: &str) -> Result<Option<serde_json::Value>, ra::RaError> {
     let perr = |m: String| ra::RaError { message: m, status: None, retryable: false };
     let v: serde_json::Value = serde_json::from_str(payload).map_err(|e| perr(e.to_string()))?;
     let id = v["promoter_id"].as_i64().unwrap_or(0);
@@ -785,6 +785,8 @@ pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, pay
         .map_err(|e| perr(e.to_string()))?
     };
     let mut site = stored_site.as_deref().and_then(normalize_site).filter(|s| !is_foreign_venue_site(s));
+    let had_site = site.is_some();
+    let mut emails_kept = 0i64;
     let mut insta: Option<String> = None;
     let mut searched = false;
     // Whether a web search could answer at all (key set, Serper replied). A
@@ -881,6 +883,7 @@ pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, pay
                 Ok(conn) => store_promoter_emails(&conn, id, emails, &url, Some(&host), &nom, ville.as_deref(), method),
                 Err(_) => 0,
             };
+            emails_kept += kept;
             if kept > 0 && url != base {
                 break;
             }
@@ -892,6 +895,7 @@ pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, pay
         insta = super::social::pick_collective_instagram(&handles, &nom, ville.as_deref(), true);
     }
     let looked_up = stored_site.is_some() || ra_id.is_some() || search_answered || site.is_some();
+    let mut new_insta = false;
     if let Ok(conn) = pool.get() {
         if looked_up {
             let _ = conn.execute(
@@ -900,10 +904,25 @@ pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, pay
             );
         }
         if let Some(h) = &insta {
-            super::social::store_promoter_instagram(&conn, id, h);
+            new_insta = super::social::store_promoter_instagram(&conn, id, h);
         }
     }
-    Ok(())
+    let new_site = site.is_some() && !had_site;
+    let r = if emails_kept > 0 {
+        "emails"
+    } else if new_site || new_insta {
+        "info"
+    } else if looked_up {
+        "none"
+    } else {
+        "later"
+    };
+    Ok(Some(json!({
+        "r": r,
+        "emails": emails_kept,
+        "site": if new_site { site.clone() } else { None },
+        "handle": if new_insta { insta.clone() } else { None },
+    })))
 }
 
 // ---------------------------------------------------------------------------

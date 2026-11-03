@@ -326,12 +326,15 @@ pub(crate) fn collective_instagram_from_search(d: &serde_json::Value, name: &str
 }
 
 /// Store a collective's handle unless it already has one.
-pub(crate) fn store_promoter_instagram(conn: &Connection, id: i64, handle: &str) {
-    let _ = conn.execute(
+/// True when the handle was stored (the collective had none).
+pub(crate) fn store_promoter_instagram(conn: &Connection, id: i64, handle: &str) -> bool {
+    conn.execute(
         "UPDATE vi_promoter_orgs SET instagram = ?2, updated_at = datetime('now')
          WHERE id = ?1 AND trim(COALESCE(instagram, '')) = ''",
         params![id, handle],
-    );
+    )
+    .map(|n| n > 0)
+    .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -350,7 +353,7 @@ const IG_PATHS: &[&str] = &["/contact", "/about"];
 /// Serper key is set) a `"<nom>" <ville> instagram` search. Marked checked
 /// when a handle was found or the search could run, so an interrupted or
 /// capped pass resumes with the rest.
-pub async fn process_instagram_task(pool: &DbPool, payload: &str) -> Result<(), ra::RaError> {
+pub async fn process_instagram_task(pool: &DbPool, payload: &str) -> Result<Option<serde_json::Value>, ra::RaError> {
     let perr = |m: String| ra::RaError { message: m, status: None, retryable: false };
     let v: serde_json::Value = serde_json::from_str(payload).map_err(|e| perr(e.to_string()))?;
     let id = v["promoter_id"].as_i64().unwrap_or(0);
@@ -364,17 +367,16 @@ pub async fn process_instagram_task(pool: &DbPool, payload: &str) -> Result<(), 
         )
         .map_err(|e| perr(e.to_string()))?
     };
-    let mark = |found: Option<&str>| {
-        if let Ok(conn) = pool.get() {
-            if let Some(h) = found {
-                store_promoter_instagram(&conn, id, h);
-            }
-            let _ = conn.execute("UPDATE vi_promoter_orgs SET instagram_checked_at = datetime('now') WHERE id = ?1", [id]);
-        }
+    // True when a found handle was stored.
+    let mark = |found: Option<&str>| -> bool {
+        let Ok(conn) = pool.get() else { return false };
+        let stored = found.is_some_and(|h| store_promoter_instagram(&conn, id, h));
+        let _ = conn.execute("UPDATE vi_promoter_orgs SET instagram_checked_at = datetime('now') WHERE id = ?1", [id]);
+        stored
     };
     if insta.as_deref().is_some_and(|h| !h.trim().is_empty()) {
         mark(None);
-        return Ok(());
+        return Ok(Some(json!({ "r": "had", "handle": insta })));
     }
 
     let client = crawl_client();
@@ -405,6 +407,7 @@ pub async fn process_instagram_task(pool: &DbPool, payload: &str) -> Result<(), 
             }
         }
     }
+    let from_site = found.is_some();
     let mut searched = false;
     if found.is_none() && may_search && !nom.trim().is_empty() {
         let key = pool
@@ -422,10 +425,17 @@ pub async fn process_instagram_task(pool: &DbPool, payload: &str) -> Result<(), 
             tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         }
     }
-    if found.is_some() || searched {
-        mark(found.as_deref());
+    // "later": neither the site nor a search could answer (search capped or
+    // no key), left unchecked for the next pass.
+    if !(found.is_some() || searched) {
+        return Ok(Some(json!({ "r": "later" })));
     }
-    Ok(())
+    let stored = mark(found.as_deref());
+    Ok(Some(match found {
+        Some(h) if stored => json!({ "r": "found", "handle": h, "via": if from_site { "site" } else { "search" } }),
+        Some(h) => json!({ "r": "had", "handle": h }),
+        None => json!({ "r": "none" }),
+    }))
 }
 
 /// Queue the Instagram pass: `ids`, else the enriched active collectives with

@@ -292,6 +292,7 @@ pub fn run() {
             commands::harvest::vi_promote_venues,
             commands::harvest::vi_stop_run,
             commands::harvest::vi_run_tasks,
+            commands::harvest::vi_run_report,
             // pulse (spotify snapshots + meta spend)
             commands::pulse::pulse_snapshot,
             commands::pulse::pulse_kpis,

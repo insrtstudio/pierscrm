@@ -1002,7 +1002,7 @@ pub async fn process_enrich_task(
     ra_client: &reqwest::Client,
     pool: &DbPool,
     payload: &str,
-) -> Result<(), ra::RaError> {
+) -> Result<Option<serde_json::Value>, ra::RaError> {
     let v: serde_json::Value = serde_json::from_str(payload)
         .map_err(|e| ra::RaError { message: e.to_string(), status: None, retryable: false })?;
     let venue_id = v["venue_id"].as_i64().unwrap_or(0);
@@ -1028,7 +1028,7 @@ pub async fn process_enrich_task(
                 "UPDATE vi_venues SET enriched_at = datetime('now') WHERE id=?1",
                 params![venue_id],
             );
-            return Ok(());
+            return Ok(Some(serde_json::json!({ "r": "skip" })));
         }
     }
 
@@ -1194,7 +1194,6 @@ pub async fn process_enrich_task(
             }
         }
     }
-    let _ = kept;
 
     if let Ok(conn) = pool.get() {
         // email_retry_at marks the venue as done for the retry pass, found or
@@ -1206,7 +1205,7 @@ pub async fn process_enrich_task(
             params![venue_id, contact_page, retry],
         );
     }
-    Ok(())
+    Ok(Some(serde_json::json!({ "r": if kept > 0 { "emails" } else { "none" }, "emails": kept })))
 }
 
 // ---------------- Commands ----------------
