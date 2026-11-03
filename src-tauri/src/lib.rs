@@ -101,6 +101,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             chrome::place_window_controls,
             commands::org_type::vi_classify_promoters,
+            commands::enrich::serper_status,
+            commands::deliverability::verify::email_check_stats,
             commands::org_type::vi_set_promoter_type,
             // artists
             commands::artists::list_artists,

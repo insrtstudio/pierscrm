@@ -22,6 +22,7 @@ import { Field, errorMessage, useSubmit, useToast } from "../components/ui";
 import { ResidencySettingsCard } from "../components/ResidencySettings";
 import { PushSettingsCard } from "../components/PushSettings";
 import { DeliverabilityPanel } from "../components/Deliverability";
+import { EmailVerifierCard } from "../components/EmailVerifier";
 import { ComparablesSettingsCard } from "../components/ComparablesSettings";
 import { AgentLibraryPanel } from "../components/AgentLibrary";
 
@@ -538,6 +539,7 @@ export function Settings() {
           <>
             <DeliverabilityPanel />
             {/* Quota, budget and suppressions (former Outbox › Guardrails). */}
+            <EmailVerifierCard />
             <div className="xl:col-span-2">
               <GuardrailsTab />
             </div>

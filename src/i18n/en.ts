@@ -323,11 +323,28 @@ export const en = {
     retry_one_started: "Email search restarted for this curator.",
     emailed: "Email sent",
   },
+  verify: {
+    title: "Address check",
+    help: "Before every first email the app checks the address. An invalid one is dropped like a bounce, nothing is sent, and the campaign moves on. This protects your bounce rate.",
+    key: "MillionVerifier key (optional)",
+    mode_local: "Current mode: local checks (format, misspelt domain, throwaway address, domain without a mail server). Add a MillionVerifier key to also check that the mailbox exists.",
+    mode_service: "Current mode: local checks plus mailbox verification by MillionVerifier.",
+    valid: "Valid",
+    risky: "Unverifiable",
+    unknown: "Not verified",
+    invalid: "Invalid",
+  },
+  search_health: {
+    no_key: "Web search is not set up (Serper key). Without it collectives stay without a site, an Instagram or an email.",
+    failing: "Web search is failing ({{reason}}), {{failed}} search(es) lost since the app opened. The collectives affected will be retried on the next pass.",
+    settings: "Set up",
+  },
   backend: {
     ai: {
       no_key: "No Anthropic API key set (Settings, Integrations).",
     },
     vi: {
+      enrich_no_search: "Web search (Serper key) is not set. Without it collectives have no site or Instagram to search. Add the key in Settings, Integrations.",
       enrich_none: "Every active venue has already been searched. Try \"Retry venues without an email\", or run a new harvest to find more.",
       retry_none: "No venue without an email left to retry (those retried in the last 30 days are skipped).",
       no_resolved_areas: "No resolved area to harvest. Resolve the area ids first.",

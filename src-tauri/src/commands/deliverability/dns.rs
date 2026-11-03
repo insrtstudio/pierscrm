@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 pub enum RType {
     Txt,
     Mx,
+    /// IPv4 address: a domain without MX still receives mail at its A host
+    /// (verify.rs).
+    A,
 }
 
 /// One DNS question. `Ok(vec![])` means "no such record" (NXDOMAIN or no
@@ -39,6 +42,7 @@ impl DohResolver {
         let t = match rtype {
             RType::Txt => "TXT",
             RType::Mx => "MX",
+            RType::A => "A",
         };
         let url = reqwest::Url::parse_with_params(base, &[("name", name), ("type", t)]).map_err(|e| e.to_string())?;
         let body: serde_json::Value = self
@@ -74,6 +78,7 @@ pub fn parse_doh_json(v: &serde_json::Value, rtype: RType) -> Result<Vec<String>
     let want = match rtype {
         RType::Txt => 16,
         RType::Mx => 15,
+        RType::A => 1,
     };
     Ok(v.get("Answer")
         .and_then(|a| a.as_array())
@@ -83,7 +88,7 @@ pub fn parse_doh_json(v: &serde_json::Value, rtype: RType) -> Result<Vec<String>
                 .filter_map(|a| a.get("data").and_then(|d| d.as_str()))
                 .map(|d| match rtype {
                     RType::Txt => join_txt(d),
-                    RType::Mx => d.trim().to_string(),
+                    RType::Mx | RType::A => d.trim().to_string(),
                 })
                 .collect()
         })

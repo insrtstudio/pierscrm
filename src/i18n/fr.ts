@@ -323,11 +323,28 @@ export const fr = {
     retry_one_started: "Recherche d'email relancée pour ce curateur.",
     emailed: "Email envoyé",
   },
+  verify: {
+    title: "Vérification des adresses",
+    help: "Avant chaque premier mail, l'app vérifie l'adresse. Une adresse invalide est retirée comme un rebond, sans rien envoyer, et la campagne passe à la suivante. Ça protège ton taux de rebond.",
+    key: "Clé MillionVerifier (facultatif)",
+    mode_local: "Mode actuel : contrôles locaux (format, faute de frappe dans le domaine, adresse jetable, domaine sans serveur mail). Ajoute une clé MillionVerifier pour vérifier aussi que la boîte existe, c'est ce qui aurait évité les 4 rebonds.",
+    mode_service: "Mode actuel : contrôles locaux et vérification de la boîte par MillionVerifier.",
+    valid: "Valides",
+    risky: "Invérifiables",
+    unknown: "Non vérifiées",
+    invalid: "Invalides",
+  },
+  search_health: {
+    no_key: "La recherche web n'est pas réglée (clé Serper). Sans elle, les collectifs restent sans site, sans Instagram et sans email.",
+    failing: "La recherche web échoue ({{reason}}), {{failed}} recherche(s) perdue(s) depuis l'ouverture de l'app. Les collectifs concernés seront repris au prochain passage.",
+    settings: "Régler",
+  },
   backend: {
     ai: {
       no_key: "Aucune clé API Anthropic réglée (Réglages, Intégrations).",
     },
     vi: {
+      enrich_no_search: "La recherche web (clé Serper) n'est pas réglée. Sans elle, les collectifs n'ont ni site ni Instagram à fouiller. Ajoutez la clé dans Réglages, Intégrations.",
       enrich_none: "Tous les lieux actifs ont déjà été passés au crible. Essayez « Réessayer les lieux sans email », ou lancez une nouvelle collecte pour en trouver d'autres.",
       retry_none: "Aucun lieu sans email à réessayer (ceux déjà réessayés ces 30 derniers jours sont ignorés).",
       no_resolved_areas: "Aucune zone résolue à moissonner. Résolvez d'abord les area ids.",

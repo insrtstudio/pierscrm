@@ -740,11 +740,11 @@ fn scan_problems(conn: &Connection, cfg: &PushConfig, now: DateTime<Utc>) {
     let since = fmt(now - Duration::hours(LOOKBACK_HOURS));
     let status = if cfg.problems { "queued" } else { "off" };
 
-    let bounces: Vec<(i64, String, String)> = conn
+    let bounces: Vec<(i64, String, String, String)> = conn
         .prepare(&format!(
             "SELECT s.id, s.address, s.created_at,
-                    (SELECT {name} FROM contacts k WHERE lower(trim(k.email)) = s.address LIMIT 1)
-             FROM suppressions s WHERE s.reason = 'bounce' AND s.created_at >= ?1 ORDER BY s.id",
+                    (SELECT {name} FROM contacts k WHERE lower(trim(k.email)) = s.address LIMIT 1), s.reason
+             FROM suppressions s WHERE s.reason IN ('bounce', 'invalid') AND s.created_at >= ?1 ORDER BY s.id",
             name = NAME_SQL
         ))
         .and_then(|mut st| {
@@ -754,19 +754,18 @@ fn scan_problems(conn: &Connection, cfg: &PushConfig, now: DateTime<Utc>) {
                 Ok((r.get(0)?, match name {
                     Some(n) => format!("{} ({})", addr, n),
                     None => addr,
-                }, r.get(2)?))
+                }, r.get(2)?, r.get(4)?))
             })
             .map(|it| it.flatten().collect())
         })
         .unwrap_or_default();
-    for (id, who, at) in bounces {
-        let n = Notice::new(
-            "bounce",
-            id,
-            "Adresse rejetée".into(),
-            format!("{} : rebond définitif, retirée des envois.", who),
-            1,
-        )
+    for (id, who, at, reason) in bounces {
+        let body = if reason == "invalid" {
+            format!("{} : adresse invalide, repérée avant l'envoi et retirée.", who)
+        } else {
+            format!("{} : rebond définitif, retirée des envois.", who)
+        };
+        let n = Notice::new("bounce", id, "Adresse rejetée".into(), body, 1)
         .at(parse_utc(&at));
         record(conn, &n, status, now);
     }

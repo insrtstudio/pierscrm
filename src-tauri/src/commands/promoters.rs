@@ -787,6 +787,10 @@ pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, pay
     let mut site = stored_site.as_deref().and_then(normalize_site).filter(|s| !is_foreign_venue_site(s));
     let mut insta: Option<String> = None;
     let mut searched = false;
+    // Whether a web search could answer at all (key set, Serper replied). A
+    // collective no source could look up stays "not enriched" so the next
+    // run retries it, instead of being filed as "nothing found".
+    let mut search_answered = false;
 
     // 1. The website RA lists for the promoter.
     if site.is_none() {
@@ -810,6 +814,7 @@ pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, pay
         if let Some(key) = key {
             let q = format!("{} {} collective promoter", nom, ville.clone().unwrap_or_default());
             let d = super::enrich::serper_search(&super::enrich::crawl_client(), &key, &q).await;
+            search_answered = d.is_some();
             site = d
                 .as_ref()
                 .and_then(|d| super::enrich::pick_site_from_search(d, &nom, ville.as_deref(), super::enrich::THIRD_PARTY_HOSTS));
@@ -886,11 +891,14 @@ pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, pay
     if insta.is_none() {
         insta = super::social::pick_instagram(&handles, &nom, ville.as_deref(), true);
     }
+    let looked_up = stored_site.is_some() || ra_id.is_some() || search_answered || site.is_some();
     if let Ok(conn) = pool.get() {
-        let _ = conn.execute(
-            "UPDATE vi_promoter_orgs SET enriched_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1",
-            [id],
-        );
+        if looked_up {
+            let _ = conn.execute(
+                "UPDATE vi_promoter_orgs SET enriched_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1",
+                [id],
+            );
+        }
         if let Some(h) = &insta {
             super::social::store_promoter_instagram(&conn, id, h);
         }
@@ -983,6 +991,11 @@ pub async fn vi_start_promoter_enrich(
     };
     if ids.is_empty() {
         return Err("vi.enrich_none".into());
+    }
+    // Collectives have no RA promoter id stored: without web search the run
+    // would crawl nothing and file thousands of them as "nothing found".
+    if crate::secrets::read_setting(&conn, "serper_api_key").is_none_or(|k| k.trim().is_empty()) {
+        return Err("vi.enrich_no_search".into());
     }
     conn.execute(
         "INSERT INTO vi_runs (type, params, statut, started_at) VALUES ('enrich_promoters', ?1, 'en_cours', datetime('now'))",

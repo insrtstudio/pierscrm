@@ -642,17 +642,108 @@ pub(crate) async fn resolve_website_via_search(
 /// site and an Instagram profile out of one paid query read it twice
 /// (pick_site_from_search, social::instagram_from_search).
 pub(crate) async fn serper_search(client: &reqwest::Client, api_key: &str, query: &str) -> Option<serde_json::Value> {
-    let resp = client
+    let resp = match client
         .post("https://google.serper.dev/search")
         .header("X-API-KEY", api_key)
         .json(&json!({ "q": query, "num": 8 }))
         .send()
         .await
-        .ok()?;
-    if !resp.status().is_success() {
+    {
+        Ok(r) => r,
+        Err(e) => {
+            serper_health::failed(None, &e.to_string());
+            return None;
+        }
+    };
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        serper_health::failed(Some(status.as_u16()), &body);
         return None;
     }
+    serper_health::ok();
     resp.json().await.ok()
+}
+
+/// Whether web search (Serper) actually works. Every enrichment path calls it
+/// and used to drop errors silently: an exhausted credit or a revoked key
+/// looked like "nothing found" for thousands of collectives. The counters
+/// live for the app session; the last error is shown on Prospection.
+pub mod serper_health {
+    use serde::Serialize;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+
+    static OK: AtomicU64 = AtomicU64::new(0);
+    static FAILED: AtomicU64 = AtomicU64::new(0);
+    static LAST: Mutex<Option<(String, String)>> = Mutex::new(None);
+
+    #[derive(Debug, Clone, Serialize, Default)]
+    pub struct SerperHealth {
+        pub key_set: bool,
+        pub ok: u64,
+        pub failed: u64,
+        /// Plain-French reason of the last failure, when the last call failed.
+        pub last_error: Option<String>,
+        pub last_error_at: Option<String>,
+    }
+
+    /// Plain reason for a failed call (status code and Serper's message).
+    pub fn reason(status: Option<u16>, body: &str) -> String {
+        let b = body.to_lowercase();
+        match status {
+            Some(401) | Some(403) if b.contains("credit") => "plus de crédits Serper".into(),
+            Some(401) | Some(403) => "clé Serper refusée".into(),
+            Some(400) if b.contains("credit") => "plus de crédits Serper".into(),
+            Some(429) => "trop de recherches d'un coup (limite Serper)".into(),
+            Some(c) => format!("Serper a répondu {}", c),
+            None => "Serper injoignable (réseau)".into(),
+        }
+    }
+
+    pub fn failed(status: Option<u16>, body: &str) {
+        FAILED.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut l) = LAST.lock() {
+            *l = Some((reason(status, body), chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()));
+        }
+    }
+
+    pub fn ok() {
+        OK.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut l) = LAST.lock() {
+            *l = None;
+        }
+    }
+
+    pub fn snapshot(key_set: bool) -> SerperHealth {
+        let last = LAST.lock().ok().and_then(|l| l.clone());
+        SerperHealth {
+            key_set,
+            ok: OK.load(Ordering::Relaxed),
+            failed: FAILED.load(Ordering::Relaxed),
+            last_error: last.as_ref().map(|l| l.0.clone()),
+            last_error_at: last.map(|l| l.1),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn reasons() {
+            assert_eq!(super::reason(Some(403), r#"{"message":"Not enough credits"}"#), "plus de crédits Serper");
+            assert_eq!(super::reason(Some(401), "Unauthorized"), "clé Serper refusée");
+            assert_eq!(super::reason(None, ""), "Serper injoignable (réseau)");
+        }
+    }
+}
+
+/// Web search status for the Prospection screen: is a key set, and did the
+/// last searches go through.
+#[tauri::command(async)]
+pub fn serper_status(state: tauri::State<'_, crate::AppState>) -> Result<serper_health::SerperHealth, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let key_set = crate::secrets::read_setting(&conn, "serper_api_key").is_some_and(|k| !k.trim().is_empty());
+    Ok(serper_health::snapshot(key_set))
 }
 
 /// Deeper path list for the "retry the venues without an email" pass: the

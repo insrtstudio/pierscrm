@@ -572,11 +572,20 @@ fn serper_search(key: &str, nom: &str, ville: Option<&str>) -> Option<String> {
         .post("https://google.serper.dev/search")
         .header("X-API-KEY", key)
         .json(&serde_json::json!({ "q": query, "num": 8 }))
-        .send()
-        .ok()?;
+        .send();
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            enrich::serper_health::failed(None, &e.to_string());
+            return None;
+        }
+    };
     if !resp.status().is_success() {
+        let code = resp.status().as_u16();
+        enrich::serper_health::failed(Some(code), &resp.text().unwrap_or_default());
         return None;
     }
+    enrich::serper_health::ok();
     let d: serde_json::Value = resp.json().ok()?;
     std::thread::sleep(Duration::from_millis(400));
     enrich::pick_site_from_search(&d, nom, ville, enrich::THIRD_PARTY_HOSTS)

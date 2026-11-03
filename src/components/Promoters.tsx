@@ -31,6 +31,7 @@ import { Modal, useToast } from "./ui";
 import { AddToCampaign } from "./BulkActions";
 import { FitLine, FitScore, TimingBadge } from "./FitTiming";
 import { DmPanel, IgHandle, InstagramSearchButton } from "./InstagramDm";
+import { SearchHealthBanner } from "./SearchHealth";
 
 const PAGE = 100;
 
@@ -192,6 +193,7 @@ export function PromotersTab({ initialEmail = false }: { initialEmail?: boolean 
   return (
     <div className="space-y-4">
       <p className="text-xs text-fg-subtle">{t("promoters.help")}</p>
+      <SearchHealthBanner />
       <div className="flex flex-wrap items-center gap-2">
         <input
           className="input max-w-xs flex-1"

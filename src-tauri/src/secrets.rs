@@ -40,6 +40,8 @@ pub const SECRET_KEYS: &[&str] = &[
     // iPhone notifications (commands/push.rs, Pushover).
     "pushover_user",
     "pushover_token",
+    // Mailbox check before a first email (deliverability/verify.rs).
+    "email_verifier_key",
 ];
 
 /// Vault key of the SMTP password (stored inside the `smtp` JSON setting before).

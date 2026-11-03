@@ -86,7 +86,9 @@ pub fn suppress(conn: &Connection, addr: &str, reason: &str, note: Option<&str>)
         > 0;
     if inserted {
         match reason {
-            "bounce" => {
+            // "invalid": found dead before sending (deliverability/verify.rs),
+            // dropped exactly like a bounce.
+            "bounce" | "invalid" => {
                 crate::commands::campaigns::mark_audience_by_address(conn, &a, "bounced");
                 forget_address(conn, &a);
             }

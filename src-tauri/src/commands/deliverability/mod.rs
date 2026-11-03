@@ -19,6 +19,7 @@
 pub mod budget;
 pub mod dns;
 pub mod health;
+pub mod verify;
 
 use chrono::{DateTime, Utc};
 use lettre::message::header::{Header, HeaderName, HeaderValue};
@@ -41,6 +42,7 @@ pub const ONE_CLICK_NOTE: &str = "lien de désinscription";
 /// Additive migration: the sending address of each email (health per sender).
 pub fn migrate(conn: &Connection) {
     let _ = conn.execute("ALTER TABLE emails ADD COLUMN from_addr TEXT", []);
+    verify::migrate(conn);
 }
 
 // ---------------- Gates for the send paths ----------------
