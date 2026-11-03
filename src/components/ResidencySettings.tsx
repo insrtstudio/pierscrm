@@ -4,12 +4,12 @@ import { useTranslation } from "react-i18next";
 import { Bot } from "lucide-react";
 import { getSetting, setSetting } from "../lib/api";
 import { aiCostMonth, pressKits } from "../lib/residency";
-import { Field, errorMessage, useSubmit, useToast } from "./ui";
+import { Field, errorMessage, useToast } from "./ui";
 
 /// Models offered for drafts and the daily note. Haiku by default (cheap and
 /// good enough); reply classification always runs on Haiku.
 const MODELS = ["claude-haiku-5-5", "claude-sonnet-5-5"];
-const KEYS = ["anthropic_api_key", "ai_model", "insrt_api_base", "insrt_api_token"] as const;
+const KEYS = ["ai_model", "insrt_api_base"] as const;
 
 /// Settings › Integrations: the residency agent (Claude API key, model,
 /// insrt.studio API) and this month's AI cost. Secrets go to the Keychain
@@ -38,12 +38,14 @@ export function ResidencySettingsCard() {
     value: cfg[k] ?? "",
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCfg((c) => ({ ...c, [k]: e.target.value })),
   });
-  const [save, saving] = useSubmit(async () => {
-    for (const k of KEYS) await setSetting(k, (cfg[k] ?? "").trim());
+  // Saved as soon as it changes (model) or on leaving the field (URL).
+  const persist = async (k: string, v: string) => {
+    if ((raw?.[k] ?? "") === v.trim()) return;
+    await setSetting(k, v.trim());
     qc.invalidateQueries({ queryKey: ["settings", "residency"] });
     qc.invalidateQueries({ queryKey: ["residency"] });
     toast(t("settings.saved"), "ok");
-  });
+  };
   const [testing, setTesting] = useState(false);
   const test = async () => {
     setTesting(true);
@@ -63,11 +65,11 @@ export function ResidencySettingsCard() {
       </div>
       <p className="mb-4 text-xs text-fg-subtle">{t("residency.settings_help")}</p>
       <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-        <Field label={t("residency.anthropic_key")}>
-          <input {...inp("anthropic_api_key", "password")} placeholder="sk-ant-…" />
-        </Field>
         <Field label={t("residency.ai_model")}>
-          <select className="input" value={cfg.ai_model || MODELS[0]} onChange={(e) => setCfg((c) => ({ ...c, ai_model: e.target.value }))}>
+          <select className="input" value={cfg.ai_model || MODELS[0]} onChange={(e) => {
+              setCfg((c) => ({ ...c, ai_model: e.target.value }));
+              persist("ai_model", e.target.value);
+            }}>
             {MODELS.map((m) => (
               <option key={m} value={m}>
                 {t(`residency.model_${m.replace(/-/g, "_")}`, m)}
@@ -76,13 +78,10 @@ export function ResidencySettingsCard() {
           </select>
         </Field>
         <Field label={t("residency.insrt_base")}>
-          <input {...inp("insrt_api_base")} placeholder="https://insrt.studio" />
-        </Field>
-        <Field label={t("residency.insrt_token")}>
-          <input {...inp("insrt_api_token", "password")} />
+          <input {...inp("insrt_api_base")} placeholder="https://insrt.studio" onBlur={(e) => persist("insrt_api_base", e.target.value)} />
         </Field>
       </div>
-      <p className="mt-3 text-2xs text-fg-faint">{t("residency.settings_hint")}</p>
+      <p className="mt-3 text-2xs text-fg-faint">{t("settings.keys_in_services")}</p>
       {cost && (
         <p className="mt-1 text-2xs text-fg-subtle tabular">
           {t("residency.ai_cost", { eur: cost.cost_eur.toFixed(2), calls: cost.calls })}
@@ -91,9 +90,6 @@ export function ResidencySettingsCard() {
       <div className="mt-4 flex justify-end gap-2">
         <button className="btn-outline" onClick={test} disabled={testing}>
           {t("residency.insrt_test")}
-        </button>
-        <button className="btn-primary" onClick={save} disabled={saving}>
-          {t("common.save")}
         </button>
       </div>
     </div>

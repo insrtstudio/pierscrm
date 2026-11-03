@@ -1,7 +1,8 @@
 import { useEffect, useState, useSyncExternalStore, type FocusEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw, Info, PenLine, Search, Activity } from "lucide-react";
+import { Globe, Moon, Sun, Mail, Plug, Eye, Download, RefreshCw, Info, PenLine, Check } from "lucide-react";
+import clsx from "clsx";
 import { getVersion } from "@tauri-apps/api/app";
 import i18n from "../i18n";
 import type { Update } from "@tauri-apps/plugin-updater";
@@ -16,7 +17,7 @@ import {
   testSmtp,
 } from "../lib/api";
 import type { SmtpConfig } from "../lib/types";
-import { PageHeader, Segmented } from "../components/Layout";
+import { PageHeader } from "../components/Layout";
 import { GuardrailsTab } from "./Emails";
 import { Field, errorMessage, useSubmit, useToast } from "../components/ui";
 import { ResidencySettingsCard } from "../components/ResidencySettings";
@@ -25,6 +26,7 @@ import { DeliverabilityPanel } from "../components/Deliverability";
 import { EmailVerifierCard } from "../components/EmailVerifier";
 import { ComparablesSettingsCard } from "../components/ComparablesSettings";
 import { AgentLibraryPanel } from "../components/AgentLibrary";
+import { ServicesTable } from "../components/ServicesTable";
 
 type SignatureFields = {
   name: string;
@@ -47,20 +49,29 @@ const EMPTY_SIG: SignatureFields = {
   soundcloud: "",
 };
 
-const SETTINGS_TABS = ["general", "email", "deliverability", "integrations", "agent"] as const;
+/// One scrolling page, a section per concern; the side menu jumps to it.
+const SECTIONS = ["services", "email", "agent", "deliverability", "notifications", "app"] as const;
+type Section = (typeof SECTIONS)[number];
+/// Former tab keys of `?tab=` deep links.
+const LEGACY: Record<string, Section> = { integrations: "services", general: "app", email: "email", deliverability: "deliverability", agent: "agent" };
 
 /// Secret fields (password, API keys) come back from the backend as a masked
 /// placeholder, never the real value; saving the untouched mask keeps the
 /// stored secret. Focusing selects it so typing replaces it whole.
 const selectOnFocus = { onFocus: (e: FocusEvent<HTMLInputElement>) => e.currentTarget.select() };
-type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 export function Settings() {
-  // `?tab=integrations` deep-links (the residency page points here for the API keys).
-  const [tab, setTab] = useState<SettingsTab>(() => {
-    const q = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("tab");
-    return (SETTINGS_TABS as readonly string[]).includes(q ?? "") ? (q as SettingsTab) : "general";
-  });
+  const [active, setActive] = useState<Section>("services");
+  const go = (k: Section) => {
+    setActive(k);
+    document.getElementById(`settings-${k}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  // `?tab=…` deep links land on their section.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.hash.split("?")[1] ?? window.location.search).get("tab") ?? "";
+    const k = (SECTIONS as readonly string[]).includes(q) ? (q as Section) : LEGACY[q];
+    if (k) setTimeout(() => go(k), 50);
+  }, []);
   const { t } = useTranslation();
   const toast = useToast();
   const qc = useQueryClient();
@@ -81,75 +92,14 @@ export function Settings() {
   useEffect(() => {
     if (trackingUrl != null) setTrackVal(trackingUrl);
   }, [trackingUrl]);
-  const [saveTracking, saveTrackingBusy] = useSubmit(async () => {
+  const [trackSaved, setTrackSaved] = useState(false);
+  const saveTracking = async () => {
+    if (trackVal.trim() === (trackingUrl ?? "").trim()) return;
     await setSetting("tracking_base_url", trackVal.trim());
     qc.invalidateQueries({ queryKey: ["setting", "tracking_base_url"] });
-    toast(t("settings.saved"), "ok");
-  });
-
-  // ---- Serper (venue website resolution) ----
-  const { data: serperKey } = useQuery({
-    queryKey: ["setting", "serper_api_key"],
-    queryFn: () => getSetting("serper_api_key"),
-  });
-  const [serperVal, setSerperVal] = useState("");
-  useEffect(() => {
-    if (serperKey != null) setSerperVal(serperKey);
-  }, [serperKey]);
-  const [saveSerper, saveSerperBusy] = useSubmit(async () => {
-    await setSetting("serper_api_key", serperVal.trim());
-    qc.invalidateQueries({ queryKey: ["setting", "serper_api_key"] });
-    toast(t("settings.saved"), "ok");
-  });
-
-  // ---- Radar: YouTube Data API key ----
-  const { data: ytKey } = useQuery({
-    queryKey: ["setting", "youtube_api_key"],
-    queryFn: () => getSetting("youtube_api_key"),
-  });
-  const [ytVal, setYtVal] = useState("");
-  useEffect(() => {
-    if (ytKey != null) setYtVal(ytKey);
-  }, [ytKey]);
-  const [saveYt, saveYtBusy] = useSubmit(async () => {
-    await setSetting("youtube_api_key", ytVal.trim());
-    qc.invalidateQueries({ queryKey: ["setting", "youtube_api_key"] });
-    toast(t("settings.saved"), "ok");
-  });
-
-  // ---- Pulse credentials (Spotify + Meta) ----
-  const PULSE_KEYS = [
-    "spotify_client_id",
-    "spotify_client_secret",
-    "meta_access_token",
-    "meta_ad_account_id",
-    "meta_result_action_type",
-  ] as const;
-  const { data: pulseRaw } = useQuery({
-    queryKey: ["settings", "pulse"],
-    queryFn: async () => {
-      const out: Record<string, string> = {};
-      for (const k of PULSE_KEYS) out[k] = (await getSetting(k)) ?? "";
-      return out;
-    },
-  });
-  const [pulseCfg, setPulseCfg] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (pulseRaw) setPulseCfg(pulseRaw);
-  }, [pulseRaw]);
-  const pinp = (k: string, type = "text") => ({
-    className: "input",
-    type,
-    autoComplete: "off",
-    value: pulseCfg[k] ?? "",
-    onChange: (e: any) => setPulseCfg((c) => ({ ...c, [k]: e.target.value })),
-    ...(type === "password" ? selectOnFocus : {}),
-  });
-  const [savePulse, savePulseBusy] = useSubmit(async () => {
-    for (const k of PULSE_KEYS) await setSetting(k, (pulseCfg[k] ?? "").trim());
-    qc.invalidateQueries({ queryKey: ["settings", "pulse"] });
-    toast(t("settings.saved"), "ok");
-  });
+    setTrackSaved(true);
+    setTimeout(() => setTrackSaved(false), 1800);
+  };
 
   // ---- Harvest performance (concurrent workers) ----
   const { data: workersRaw } = useQuery({
@@ -182,15 +132,20 @@ export function Settings() {
       }
     }
   }, [sigRaw]);
+  const [sigSaved, setSigSaved] = useState(false);
+  const saveSig = async () => {
+    const v = JSON.stringify(sig);
+    if (v === sigRaw) return;
+    await setSetting("email_signature", v);
+    qc.invalidateQueries({ queryKey: ["setting", "email_signature"] });
+    setSigSaved(true);
+    setTimeout(() => setSigSaved(false), 1800);
+  };
   const sinp = (k: keyof SignatureFields) => ({
     className: "input",
     value: sig[k],
     onChange: (e: any) => setSig({ ...sig, [k]: e.target.value }),
-  });
-  const [saveSig, saveSigBusy] = useSubmit(async () => {
-    await setSetting("email_signature", JSON.stringify(sig));
-    qc.invalidateQueries({ queryKey: ["setting", "email_signature"] });
-    toast(t("settings.saved"), "ok");
+    onBlur: saveSig,
   });
   const st = (v: string) => v.trim();
   const sigPreview: string[] = [];
@@ -259,7 +214,7 @@ export function Settings() {
   };
 
   useAppIntent("check-updates", () => {
-    setTab("general");
+    go("app");
     checkUpdate();
   });
 
@@ -312,72 +267,38 @@ export function Settings() {
       }),
   });
 
+  const section = (k: Section, body: React.ReactNode, wide = false) => (
+    <section id={`settings-${k}`} className="scroll-mt-4">
+      <h2 className="mb-1 text-base font-semibold">{t(`settings.sec_${k}`)}</h2>
+      <p className="mb-4 text-xs text-fg-subtle">{t(`settings.sec_${k}_help`)}</p>
+      <div className={clsx("grid items-start gap-6", !wide && "xl:grid-cols-2")}>{body}</div>
+    </section>
+  );
+
   return (
     <div>
-      <PageHeader title={t("settings.title")} subtitle={t("settings.subtitle")}>
-        {/* Grouped like the old single column, one concern per tab */}
-        <Segmented
-          items={SETTINGS_TABS.map((k) => ({ key: k, label: t(`settings.tab_${k}`) }))}
-          value={tab}
-          onChange={setTab}
-        />
-      </PageHeader>
-      {/* Cards flow into columns on a wide window instead of one 768px strip. */}
-      <div className="grid items-start gap-6 px-page pb-10 pt-6 xl:grid-cols-2">
-        {tab === "general" && (
-        <>
-        {/* Appearance */}
-        <div className="card p-6">
-          <div className="grid grid-cols-2 gap-6">
-            <div>
-              <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                <Globe size={15} /> {t("settings.language")}
-              </div>
-              <div className="flex gap-2">
-                {["fr", "en"].map((l) => (
-                  <button
-                    key={l}
-                    onClick={() => changeLang(l)}
-                    className={
-                      lang === l ? "btn-primary flex-1" : "btn-outline flex-1"
-                    }
-                  >
-                    {l.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                {theme === "dark" ? <Moon size={15} /> : <Sun size={15} />}{" "}
-                {t("settings.theme")}
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => changeTheme("light")}
-                  className={
-                    theme === "light" ? "btn-primary flex-1" : "btn-outline flex-1"
-                  }
-                >
-                  <Sun size={15} /> {t("settings.theme_light")}
-                </button>
-                <button
-                  onClick={() => changeTheme("dark")}
-                  className={
-                    theme === "dark" ? "btn-primary flex-1" : "btn-outline flex-1"
-                  }
-                >
-                  <Moon size={15} /> {t("settings.theme_dark")}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        </>
-        )}
-        {tab === "email" && (
-        <>
+      <PageHeader title={t("settings.title")} subtitle={t("settings.subtitle")} />
+      <div className="flex gap-8 px-page pb-16 pt-6">
+        {/* Side menu: every section one click away, nothing hidden behind a tab. */}
+        <nav className="sticky top-4 hidden w-44 shrink-0 self-start lg:block">
+          {SECTIONS.map((k) => (
+            <button
+              key={k}
+              onClick={() => go(k)}
+              className={clsx(
+                "block w-full rounded-lg px-3 py-1.5 text-left text-sm",
+                active === k ? "bg-fg/[0.06] font-medium text-fg" : "text-fg-subtle hover:text-fg",
+              )}
+            >
+              {t(`settings.sec_${k}`)}
+            </button>
+          ))}
+        </nav>
+        <div className="min-w-0 flex-1 space-y-12">
+          {section("services", <ServicesTable />, true)}
+          {section(
+            "email",
+            <>
         {/* SMTP */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
@@ -433,51 +354,6 @@ export function Settings() {
           </div>
         </div>
 
-        </>
-        )}
-        {tab === "email" && (
-        <>
-        {/* Open tracking */}
-        <div className="card p-6">
-          <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
-            <Eye size={15} /> {t("settings.tracking_section")}
-          </div>
-          <p className="mb-4 text-xs text-fg-subtle">{t("settings.tracking_help")}</p>
-
-          <div className="mb-4 panel p-4">
-            <div className="kicker mb-3">{t("settings.tracking_steps_title")}</div>
-            <ol className="space-y-2.5">
-              {["tracking_s1", "tracking_s2", "tracking_s3", "tracking_s4"].map((k, i) => (
-                <li key={k} className="flex gap-3 text-xs leading-relaxed text-fg-subtle">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center bg-accent text-2xs font-bold text-accent-fg tabular">
-                    {i + 1}
-                  </span>
-                  <span>{t(`settings.${k}`)}</span>
-                </li>
-              ))}
-            </ol>
-          </div>
-
-          <div className="flex items-end gap-3">
-            <Field label={t("settings.tracking_url")} className="flex-1">
-              <input
-                className="input"
-                value={trackVal}
-                onChange={(e) => setTrackVal(e.target.value)}
-                placeholder="https://track.insrt.fr"
-              />
-            </Field>
-            <button className="btn-primary" onClick={saveTracking} disabled={saveTrackingBusy}>
-              {t("common.save")}
-            </button>
-          </div>
-          <p className="mt-3 text-2xs text-fg-faint">{t("settings.tracking_note")}</p>
-        </div>
-
-        </>
-        )}
-        {tab === "email" && (
-        <>
         {/* Email signature */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
@@ -526,58 +402,119 @@ export function Settings() {
             </div>
           </div>
 
-          <div className="mt-5 flex justify-end">
-            <button className="btn-primary" onClick={saveSig} disabled={saveSigBusy}>
-              {t("common.save")}
-            </button>
-          </div>
+          <p className="mt-3 flex items-center gap-1.5 text-2xs text-fg-faint">
+            {sigSaved ? <><Check size={12} className="text-ok" /> {t("settings.saved")}</> : t("settings.autosave")}
+          </p>
         </div>
 
-        </>
-        )}
-        {tab === "deliverability" && (
-          <>
-            <DeliverabilityPanel />
-            {/* Quota, budget and suppressions (former Outbox › Guardrails). */}
-            <EmailVerifierCard />
-            <div className="xl:col-span-2">
-              <GuardrailsTab />
-            </div>
-          </>
-        )}
-        {tab === "agent" && <AgentLibraryPanel />}
-        {tab === "integrations" && <EmailVerifierCard />}
-        {tab === "integrations" && (
-        <>
-        {/* Venue website resolution (Serper) */}
+        {/* Open tracking */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
-            <Search size={15} /> {t("settings.enrich_section")}
+            <Eye size={15} /> {t("settings.tracking_section")}
           </div>
-          <p className="mb-4 text-xs text-fg-subtle">{t("settings.enrich_help")}</p>
+          <p className="mb-4 text-xs text-fg-subtle">{t("settings.tracking_help")}</p>
+
+          <div className="mb-4 panel p-4">
+            <div className="kicker mb-3">{t("settings.tracking_steps_title")}</div>
+            <ol className="space-y-2.5">
+              {["tracking_s1", "tracking_s2", "tracking_s3", "tracking_s4"].map((k, i) => (
+                <li key={k} className="flex gap-3 text-xs leading-relaxed text-fg-subtle">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center bg-accent text-2xs font-bold text-accent-fg tabular">
+                    {i + 1}
+                  </span>
+                  <span>{t(`settings.${k}`)}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+
           <div className="flex items-end gap-3">
-            <Field label={t("settings.serper_key")} className="flex-1">
+            <Field label={t("settings.tracking_url")} className="flex-1">
               <input
-                type="password"
                 className="input"
-                value={serperVal}
-                onChange={(e) => setSerperVal(e.target.value)}
-                placeholder="serper.dev API key"
-                autoComplete="off"
-                {...selectOnFocus}
+                value={trackVal}
+                onChange={(e) => setTrackVal(e.target.value)}
+                onBlur={saveTracking}
+                onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                placeholder="https://track.insrt.fr"
               />
             </Field>
-            <button className="btn-primary" onClick={saveSerper} disabled={saveSerperBusy}>
-              {t("common.save")}
-            </button>
+            {trackSaved && <Check size={16} className="mb-2.5 text-ok" />}
           </div>
-          <p className="mt-3 text-2xs text-fg-faint">{t("settings.serper_hint")}</p>
+          <p className="mt-3 text-2xs text-fg-faint">{t("settings.tracking_note")}</p>
         </div>
-
-        </>
-        )}
-        {tab === "integrations" && (
-        <>
+            </>,
+          )}
+          {section(
+            "agent",
+            <>
+              <ResidencySettingsCard />
+              <div className="xl:col-span-2">
+                <AgentLibraryPanel />
+              </div>
+            </>,
+          )}
+          {section(
+            "deliverability",
+            <>
+              <DeliverabilityPanel />
+              <EmailVerifierCard />
+              <div className="xl:col-span-2">
+                <GuardrailsTab />
+              </div>
+            </>,
+          )}
+          {section("notifications", <PushSettingsCard />)}
+          {section(
+            "app",
+            <>
+        {/* Appearance */}
+        <div className="card p-6">
+          <div className="grid grid-cols-2 gap-6">
+            <div>
+              <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                <Globe size={15} /> {t("settings.language")}
+              </div>
+              <div className="flex gap-2">
+                {["fr", "en"].map((l) => (
+                  <button
+                    key={l}
+                    onClick={() => changeLang(l)}
+                    className={
+                      lang === l ? "btn-primary flex-1" : "btn-outline flex-1"
+                    }
+                  >
+                    {l.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                {theme === "dark" ? <Moon size={15} /> : <Sun size={15} />}{" "}
+                {t("settings.theme")}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => changeTheme("light")}
+                  className={
+                    theme === "light" ? "btn-primary flex-1" : "btn-outline flex-1"
+                  }
+                >
+                  <Sun size={15} /> {t("settings.theme_light")}
+                </button>
+                <button
+                  onClick={() => changeTheme("dark")}
+                  className={
+                    theme === "dark" ? "btn-primary flex-1" : "btn-outline flex-1"
+                  }
+                >
+                  <Moon size={15} /> {t("settings.theme_dark")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
         {/* Harvest performance */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
@@ -603,84 +540,7 @@ export function Settings() {
           </div>
         </div>
 
-        </>
-        )}
-        {tab === "integrations" && (
-        <>
-        {/* Radar (YouTube) */}
-        <div className="card p-6">
-          <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
-            <Search size={15} /> {t("settings.radar_section")}
-          </div>
-          <p className="mb-4 text-xs text-fg-subtle">{t("settings.radar_help")}</p>
-          <div className="flex items-end gap-3">
-            <Field label={t("settings.youtube_key")} className="flex-1">
-              <input
-                type="password"
-                className="input"
-                value={ytVal}
-                onChange={(e) => setYtVal(e.target.value)}
-                placeholder="YouTube Data API v3 key"
-                autoComplete="off"
-                {...selectOnFocus}
-              />
-            </Field>
-            <button className="btn-primary" onClick={saveYt} disabled={saveYtBusy}>
-              {t("common.save")}
-            </button>
-          </div>
-          <p className="mt-3 text-2xs text-fg-faint">{t("settings.youtube_hint")}</p>
-        </div>
-
-        </>
-        )}
-        {tab === "integrations" && (
-        <>
-        {/* Residency agent (Claude + insrt.studio) */}
-        <ResidencySettingsCard />
-
-        {/* iPhone notifications (Pushover) */}
-        <PushSettingsCard />
-
-        {/* Pulse (Spotify + Meta) */}
-        <div className="card p-6">
-          <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
-            <Activity size={15} /> {t("settings.pulse_section")}
-          </div>
-          <p className="mb-4 text-xs text-fg-subtle">{t("settings.pulse_help")}</p>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-            <Field label="Spotify Client ID">
-              <input {...pinp("spotify_client_id")} />
-            </Field>
-            <Field label="Spotify Client Secret">
-              <input {...pinp("spotify_client_secret", "password")} />
-            </Field>
-            <Field label={t("settings.pulse_meta_token")}>
-              <input {...pinp("meta_access_token", "password")} />
-            </Field>
-            <Field label={t("settings.pulse_meta_account")}>
-              <input {...pinp("meta_ad_account_id")} placeholder="act_1234567890 ou 1234567890" />
-            </Field>
-            <Field label={t("settings.pulse_action_type")}>
-              <input {...pinp("meta_result_action_type")} placeholder="link_click" />
-            </Field>
-          </div>
-          <p className="mt-3 text-2xs text-fg-faint">{t("settings.pulse_hint")}</p>
-          <p className="mt-1 text-2xs text-fg-faint">{t("settings.secrets_note")}</p>
-          <div className="mt-4 flex justify-end">
-            <button className="btn-primary" onClick={savePulse} disabled={savePulseBusy}>
-              {t("common.save")}
-            </button>
-          </div>
-        </div>
-
-        </>
-        )}
-        {tab === "general" && (
-        <>
-        {/* Comparable artists (Discovery fit score) */}
-        <ComparablesSettingsCard />
-
+              <ComparablesSettingsCard />
         {/* Updates */}
         <div className="card p-6">
           <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
@@ -722,8 +582,9 @@ export function Settings() {
             )}
           </div>
         </div>
-        </>
-        )}
+            </>,
+          )}
+        </div>
       </div>
     </div>
   );

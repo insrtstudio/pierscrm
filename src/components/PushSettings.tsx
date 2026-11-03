@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Smartphone } from "lucide-react";
 import { pushGet, pushSave, pushTest, type PushConfig } from "../lib/push";
 import { formatDateTime } from "../lib/format";
-import { Field, errorMessage, useSubmit, useToast } from "./ui";
+import { errorMessage, useSubmit, useToast } from "./ui";
 
 /// Event switches, in display order (keys of PushConfig).
 const EVENTS = ["replies", "out_of_office", "epk", "opens", "problems", "summary"] as const;
@@ -18,6 +18,7 @@ export function PushSettingsCard() {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["push"], queryFn: pushGet });
   const [cfg, setCfg] = useState<PushConfig | null>(null);
+  // The keys live in Services et clés; the masks sent back keep them.
   const [user, setUser] = useState("");
   const [token, setToken] = useState("");
   useEffect(() => {
@@ -62,15 +63,7 @@ export function PushSettingsCard() {
         <Smartphone size={15} /> {t("push.section")}
       </div>
       <p className="mb-4 text-xs text-fg-subtle">{t("push.help")}</p>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-        <Field label={t("push.user_key")}>
-          <input className="input" type="password" autoComplete="off" value={user} onChange={(e) => setUser(e.target.value)} />
-        </Field>
-        <Field label={t("push.app_token")}>
-          <input className="input" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} />
-        </Field>
-      </div>
-      <p className="mt-2 text-2xs text-fg-faint">{t("push.keys_hint")}</p>
+      <p className="text-2xs text-fg-faint">{t("settings.keys_in_services")}</p>
 
       <div className="mt-4">{check("enabled", t("push.enabled"))}</div>
       <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
