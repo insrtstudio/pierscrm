@@ -4,6 +4,8 @@ name: Release
 # Pré-requis (une seule fois) : ajouter dans Settings → Secrets and variables → Actions :
 #   - TAURI_SIGNING_PRIVATE_KEY          = contenu de src-tauri/pierscrm-updater.key
 #   - TAURI_SIGNING_PRIVATE_KEY_PASSWORD = (vide, mais crée quand même le secret)
+#   - APPLE_CERTIFICATE          = base64 de ~/.pierscrm-signing/pierscrm-signing.p12
+#   - APPLE_CERTIFICATE_PASSWORD = contenu de ~/.pierscrm-signing/p12.pass
 #
 # Publier une version :
 #   1) bump "version" dans src-tauri/tauri.conf.json (ET package.json)
@@ -54,12 +56,25 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      # Code signing with the self-signed "PiersCRM Self-Signed" certificate
+      # (public part in src-tauri/signing/, key + password in the
+      # APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD secrets). Every version
+      # carries the same signature, so the macOS keychain keeps its "Always
+      # allow" from one update to the next instead of asking again. macOS only
+      # signs with a certificate it trusts: the runner trusts this one for code
+      # signing (passwordless sudo on GitHub's macOS runners).
+      - name: Trust the signing certificate
+        run: sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain src-tauri/signing/pierscrm-selfsigned.pem
+
       - name: Build & publish release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: "PiersCRM Self-Signed"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "PiersCRM ${{ github.ref_name }}"

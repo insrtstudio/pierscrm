@@ -282,6 +282,49 @@ pub(crate) fn instagram_from_search(d: &serde_json::Value, name: &str, city: Opt
     None
 }
 
+/// pick_instagram for a collective (strict_name): a handle spelling the whole
+/// name wins; otherwise a lone handle on their own (strictly matched) site
+/// when `trust_single`.
+pub(crate) fn pick_collective_instagram(cands: &[(String, usize)], name: &str, city: Option<&str>, trust_single: bool) -> Option<String> {
+    use super::strict_name::spells_name;
+    cands
+        .iter()
+        .filter(|(h, _)| spells_name(&normalise(h), name, city))
+        .max_by_key(|(h, n)| (*n, std::cmp::Reverse(h.len())))
+        .map(|(h, _)| h.clone())
+        .or_else(|| (trust_single && cands.len() == 1).then(|| cands[0].0.clone()))
+}
+
+/// instagram_from_search for a collective: only a profile link whose handle
+/// spells the whole name. A short common name ("RUSH", "Vibez") also needs
+/// its result to read like music or to name the city.
+pub(crate) fn collective_instagram_from_search(d: &serde_json::Value, name: &str, city: Option<&str>) -> Option<String> {
+    use super::strict_name::{is_bare_weak, music_context, spells_name};
+    let mut items: Vec<(String, String)> = Vec::new();
+    if let Some(profiles) = d.pointer("/knowledgeGraph/profiles").and_then(|p| p.as_array()) {
+        let kg = d.get("knowledgeGraph").cloned().unwrap_or_default();
+        let ctx = ["title", "type", "description"].iter().filter_map(|k| kg.get(*k).and_then(|x| x.as_str())).collect::<Vec<_>>().join(" ");
+        for p in profiles {
+            items.push((p.get("link").and_then(|x| x.as_str()).unwrap_or_default().to_string(), ctx.clone()));
+        }
+    }
+    if let Some(org) = d.get("organic").and_then(|o| o.as_array()) {
+        for it in org {
+            let s = |k: &str| it.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string();
+            items.push((s("link"), format!("{} {}", s("title"), s("snippet"))));
+        }
+    }
+    let city_n = city.map(normalise).unwrap_or_default();
+    items.into_iter().find_map(|(link, ctx)| {
+        let h = handle_from_url(&link)?;
+        if !spells_name(&normalise(&h), name, city) {
+            return None;
+        }
+        let near = music_context(&ctx) || (!city_n.is_empty() && normalise(&ctx).contains(&city_n));
+        (!is_bare_weak(&normalise(&h), name, city) || near).then_some(h)
+    })
+}
+
 /// Store a collective's handle unless it already has one.
 pub(crate) fn store_promoter_instagram(conn: &Connection, id: i64, handle: &str) {
     let _ = conn.execute(
@@ -350,7 +393,7 @@ pub async fn process_instagram_task(pool: &DbPool, payload: &str) -> Result<(), 
                 break;
             }
         }
-        found = pick_instagram(&handles, &nom, ville.as_deref(), true);
+        found = pick_collective_instagram(&handles, &nom, ville.as_deref(), true);
         for p in IG_PATHS {
             if found.is_some() {
                 break;
@@ -358,7 +401,7 @@ pub async fn process_instagram_task(pool: &DbPool, payload: &str) -> Result<(), 
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             if let Some(b) = fetch_html(&client, &format!("{base}{p}")).await {
                 tally_handles(&mut handles, &b);
-                found = pick_instagram(&handles, &nom, ville.as_deref(), true);
+                found = pick_collective_instagram(&handles, &nom, ville.as_deref(), true);
             }
         }
     }
@@ -372,7 +415,7 @@ pub async fn process_instagram_task(pool: &DbPool, payload: &str) -> Result<(), 
         if let Some(key) = key {
             let q = format!("\"{}\" {} instagram", nom.trim(), ville.clone().unwrap_or_default()).trim().to_string();
             if let Some(d) = super::enrich::serper_search(&client, &key, &q).await {
-                found = instagram_from_search(&d, &nom, ville.as_deref());
+                found = collective_instagram_from_search(&d, &nom, ville.as_deref());
                 searched = true;
             }
             // Politeness / rate-limit courtesy toward the search API.

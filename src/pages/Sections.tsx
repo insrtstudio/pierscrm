@@ -12,6 +12,7 @@ import { Kpis } from "./Kpis";
 import { Funnel } from "./Funnel";
 import { Budget } from "./Budget";
 import { Visa } from "./Visa";
+import { CreditsPanel } from "../components/Credits";
 
 // Nav sections made of several screens. Each screen keeps its own logic;
 // TabbedPage shows the section title and the screen's header collapses to its
@@ -80,6 +81,7 @@ export function Admin() {
     <TabbedPage
       title={t("nav.admin")}
       tabs={[
+        { key: "credits", label: t("credits.tab"), render: () => <CreditsPanel /> },
         { key: "budget", label: t("nav.budget"), render: () => <Budget /> },
         { key: "visa", label: t("nav.visa"), render: () => <Visa /> },
       ]}

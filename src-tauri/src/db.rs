@@ -812,6 +812,7 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // Additive, see commands/social.rs.
     crate::commands::social::migrate(conn);
     crate::commands::residency::prospect::migrate(conn);
+    crate::commands::credits::migrate(conn);
     // ---- Promoter types (collectif / club / label / ...) ----
     // vi_promoter_orgs.org_type*, instagram_rejected. See commands/org_type.rs.
     crate::commands::org_type::migrate(conn);

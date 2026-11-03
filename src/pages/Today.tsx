@@ -6,6 +6,7 @@ import { ArrowUpRight, CalendarDays, Inbox, Megaphone, type LucideIcon } from "l
 import { PageHeader } from "../components/Layout";
 import { Actions } from "./Actions";
 import { DmQueue } from "../components/DmQueue";
+import { CreditsBanner } from "../components/Credits";
 import { deskCount } from "../lib/replyDesk";
 import { listArtists, listCampaigns, listEvents } from "../lib/api";
 import { parseDay, today } from "../lib/format";
@@ -71,6 +72,7 @@ export function Today() {
           hint={t("today.campaigns_hint", { count: active })}
         />
       </div>
+      <CreditsBanner />
       <DmQueue />
       <Actions />
     </div>

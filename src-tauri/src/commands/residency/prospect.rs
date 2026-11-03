@@ -71,6 +71,7 @@ impl ProspectReport {
 /// One-time fix: collectives filed as "looked up" by runs where web search
 /// never answered (no RA id, no site, no Instagram found) go back in the queue.
 pub fn migrate(conn: &Connection) {
+    migrate_strict(conn);
     const KEY: &str = "prospect_reset_unsearched_v1";
     if super::engine::get(conn, KEY).is_some() {
         return;
@@ -85,6 +86,99 @@ pub fn migrate(conn: &Connection) {
         )
         .unwrap_or(0);
     super::engine::put(conn, KEY, &n.to_string());
+}
+
+/// One-time pass of strict_cleanup over what the loose rule had stored.
+fn migrate_strict(conn: &Connection) {
+    const KEY: &str = "collective_strict_v1";
+    if super::engine::get(conn, KEY).is_some() {
+        return;
+    }
+    let c = strict_cleanup(conn, true);
+    super::engine::put(conn, KEY, &format!("{} sites, {} emails, {} instagram", c.sites, c.emails, c.handles));
+}
+
+/// What strict_cleanup removed.
+#[derive(Debug, Default, PartialEq)]
+pub struct Cleanup {
+    pub sites: usize,
+    pub emails: usize,
+    pub handles: usize,
+    /// "Sonic Flux: e-flux.com, @e_flux".
+    pub lines: Vec<String>,
+}
+
+/// Re-check every collective's stored site and Instagram with the strict rule
+/// (commands::strict_name). A site that does not spell the name loses its
+/// address book (the emails were crawled off someone else's company) and a
+/// handle that does not, or a bare short word, is dropped. The collective
+/// goes back in the search queue. Collectives already messaged are left as is.
+pub fn strict_cleanup(conn: &Connection, apply: bool) -> Cleanup {
+    use crate::commands::enrich::domain_core;
+    use crate::commands::strict_name::{is_bare_weak, spells_name};
+    let mut out = Cleanup::default();
+    let rows: Vec<(i64, String, Option<String>, Option<String>, Option<String>)> = conn
+        .prepare(
+            "SELECT o.id, o.nom, o.ville, NULLIF(trim(o.site_web), ''), NULLIF(trim(o.instagram), '')
+             FROM vi_promoter_orgs o
+             WHERE (NULLIF(trim(o.site_web), '') IS NOT NULL OR NULLIF(trim(o.instagram), '') IS NOT NULL)
+               AND NOT EXISTS (SELECT 1 FROM social_touches s WHERE s.promoter_id = o.id
+                               OR (o.crm_contact_id IS NOT NULL AND s.contact_id = o.crm_contact_id))
+               AND (o.crm_contact_id IS NULL OR NOT EXISTS (SELECT 1 FROM campaign_contacts cc WHERE cc.contact_id = o.crm_contact_id))",
+        )
+        .and_then(|mut st| {
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+                .map(|it| it.flatten().collect())
+        })
+        .unwrap_or_default();
+    for (id, nom, ville, site, insta) in rows {
+        let city = ville.as_deref();
+        let bad_site = site.as_deref().filter(|s| {
+            let core = domain_core(s);
+            !s.contains("instagram.com") && !core.is_empty() && !spells_name(&core, &nom, city)
+        });
+        let bad_handle = insta
+            .as_deref()
+            .filter(|h| {
+                let core = crate::db::normalise(h);
+                !spells_name(&core, &nom, city) || is_bare_weak(&core, &nom, city)
+            });
+        if bad_site.is_none() && bad_handle.is_none() {
+            continue;
+        }
+        let mut what = Vec::new();
+        if let Some(s) = bad_site {
+            let n: usize = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM vi_promoter_contacts WHERE promoter_id = ?1 AND source_method = 'search'",
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            out.sites += 1;
+            out.emails += n;
+            what.push(format!("{s} ({n} emails)"));
+            if apply {
+                let _ = conn.execute("DELETE FROM vi_promoter_contacts WHERE promoter_id = ?1 AND source_method = 'search'", [id]);
+                let _ = conn.execute("UPDATE vi_promoter_orgs SET site_web = NULL WHERE id = ?1", [id]);
+            }
+        }
+        if let Some(h) = bad_handle {
+            out.handles += 1;
+            what.push(format!("@{h}"));
+            if apply {
+                let _ = conn.execute("UPDATE vi_promoter_orgs SET instagram = NULL WHERE id = ?1", [id]);
+            }
+        }
+        if apply {
+            let _ = conn.execute(
+                "UPDATE vi_promoter_orgs SET enriched_at = NULL, instagram_checked_at = NULL, updated_at = datetime('now') WHERE id = ?1",
+                [id],
+            );
+        }
+        out.lines.push(format!("{nom}: {}", what.join(", ")));
+    }
+    out
 }
 
 /// A campaign written to collectives (the warm-up / last-minute cover copy).

@@ -817,10 +817,10 @@ pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, pay
             search_answered = d.is_some();
             site = d
                 .as_ref()
-                .and_then(|d| super::enrich::pick_site_from_search(d, &nom, ville.as_deref(), super::enrich::THIRD_PARTY_HOSTS));
+                .and_then(|d| super::enrich::pick_collective_site_from_search(d, &nom, ville.as_deref(), super::enrich::THIRD_PARTY_HOSTS));
             // The same results often list the collective's Instagram (social.rs).
             if insta.is_none() {
-                insta = d.as_ref().and_then(|d| super::social::instagram_from_search(d, &nom, ville.as_deref()));
+                insta = d.as_ref().and_then(|d| super::social::collective_instagram_from_search(d, &nom, ville.as_deref()));
             }
             searched = site.is_some();
             tokio::time::sleep(std::time::Duration::from_millis(400)).await;
@@ -889,7 +889,7 @@ pub async fn process_enrich_task(ra_client: &reqwest::Client, pool: &DbPool, pay
     }
     // The Instagram profile its site links to (social::pick_instagram).
     if insta.is_none() {
-        insta = super::social::pick_instagram(&handles, &nom, ville.as_deref(), true);
+        insta = super::social::pick_collective_instagram(&handles, &nom, ville.as_deref(), true);
     }
     let looked_up = stored_site.is_some() || ra_id.is_some() || search_answered || site.is_some();
     if let Ok(conn) = pool.get() {

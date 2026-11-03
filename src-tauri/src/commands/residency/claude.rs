@@ -201,6 +201,10 @@ impl Llm for HttpClaude {
                         }
                         return Err(last_err);
                     }
+                    if status == 400 && text.contains("credit balance") {
+                        crate::commands::credits::mark_anthropic_empty();
+                        return Err("Plus de crédit Claude (Admin, Crédits).".into());
+                    }
                     if status == 401 || status == 403 {
                         return Err("Clé API Anthropic refusée (Réglages, Intégrations).".into());
                     }

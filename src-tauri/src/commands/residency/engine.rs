@@ -618,6 +618,8 @@ fn tick(pool: &DbPool, app: &tauri::AppHandle, now: DateTime<Utc>) {
     crate::commands::deliverability::on_tick(&conn, now);
     // Addresses of the first emails due soon, checked ahead of the send.
     crate::commands::deliverability::verify::precheck(&conn, now);
+    // Balances of the paid services, once a day (Admin, Crédits).
+    crate::commands::credits::daily_check(&conn, app, chrono::DateTime::<chrono::Local>::from(now));
     drop(conn);
     let Ok(conn) = pool.get() else { return };
 

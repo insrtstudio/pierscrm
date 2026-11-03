@@ -621,6 +621,44 @@ pub(crate) fn pick_site_from_search(
         .map(|(o, _)| o)
 }
 
+/// pick_site_from_search for a collective (strict_name): the domain must spell
+/// the whole name and the result must read like music, so "Sonic Flux" no
+/// longer lands on e-flux.com nor "RUSH" on rush.com.
+pub(crate) fn pick_collective_site_from_search(
+    d: &serde_json::Value,
+    name: &str,
+    city: Option<&str>,
+    skip: &[&str],
+) -> Option<String> {
+    use super::strict_name::{music_context, spells_name};
+    let usable = |link: &str| -> Option<(String, String)> {
+        let n = normalize_site(link)?;
+        let host = host_of(&n);
+        if host.is_empty() || host_in(&host, skip) {
+            return None;
+        }
+        Some((origin_of(&n), host))
+    };
+    let text = |v: &serde_json::Value, keys: &[&str]| -> String {
+        keys.iter().filter_map(|k| v.get(*k).and_then(|x| x.as_str())).collect::<Vec<_>>().join(" ")
+    };
+    if let Some(kg) = d.get("knowledgeGraph") {
+        if let Some((origin, host)) = kg.get("website").and_then(|w| w.as_str()).and_then(usable) {
+            if spells_name(&domain_core(&host), name, city) && music_context(&text(kg, &["title", "type", "description"])) {
+                return Some(origin);
+            }
+        }
+    }
+    d.get("organic")
+        .and_then(|o| o.as_array())?
+        .iter()
+        .filter_map(|it| {
+            let (o, host) = usable(it.get("link")?.as_str()?)?;
+            (spells_name(&domain_core(&host), name, city) && music_context(&text(it, &["title", "snippet"]))).then_some(o)
+        })
+        .next()
+}
+
 /// Resolve an official website via the Serper (Google) search API, used only
 /// when no site is known. `name` (and the venue's `city`) is what the site's
 /// domain must match (see pick_site_from_search) and `skip` the hosts never
