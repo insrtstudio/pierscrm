@@ -8,9 +8,10 @@
 //! - later                 -> follow-up date + Action on that date
 //! - not_interested        -> declined
 //! - unsubscribe           -> suppression + declined
-//! - wrong_person          -> Action "Trouver le bon contact" (address mentioned, if any)
+//! - wrong_person          -> an address was given: the card takes it and the first email goes to
+//!                            that person (`hand_over_pending`). Else Action "Trouver le bon contact"
 //! - out_of_office         -> not a reply: the next step moves after the return date (else +7 days)
-//! The agent never answers a human itself.
+//! The agent never answers a human itself: a handover writes to the new person, not to the one who replied.
 
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
 use rusqlite::{params, Connection};
@@ -288,11 +289,13 @@ pub fn parse_batch(text: &str, ids: &[i64], model: &str) -> Option<Vec<Insight>>
         }
         let txt = |k: &str| claude::no_dashes(it.get(k).and_then(Value::as_str).unwrap_or("").trim());
         let mentioned = txt("mentioned_email");
+        // The model sometimes leaks closing JSON into the last words of a string.
+        let summary = txt("summary").trim_end_matches(['}', ']']).trim_end().to_string();
         out.push(Insight {
             reply_id: id,
             sentiment,
             intent,
-            summary: txt("summary"),
+            summary,
             suggested_reply: txt("suggested_reply"),
             follow_up_on: opt_date(it.get("follow_up_on")),
             mentioned_email: outbox::addresses_in(&mentioned).into_iter().next(),
@@ -339,6 +342,185 @@ fn classify_batch(conn: &Connection, llm: &dyn Llm, batch: &[Pending], today: Na
         }
     }
     Err(last)
+}
+
+// ---------------- Handing over to the right person ----------------
+
+/// Mailboxes that name a role, never a person.
+const ROLE_MAILBOXES: &[&str] = &[
+    "info", "infos", "contact", "contacts", "booking", "bookings", "prog", "programmation", "programming", "hello",
+    "bonjour", "hi", "team", "equipe", "office", "admin", "mail", "events", "event", "club", "music", "musique",
+    "management", "press", "presse", "direction", "accueil", "reservation", "reservations", "general",
+];
+
+/// The first name behind a mailbox, as it is written in `text` (so with its
+/// accents): "cecile@x.fr" and "Cécile Erhard" give "Cécile". None for a role
+/// mailbox or when the text never writes it outside an address: a mailbox
+/// alone may be "jdupont", and a wrong name is worse than a plain "Hello,".
+pub fn first_name_in(addr: &str, text: &str) -> Option<String> {
+    let local = addr.split('@').next()?.split(['.', '_', '-', '+']).next()?;
+    let key = crate::db::normalise(local);
+    if key.chars().count() < 3 || !key.chars().all(char::is_alphabetic) || ROLE_MAILBOXES.contains(&key.as_str()) {
+        return None;
+    }
+    text.split_whitespace()
+        .filter(|w| !w.contains('@'))
+        .flat_map(|w| w.split(|c: char| !c.is_alphabetic()))
+        .find(|w| crate::db::normalise(w) == key)
+        .map(|w| {
+            let mut c = w.chars();
+            let first: String = c.next().into_iter().flat_map(char::to_uppercase).collect();
+            format!("{}{}", first, c.as_str().to_lowercase())
+        })
+}
+
+/// The first email, rewritten for the person it is now meant for: named when
+/// we know the name, and saying who sent us there. Nothing else changes.
+pub fn handover_body(first_email: &str, lang: &str, target: Option<&str>, referrer: Option<&str>) -> String {
+    let en = lang == "en";
+    let hello = if en { "Hi" } else { "Hello" };
+    let greeting = match target {
+        Some(n) => format!("{} {},", hello, n),
+        None => format!("{},", hello),
+    };
+    let intro = match (referrer, en) {
+        (Some(n), false) => format!("{} m'a conseillé de vous écrire.", n),
+        (None, false) => "On m'a conseillé de vous écrire.".to_string(),
+        (Some(n), true) => format!("{} suggested I get in touch with you.", n),
+        (None, true) => "I was told you're the right person to write to.".to_string(),
+    };
+    let body = first_email.trim();
+    let first_line = body.lines().next().unwrap_or("").trim();
+    let is_greeting = first_line.ends_with(',') && first_line.chars().count() <= 40;
+    let rest = if is_greeting { body[body.find('\n').unwrap_or(body.len())..].trim_start() } else { body };
+    format!("{}\n\n{}\n\n{}", greeting, intro, rest)
+}
+
+/// Why this address cannot take over, if it cannot. It must really be in the
+/// reply (a classifier can make one up), and be a new person: not the sender,
+/// not the card's address, not us, not suppressed, not another contact's.
+fn handover_blocked(conn: &Connection, contact_id: i64, card: &str, from: &str, to: &str, reply_text: &str) -> Option<&'static str> {
+    let own = conn
+        .query_row("SELECT value FROM settings WHERE key = 'smtp'", [], |r| r.get::<_, String>(0))
+        .ok()
+        .and_then(|j| serde_json::from_str::<Value>(&j).ok())
+        .and_then(|v| v.get("from_email").and_then(Value::as_str).map(outbox::norm_addr));
+    if !reply_text.to_lowercase().contains(to) {
+        return Some("adresse absente de la réponse");
+    }
+    if to == outbox::norm_addr(from) || to == outbox::norm_addr(card) || own.as_deref() == Some(to) {
+        return Some("pas une nouvelle personne");
+    }
+    if outbox::suppression_reason(conn, to).is_some() {
+        return Some("adresse en liste de suppression");
+    }
+    let taken: bool = conn
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM contacts WHERE id <> ?1 AND lower(trim(email)) = ?2)",
+            params![contact_id, to],
+            |r| r.get(0),
+        )
+        .unwrap_or(true);
+    taken.then_some("adresse déjà sur une autre fiche")
+}
+
+/// "Write to celia@club.fr instead": the card takes the address (the old one
+/// stays in its notes), the conversation that never was goes back to where the
+/// sequence stood, and the first email is scheduled for the new person, under
+/// the campaign's usual window and quotas. Runs for every open "wrong person"
+/// with an address, so what was classified before this existed is caught up;
+/// marking the Action done leaves it alone. Anything refused stays in Actions.
+pub fn hand_over_pending(conn: &Connection, today: NaiveDate) -> usize {
+    type Row = (i64, i64, i64, String, String, String, String, String, String, String);
+    let rows: Vec<Row> = conn
+        .prepare(
+            "SELECT i.id, k.id, i.campaign_id, lower(trim(i.mentioned_email)), r.from_addr, COALESCE(r.body_excerpt,''),
+                    COALESCE(i.summary,''), COALESCE(k.email,''), k.status, k.name
+             FROM reply_insights i
+             JOIN email_replies r ON r.id = i.email_reply_id
+             JOIN contacts k ON k.id = i.contact_id
+             WHERE i.intent = 'wrong_person' AND i.handled = 0 AND COALESCE(i.mentioned_email,'') <> ''
+               AND i.campaign_id IS NOT NULL
+             ORDER BY i.id",
+        )
+        .and_then(|mut st| {
+            st.query_map([], |r| {
+                Ok((
+                    r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?,
+                ))
+            })
+            .map(|it| it.flatten().collect())
+        })
+        .unwrap_or_default();
+    let mut done = 0;
+    for (iid, cid, camp, to, from, reply, summary, card, status, name) in rows {
+        // Taken further since (a date, a refusal): not ours to reopen.
+        if matches!(status.as_str(), "confirmed" | "declined") {
+            continue;
+        }
+        if handover_blocked(conn, cid, &card, &from, &to, &reply).is_some() {
+            continue;
+        }
+        let first: Option<(String, String, String, Option<String>)> = conn
+            .query_row(
+                "SELECT subject, body, lang, press_url FROM campaign_messages
+                 WHERE campaign_id = ?1 AND contact_id = ?2 AND step = 1 AND status = 'sent'",
+                params![camp, cid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .ok();
+        let Some((subject, body, lang, press)) = first.filter(|f| !f.0.trim().is_empty() && !f.1.trim().is_empty()) else {
+            continue;
+        };
+        let known = format!("{}\n{}", reply, summary);
+        let target = first_name_in(&to, &known);
+        let referrer = first_name_in(&from, &known);
+        let text = handover_body(&body, &lang, target.as_deref(), referrer.as_deref());
+        // Past the configured steps, so that no sequence hangs off this email.
+        let configured = super::load(conn, camp).map_or(0, |r| r.config.steps.len() as i64);
+        let last: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(step), 0) FROM campaign_messages WHERE campaign_id = ?1 AND contact_id = ?2",
+                params![camp, cid],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let note = format!("Fiche changée le {} : {} remplacé par {} (indiqué par {}).", today, card.trim(), to, from.trim());
+        let moved = conn.execute_batch("SAVEPOINT handover").is_ok()
+            && conn
+                .execute(
+                    "UPDATE contacts SET email = ?2, email_status = NULL, follow_up = NULL, updated_at = datetime('now'),
+                            notes = CASE WHEN COALESCE(trim(notes),'') = '' THEN ?3 ELSE notes || char(10) || ?3 END
+                     WHERE id = ?1",
+                    params![cid, to, note],
+                )
+                .is_ok()
+            && conn
+                .execute(
+                    "INSERT INTO campaign_messages (campaign_id, contact_id, step, subject, body, lang, status, press_url, note, generated_by)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'scheduled', ?7, ?8, 'handover')",
+                    params![camp, cid, last.max(configured) + 1, subject, text, lang, press, format!("Pour {}, indiqué par {}", to, from.trim())],
+                )
+                .is_ok()
+            && conn
+                .execute("UPDATE reply_insights SET handled = 1, handled_at = datetime('now') WHERE id = ?1", params![iid])
+                .is_ok();
+        if !moved {
+            let _ = conn.execute_batch("ROLLBACK TO handover; RELEASE handover");
+            super::log(conn, Some(camp), "warn", "handover_failed", &format!("{} : passage à {} impossible", name, to));
+            continue;
+        }
+        let _ = conn.execute_batch("RELEASE handover");
+        let _ = conn.execute(
+            "UPDATE campaign_contacts SET state = 'sent', updated_at = datetime('now')
+             WHERE campaign_id = ?1 AND contact_id = ?2 AND state = 'replied'",
+            params![camp, cid],
+        );
+        status::on_reply_withdrawn(conn, cid);
+        super::log(conn, Some(camp), "info", "handover", &format!("{} : fiche passée à {}, premier email programmé", name, to));
+        done += 1;
+    }
+    done
 }
 
 // ---------------- Applying an insight ----------------
@@ -468,7 +650,10 @@ pub fn classify_pending(conn: &Connection, llm: Option<&dyn Llm>, today: NaiveDa
             None => for_llm.push(p),
         }
     }
-    let Some(llm) = llm else { return done };
+    let Some(llm) = llm else {
+        hand_over_pending(conn, today);
+        return done;
+    };
     for batch in for_llm.chunks(BATCH) {
         let artist = super::content::artist_name(conn, batch[0].campaign_id);
         match classify_batch(conn, llm, batch, today, &artist) {
@@ -483,6 +668,7 @@ pub fn classify_pending(conn: &Connection, llm: Option<&dyn Llm>, today: NaiveDa
             Err(e) => super::log(conn, Some(batch[0].campaign_id), "warn", "classify_failed", &e),
         }
     }
+    hand_over_pending(conn, today);
     done
 }
 
@@ -585,6 +771,151 @@ mod tests {
         assert_eq!(crate::commands::residency::engine::stop_reason(&c, 1, 11), None);
         // Nothing left to classify; a second run is a no-op.
         assert_eq!(classify_pending(&c, Some(&llm), d("2026-10-29")), 0);
+    }
+
+    fn wrong_person_reply(c: &Connection, cid: i64, from: &str, text: &str, mentioned: &str) {
+        c.execute(
+            "UPDATE campaign_messages SET body = 'Hello,\n\nMoi c''est Thibault.\n\nÀ bientôt,\nThibault', press_url = 'https://p/1' WHERE contact_id = ?1 AND step = 1",
+            params![cid],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO email_replies (id, email_id, contact_id, from_addr, subject, message_id, kind, received_at, body_excerpt)
+             VALUES (1, 1, ?1, ?2, 'Re: Résidence', '<a>', 'reply', '2026-10-21 09:00:00', ?3)",
+            params![cid, from, text],
+        )
+        .unwrap();
+        c.execute("UPDATE contacts SET status = 'in_discussion' WHERE id = ?1", params![cid]).unwrap();
+        c.execute("UPDATE campaign_contacts SET state = 'replied' WHERE contact_id = ?1", params![cid]).unwrap();
+        c.execute(
+            "INSERT INTO reply_insights (email_reply_id, contact_id, campaign_id, sentiment, intent, summary, mentioned_email, model)
+             VALUES (1, ?1, 1, 'neutral', 'wrong_person', 'La bonne personne est Celia', ?2, 'm')",
+            params![cid, mentioned],
+        )
+        .unwrap();
+        c.execute("UPDATE campaign_messages SET status = 'skipped', note = 'mauvais contact' WHERE contact_id = ?1 AND step = 2", params![cid]).unwrap();
+    }
+
+    #[test]
+    fn wrong_person_moves_the_card_and_writes_to_the_right_person() {
+        let c = setup();
+        sent_step1(&c, 10);
+        wrong_person_reply(&c, 10, "cecile@cluba.fr", "Écrivez à celia@cluba.fr.\n\nCécile Erhard", "celia@cluba.fr");
+        assert_eq!(hand_over_pending(&c, d("2026-11-05")), 1);
+
+        // The card.
+        let (email, status, notes): (String, String, String) = c
+            .query_row("SELECT email, status, notes FROM contacts WHERE id = 10", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert_eq!(email, "celia@cluba.fr");
+        assert_eq!(status, "contacted");
+        assert!(notes.contains("booking@cluba.fr") && notes.contains("celia@cluba.fr"), "{notes}");
+
+        // The email, addressed by name, with who sent us there, press link kept.
+        let (subject, body, st, press): (String, String, String, String) = c
+            .query_row(
+                "SELECT subject, body, status, press_url FROM campaign_messages WHERE contact_id = 10 AND generated_by = 'handover'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(subject, "Résidence");
+        assert_eq!(st, "scheduled");
+        assert_eq!(press, "https://p/1");
+        assert_eq!(body, "Hello Celia,\n\nCécile m'a conseillé de vous écrire.\n\nMoi c'est Thibault.\n\nÀ bientôt,\nThibault");
+
+        // The autopilot really may send it: the redirect does not stop it, and
+        // the Action is gone.
+        assert_eq!(crate::commands::residency::engine::stop_reason(&c, 1, 10), None);
+        let handled: i64 = c.query_row("SELECT handled FROM reply_insights WHERE email_reply_id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(handled, 1);
+
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-09T09:30:00Z").unwrap().with_timezone(&Utc);
+        let picked = crate::commands::residency::engine::pick_next(&c, now).expect("the handover goes out");
+        assert_eq!(picked.contact_id, 10);
+        assert_eq!(picked.to, "celia@cluba.fr");
+        assert!(picked.body.starts_with("Hello Celia,"));
+
+        // Once only.
+        assert_eq!(hand_over_pending(&c, d("2026-11-05")), 0);
+
+        // The new person's own reply does stop it.
+        c.execute(
+            "INSERT INTO email_replies (id, email_id, contact_id, from_addr, message_id, kind, received_at)
+             VALUES (2, 1, 10, 'celia@cluba.fr', '<b>', 'reply', '2026-11-06 09:00:00')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(crate::commands::residency::engine::stop_reason(&c, 1, 10).as_deref(), Some("réponse reçue"));
+    }
+
+    #[test]
+    fn handover_refuses_what_it_cannot_trust() {
+        let cases: [(&str, &str, Option<&str>); 5] = [
+            // Made up by the classifier: not in the reply.
+            ("Ce n'est pas moi, voyez avec Léa.", "lea@cluba.fr", None),
+            // The sender, or the address already on the card.
+            ("Écrivez à cecile@cluba.fr", "cecile@cluba.fr", None),
+            ("Écrivez à booking@cluba.fr", "booking@cluba.fr", None),
+            // Suppressed.
+            ("Écrivez à gone@cluba.fr", "gone@cluba.fr", Some("INSERT INTO suppressions (address, reason) VALUES ('gone@cluba.fr', 'bounce')")),
+            // Already somebody else's card.
+            ("Écrivez à booking@clubb.co.uk", "booking@clubb.co.uk", None),
+        ];
+        for (text, mentioned, extra) in cases {
+            let c = setup();
+            sent_step1(&c, 10);
+            if let Some(sql) = extra {
+                c.execute(sql, []).unwrap();
+            }
+            wrong_person_reply(&c, 10, "cecile@cluba.fr", text, mentioned);
+            assert_eq!(hand_over_pending(&c, d("2026-11-05")), 0, "{mentioned}");
+            let email: String = c.query_row("SELECT email FROM contacts WHERE id = 10", [], |r| r.get(0)).unwrap();
+            assert_eq!(email, "booking@cluba.fr");
+            let handled: i64 = c.query_row("SELECT handled FROM reply_insights", [], |r| r.get(0)).unwrap();
+            assert_eq!(handled, 0, "stays in Actions");
+        }
+    }
+
+    #[test]
+    fn handover_leaves_a_closed_or_handled_contact_alone() {
+        let c = setup();
+        sent_step1(&c, 10);
+        wrong_person_reply(&c, 10, "c@cluba.fr", "Écrivez à celia@cluba.fr", "celia@cluba.fr");
+        c.execute("UPDATE reply_insights SET handled = 1", []).unwrap();
+        assert_eq!(hand_over_pending(&c, d("2026-11-05")), 0);
+        c.execute("UPDATE reply_insights SET handled = 0", []).unwrap();
+        c.execute("UPDATE contacts SET status = 'confirmed' WHERE id = 10", []).unwrap();
+        assert_eq!(hand_over_pending(&c, d("2026-11-05")), 0);
+        let email: String = c.query_row("SELECT email FROM contacts WHERE id = 10", [], |r| r.get(0)).unwrap();
+        assert_eq!(email, "booking@cluba.fr");
+    }
+
+    #[test]
+    fn names_come_from_the_text_never_from_the_mailbox_alone() {
+        let text = "Écrivez à jdupont@x.fr ou info@x.fr\n\nCécile Erhard\nLa bonne personne est MONTY";
+        assert_eq!(first_name_in("cecile@x.fr", text).as_deref(), Some("Cécile"));
+        assert_eq!(first_name_in("monty.smith@x.fr", text).as_deref(), Some("Monty"));
+        assert_eq!(first_name_in("jdupont@x.fr", text), None);
+        assert_eq!(first_name_in("info@x.fr", "info pour vous, info"), None);
+    }
+
+    #[test]
+    fn handover_body_keeps_the_email_and_speaks_its_language() {
+        assert_eq!(
+            handover_body("Hi,\n\nI'm Thibault.", "en", Some("Monty"), Some("Doug")),
+            "Hi Monty,\n\nDoug suggested I get in touch with you.\n\nI'm Thibault."
+        );
+        assert_eq!(
+            handover_body("Moi c'est Thibault.", "fr", None, None),
+            "Hello,\n\nOn m'a conseillé de vous écrire.\n\nMoi c'est Thibault."
+        );
+    }
+
+    #[test]
+    fn parse_batch_drops_json_leaked_into_a_summary() {
+        let txt = r#"{"items":[{"reply_id":1,"sentiment":"neutral","intent":"wrong_person","summary":"Écrire à Celia.}]}]}","suggested_reply":"","follow_up_on":"","mentioned_email":"","return_date":""}]}"#;
+        assert_eq!(parse_batch(txt, &[1], "m").unwrap()[0].summary, "Écrire à Celia.");
     }
 
     #[test]

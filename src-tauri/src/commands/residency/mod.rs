@@ -170,6 +170,8 @@ pub fn migrate(conn: &Connection) {
         )",
         "CREATE INDEX IF NOT EXISTS idx_residency_expansions_source ON residency_expansions(source_campaign_id, kind)",
         "ALTER TABLE reply_insights ADD COLUMN handled_at TEXT",
+        // Closing JSON the model leaked into the end of a summary.
+        "UPDATE reply_insights SET summary = rtrim(summary, '}]') WHERE summary LIKE '%}' OR summary LIKE '%]'",
     ] {
         let _ = conn.execute(stmt, []);
     }

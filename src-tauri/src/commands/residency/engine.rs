@@ -174,7 +174,8 @@ pub fn j0(conn: &Connection, campaign_id: i64, contact_id: i64) -> Option<DateTi
 }
 
 /// Why the sequence must stop for this contact, if it must. A reply of any
-/// kind stops it (an out-of-office only reschedules); so do a bounce, an
+/// kind stops it (an out-of-office only reschedules, and a redirect to the
+/// address now on the card is no answer from that person); so do a bounce, an
 /// unsubscribe, a refusal, a suppression, or a conversation already open.
 pub fn stop_reason(conn: &Connection, campaign_id: i64, contact_id: i64) -> Option<String> {
     let (email, status): (String, String) = conn
@@ -213,7 +214,9 @@ pub fn stop_reason(conn: &Connection, campaign_id: i64, contact_id: i64) -> Opti
             "SELECT r.kind FROM email_replies r
              WHERE (r.contact_id = ?1 OR lower(trim(r.from_addr)) = ?2)
                AND r.kind IN ('reply','unsubscribe','bounce') AND r.received_at >= ?3
-               AND NOT EXISTS (SELECT 1 FROM reply_insights i WHERE i.email_reply_id = r.id AND i.intent = 'out_of_office')
+               AND NOT EXISTS (SELECT 1 FROM reply_insights i WHERE i.email_reply_id = r.id
+                               AND (i.intent = 'out_of_office'
+                                    OR (i.intent = 'wrong_person' AND lower(trim(i.mentioned_email)) = ?2)))
              ORDER BY r.received_at LIMIT 1",
             params![contact_id, addr, since],
             |r| r.get(0),
