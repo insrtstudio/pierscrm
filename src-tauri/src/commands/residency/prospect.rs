@@ -183,9 +183,9 @@ pub fn strict_cleanup(conn: &Connection, apply: bool) -> Cleanup {
 
 /// A campaign written to collectives (the warm-up / last-minute cover copy).
 pub fn is_collective(name: &str, cfg: &Config) -> bool {
-    let n = name.to_lowercase();
-    let subj = cfg.steps.first().map(|s| s.subject.to_lowercase()).unwrap_or_default();
-    n.contains("collecti") || subj.contains("warm-up")
+    // By name: clubs are pitched warm-ups too, and must not be refilled with collectives.
+    let _ = cfg;
+    name.to_lowercase().contains("collecti")
 }
 
 /// French name of a country, for a campaign title.
@@ -466,7 +466,8 @@ mod tests {
         assert!(!is_collective("Résidence Belgique", &cfg));
         cfg.steps[0].subject = "Warm-up ou dépannage chez {{venue}} ?".into();
         assert!(is_collective("Demande Sur Collectif", &cfg));
-        assert!(is_collective("Autre nom", &cfg));
+        // A club campaign pitching warm-ups is still a club campaign.
+        assert!(!is_collective("Warm-up Belgique", &cfg));
         assert_eq!(country_fr("NL"), "Pays-Bas");
         assert_eq!(country_fr("ZZ"), "ZZ");
     }

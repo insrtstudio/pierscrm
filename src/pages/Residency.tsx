@@ -315,6 +315,7 @@ function PitchTab({ view }: { view: ResidencyView }) {
           <div className="grid grid-cols-2 gap-4">
             <Field label={t("residency.ask")}>
               <select className="input" value={cfg.ask} onChange={(e) => set("ask", e.target.value)}>
+                <option value="warmup">{t("residency.ask_warmup")}</option>
                 <option value="monthly">{t("residency.ask_monthly")}</option>
                 <option value="bimonthly">{t("residency.ask_bimonthly")}</option>
               </select>

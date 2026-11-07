@@ -220,8 +220,8 @@ function mondayOf(day: string) {
   return addDays(day, -((d.getDay() + 6) % 7));
 }
 
-/// "Résidence Paris" reads "Paris" in a list of campaigns.
-const shortName = (n: string) => n.replace(/^Résidence\s+/i, "");
+/// "Warm-up Paris" reads "Paris" in a list of campaigns.
+const shortName = (n: string) => n.replace(/^(Résidence|Warm-up)\s+/i, "");
 
 /// Agenda › Actions: the week, Monday to Sunday. Each day holds what is left
 /// to do (follow-ups due, replies to answer, planned sends, tasks, gigs, visa

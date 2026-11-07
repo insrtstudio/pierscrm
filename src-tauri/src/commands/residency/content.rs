@@ -180,7 +180,7 @@ Happy to open a night, glad to step in when a DJ drops out.
 /// The same rules as a plain string, for prompts built outside this module.
 pub const HOUSE_VOICE: &str = house_voice!();
 
-const DRAFT_SYSTEM: &str = concat!("You write the first email from a DJ/producer to a club, proposing a residency. \
+const DRAFT_SYSTEM: &str = concat!("You write the first email from a DJ/producer to a club, offering to play a warm-up or to step in when a DJ cancels at the last minute. \
 It goes out under the artist's own name to the club's booking or programming team, so it must read like \
 the artist typed it himself: cool, relaxed, direct, humble without sounding like a beginner, never selling.
 
@@ -191,13 +191,12 @@ Hello,
 Moi c'est Thibault, je joue sous le nom de Piers, house et tech house. J'aime bien ce que vous faites à Badaboum, \
 voir passer DJ Seinfeld et Shonky chez vous cette année, ça m'a vraiment parlé.
 
-Je cherche un club à Paris où jouer régulièrement, une date par mois, quelque chose qui s'installe. \
-Et je filme tout pour PIERS FM, donc chaque date chez vous devient un épisode qui tourne aussi en ligne.
+Un warm-up, ça me va carrément, j'adore ouvrir une soirée. Et si un jour un DJ vous lâche à la dernière minute, écrivez-moi, je peux dépanner.
 
 Mon dernier mix (PIERS FM Vol. 4) est juste en dessous.
 https://example.link
 
-Si ça vous parle, on s'appelle cette semaine ?
+Si ça vous parle, je vous envoie mes dispos.
 
 À bientôt,
 Thibault
@@ -208,10 +207,10 @@ Rules:
 - Open with \"Hello,\" (or \"Hello <first name>,\" when a first name is given). The sender is Thibault, who plays as the artist: introduce himself as \"Thibault\" playing as the artist name. Close with \"À bientôt,\" / \"Cheers,\" then \"Thibault\" on its own line (the full signature with phone and website is appended automatically, never write it).
 - One concrete, true detail about this club taken only from the facts provided (artists who played there, its programming), \
 said the way a DJ would say it. Never invent a fact, a name or a number. If no fact is usable, skip it rather than flatter.
-- Mention PIERS FM and that each date becomes an episode. Mention Vol. 4 as the latest mix.
+- Offer exactly two things: a warm-up, and stepping in when a DJ cancels. Never propose a residency or regular dates. Mention Vol. 4 as the latest mix.
 - The press link exactly once, copied verbatim, on its own line.
 - End with one simple, relaxed line (a light question, or offering to send his dates).
-", house_voice!(), "- Subject: under 60 characters, lowercase feel, like \"<club> x <artist>, une idée de résidence\". No clickbait.
+", house_voice!(), "- Subject: under 60 characters, lowercase feel, like \"Warm-up ou dépannage chez <club> ?\". No clickbait.
 - Write in the language requested.
 
 Answer with JSON only: {\"subject\": \"...\", \"body\": \"...\"}.");
@@ -227,7 +226,12 @@ fn draft_schema() -> serde_json::Value {
 
 /// The per-campaign block shared by every draft of the campaign (cached prefix).
 pub fn campaign_block(cfg: &Config, artist: &str) -> String {
-    let mut s = format!("Artist: {}\nAsk: {} residency\n", artist, if cfg.ask == "bimonthly" { "bi-monthly (every two months)" } else { "monthly" });
+    let ask = match cfg.ask.as_str() {
+        "warmup" => "a warm-up slot, or stepping in when a DJ cancels at the last minute",
+        "bimonthly" => "a bi-monthly (every two months) residency",
+        _ => "a monthly residency",
+    };
+    let mut s = format!("Artist: {}\nAsk: {}\n", artist, ask);
     if !cfg.pitch_fr.trim().is_empty() {
         s.push_str(&format!("\nPitch (FR):\n{}\n", cfg.pitch_fr.trim()));
     }
@@ -608,6 +612,22 @@ pub fn create_next_step(
         subject = subj;
         label
     });
+    // A follow-up stays in its conversation, whatever the template says today
+    // (a campaign's pitch can change after the first email went out).
+    if variant.is_none() && subject.to_lowercase().starts_with("re:") {
+        let first: Option<String> = conn
+            .query_row(
+                "SELECT subject FROM campaign_messages WHERE campaign_id = ?1 AND contact_id = ?2 AND step = 1 AND status = 'sent'",
+                params![campaign_id, contact_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten();
+        if let Some(f) = first.filter(|f| !f.trim().is_empty()) {
+            subject = format!("Re: {}", f.trim_start_matches("Re: "));
+        }
+    }
     let missing = unresolved(&format!("{}\n{}", subject, body));
     let (status, note) = if missing.is_empty() {
         ("scheduled", None)
@@ -674,7 +694,7 @@ mod tests {
         let vars = vars_for(&info, &cfg, "Piers", None);
         let (subj, body) = render_step(&cfg, 0, "fr", &vars).unwrap();
         assert!(unresolved(&body).is_empty(), "{}", body);
-        assert!(body.contains("Mix ADE\nhttps://sc.com/mix") && subj.contains("Club A") && body.contains("tous les mois"));
+        assert!(body.contains("Mix ADE\nhttps://sc.com/mix") && subj.contains("Club A") && body.contains("warm-up"));
         let (_, b2) = render_step(&cfg, 1, "en", &vars).unwrap();
         assert!(b2.starts_with("Hey,") && b2.contains("Live\nhttps://yt.com/v"));
         assert!(!b2.contains('—'));

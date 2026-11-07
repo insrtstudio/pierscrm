@@ -31,6 +31,7 @@ pub mod prospect;
 pub mod report;
 pub mod signals;
 pub mod targeting;
+pub mod warmup;
 pub mod zone;
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -257,7 +258,7 @@ pub struct Config {
 }
 
 fn default_ask() -> String {
-    "monthly".into()
+    "warmup".into()
 }
 fn default_daily_max() -> i64 {
     8
@@ -311,22 +312,20 @@ pub fn default_steps() -> Vec<Step> {
     vec![
         Step {
             offset_days: 0,
-            subject: "{{venue}} x {{artist}}, une date par mois ?".into(),
+            subject: "Warm-up ou dépannage chez {{venue}} ?".into(),
             body: "Hello,\n\n\
-                   Moi c'est Thibault, je joue sous le nom de {{artist}}, house et tech house. J'aime bien ce que vous faites à {{venue}}, et ça me plairait vraiment d'y jouer.\n\n\
-                   Je cherche un club à {{city}} où jouer {{rhythm}}, quelque chose qui s'installe. \
-                   Et je filme tout pour PIERS FM, donc chaque date chez vous devient un épisode qui tourne aussi en ligne.\n\n\
+                   Moi c'est Thibault, je joue sous le nom de {{artist}}, house et tech house. J'aime bien ce que vous programmez à {{venue}}, et ça me ferait vraiment plaisir d'y jouer.\n\n\
+                   Un warm-up, ça me va carrément, j'adore ouvrir une soirée. Et si un jour un DJ vous lâche à la dernière minute, écrivez-moi, je peux dépanner.\n\n\
                    Mon dernier mix (PIERS FM Vol. 4) est juste en dessous.\n{{press_link}}\n\n\
-                   Si ça vous parle, on s'appelle cette semaine ?\n\n\
+                   Si ça vous parle, je vous envoie mes dispos.\n\n\
                    À bientôt,\nThibault"
                 .into(),
-            subject_en: "{{venue}} x {{artist}}, a monthly night?".into(),
+            subject_en: "Warm-up or last-minute cover at {{venue}}?".into(),
             body_en: "Hey,\n\n\
-                      I'm Thibault, I play as {{artist}}, house and tech house. Really like what you're doing at {{venue}}, and I'd love to play there.\n\n\
-                      I'm looking for a club in {{city}} to play {{rhythm}}, something that builds over time. \
-                      I film everything for PIERS FM, so every night at yours becomes an episode that also lives online.\n\n\
+                      I'm Thibault, I play as {{artist}}, house and tech house. Really like what you're programming at {{venue}}, and I'd love to play there.\n\n\
+                      Happy to do a warm-up, I actually love opening a night. And if a DJ ever bails on you last minute, just hit me up, I can step in.\n\n\
                       My latest mix (PIERS FM Vol. 4) is just below.\n{{press_link}}\n\n\
-                      If that sounds good, up for a quick call this week?\n\n\
+                      If that sounds good, I'll send over my dates.\n\n\
                       Cheers,\nThibault"
                 .into(),
             extra_asset: None,
@@ -334,17 +333,17 @@ pub fn default_steps() -> Vec<Step> {
         },
         Step {
             offset_days: 5,
-            subject: "Re: {{venue}} x {{artist}}, une date par mois ?".into(),
+            subject: "Re: Warm-up ou dépannage chez {{venue}} ?".into(),
             body: "Hello,\n\n\
-                   Petite relance pour {{venue}}, je sais que vous recevez pas mal de messages.\n\n\
-                   Si ce n'est pas vous qui gérez la prog, vous pourriez me dire à qui écrire ? Ça m'aiderait bien.\n\n\
+                   Petite relance, je sais que vous recevez pas mal de messages.\n\n\
+                   Si ce n'est pas vous qui gérez le booking chez {{venue}}, vous pourriez me dire à qui écrire ? Ça m'aiderait bien.\n\n\
                    Le mix est toujours ici.\n{{press_link}}\n\n\
                    Merci,\nThibault"
                 .into(),
-            subject_en: "Re: {{venue}} x {{artist}}, a monthly night?".into(),
+            subject_en: "Re: Warm-up or last-minute cover at {{venue}}?".into(),
             body_en: "Hey,\n\n\
-                      Quick bump about {{venue}}, I know you get a lot of these.\n\n\
-                      If you're not the one handling bookings, could you point me to the right person? That would help a lot.\n\n\
+                      Quick bump, I know you get a lot of these.\n\n\
+                      If you're not the one handling bookings at {{venue}}, could you point me to the right person? That would help a lot.\n\n\
                       The mix is still up here.\n{{press_link}}\n\n\
                       Thanks,\nThibault"
                 .into(),
@@ -353,17 +352,17 @@ pub fn default_steps() -> Vec<Step> {
         },
         Step {
             offset_days: 12,
-            subject: "Re: {{venue}} x {{artist}}, une date par mois ?".into(),
+            subject: "Re: Warm-up ou dépannage chez {{venue}} ?".into(),
             body: "Hello,\n\n\
                    Dernier message de ma part, promis. Si ce n'est pas le moment pour {{venue}}, aucun souci.\n\n\
-                   Et si ça peut se faire plus tard dans la saison, ce sera avec plaisir.\n\n\
+                   Et si un jour il vous faut quelqu'un pour un warm-up ou pour dépanner, vous savez où me trouver.\n\n\
                    {{press_link}}\n\n\
                    Belle journée,\nThibault"
                 .into(),
-            subject_en: "Re: {{venue}} x {{artist}}, a monthly night?".into(),
+            subject_en: "Re: Warm-up or last-minute cover at {{venue}}?".into(),
             body_en: "Hey,\n\n\
                       Last one from me, promise. If it's not the right time for {{venue}}, no worries at all.\n\n\
-                      And if it could work later in the season, happy to pick it up again.\n\n\
+                      And if you ever need someone for a warm-up or a last-minute cover, you know where to find me.\n\n\
                       {{press_link}}\n\n\
                       Cheers,\nThibault"
                 .into(),
@@ -431,32 +430,26 @@ pub fn refresh_default_templates(conn: &Connection) {
 /// Humble but experienced: never framed as a beginner (validated Nov 2026).
 pub fn default_pitch_fr(city: &str) -> String {
     format!(
-        "Piers (Thibault) joue house et tech house depuis des années et cherche une date régulière, tous les mois \
-         ou tous les deux mois, dans un club de {city} entre 150 et 800 personnes.\n\n\
-         Chaque date est filmée pour PIERS FM, sa série où il montre les morceaux en cours, les edits et les \
-         coulisses. Le club y gagne une soirée qui grandit d'un mois sur l'autre et qui se voit aussi en ligne.\n\n\
-         Il apporte un mix récent (PIERS FM Vol. 4), des vidéos de ses sets et un public qui le suit. Il demande \
-         une date fixe et la possibilité de filmer. Ton humble, jamais débutant, jamais vendeur.",
+        "Piers (Thibault) joue house et tech house depuis des années et cherche à jouer dans un club de {city} \
+         entre 150 et 800 personnes, un warm-up en début de soirée ou un remplacement quand un DJ annule au dernier \
+         moment.\n\n\
+         Il apporte un mix récent (PIERS FM Vol. 4). Ton humble, jamais débutant, jamais vendeur.",
         city = city
     )
 }
 
 pub fn default_pitch_en(city: &str) -> String {
     format!(
-        "Piers (Thibault) has been playing house and tech house for years and is looking for a regular night, \
-         monthly or every two months, at a club in {city} with a 150 to 800 capacity.\n\n\
-         Every night is filmed for PIERS FM, his series showing tracks in progress, edits and what happens \
-         behind the decks. The club gets a night that grows month after month and also lives online.\n\n\
-         He brings a recent mix (PIERS FM Vol. 4), videos of his sets and a following. He asks for a fixed \
-         date and permission to film. Humble tone, never a beginner, never salesy.",
+        "Piers (Thibault) has been playing house and tech house for years and is looking to play a club in {city} \
+         with a 150 to 800 capacity, a warm-up at the start of the night or a cover when a DJ cancels at the last \
+         minute.\n\n\
+         He brings a recent mix (PIERS FM Vol. 4). Humble tone, never a beginner, never salesy.",
         city = city
     )
 }
 
 pub fn default_concept_fr() -> String {
-    "PIERS FM, un épisode par date (avant, pendant, après), publié sur les réseaux de Piers et du club, \
-     plus un mix enregistré à chaque édition."
-        .into()
+    String::new()
 }
 
 // ---------------------------------------------------------------------------

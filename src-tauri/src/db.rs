@@ -820,6 +820,8 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // ---- Promoter types (collectif / club / label / ...) ----
     // vi_promoter_orgs.org_type*, instagram_rejected. See commands/org_type.rs.
     crate::commands::org_type::migrate(conn);
+    // The residency pitch becomes warm-up / last-minute cover, once.
+    crate::commands::residency::warmup::migrate(conn);
 
     Ok(())
 }

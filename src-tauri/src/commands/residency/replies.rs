@@ -217,8 +217,8 @@ pub fn rule_classify(p: &Pending, today: NaiveDate) -> Option<Insight> {
 
 // ---------------- Claude ----------------
 
-const CLASSIFY_SYSTEM: &str = "You read replies that music venues sent to a DJ/producer who proposed a monthly residency \
-at their club. For each reply, return:
+const CLASSIFY_SYSTEM: &str = "You read replies that music venues sent to a DJ/producer who offered to play at their club \
+(a warm-up or a last-minute cover, or earlier a monthly residency). For each reply, return:
 - sentiment: positive, neutral or negative
 - intent: interested (wants to talk / open to it), question (asks something before deciding: fee, dates, \
 references, technical), later (not now, maybe another season or a given month), not_interested (declines), \

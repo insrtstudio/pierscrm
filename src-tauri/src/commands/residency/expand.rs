@@ -339,12 +339,12 @@ fn compute_suggestions(conn: &Connection, source_id: i64) -> Result<Vec<Suggesti
             format!("in {}", list_words(&en_cities, "and", |k| format!("{} more cit{}", k, if k > 1 { "ies" } else { "y" })))
         };
         let name = if is_preset {
-            format!("Résidence {}", fr_name)
+            format!("Warm-up {}", fr_name)
         } else if cities.len() == 1 {
-            format!("Résidence {}", cities[0])
+            format!("Warm-up {}", cities[0])
         } else {
             let head: Vec<String> = cities.iter().take(3).cloned().collect();
-            format!("Résidence {} ({}{})", fr_name, head.join(", "), if cities.len() > 3 { "..." } else { "" })
+            format!("Warm-up {} ({}{})", fr_name, head.join(", "), if cities.len() > 3 { "..." } else { "" })
         };
         out.push(Suggestion {
             key,
@@ -491,7 +491,7 @@ pub fn create(
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .or_else(|| sugg.as_ref().map(|s| s.name.clone()))
-        .unwrap_or_else(|| format!("Résidence {}", zone_words(&zone).0));
+        .unwrap_or_else(|| format!("Warm-up {}", zone_words(&zone).0));
     let (fr, en) = match &sugg {
         Some(s) => s.pitch_words(),
         None => zone_words(&zone),
@@ -501,7 +501,7 @@ pub fn create(
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     tx.execute(
         "INSERT INTO campaigns (name, purpose, artist_id, status, color, kind)
-         SELECT ?2, COALESCE(purpose, 'Résidence mensuelle ou bimestrielle'), artist_id, 'active', COALESCE(color, '#ff5a1f'), 'residency'
+         SELECT ?2, COALESCE(purpose, 'Clubs : warm-up et dépannage'), artist_id, 'active', COALESCE(color, '#ff5a1f'), 'residency'
          FROM campaigns WHERE id = ?1",
         params![source_id, name],
     )
@@ -660,7 +660,7 @@ mod tests {
         assert_eq!(fr.no_email, 1, "Strasbourg Muet has no address");
         assert_eq!(fr.place_fr, "à Lyon, Marseille et Strasbourg");
         assert_eq!(fr.place_en, "in Lyon, Marseille and Strasbourg");
-        assert_eq!(fr.name, "Résidence France (Lyon, Marseille, Strasbourg)");
+        assert_eq!(fr.name, "Warm-up France (Lyon, Marseille, Strasbourg)");
         assert!(!fr.place_fr.contains('—') && !fr.name.contains('—'));
 
         // A third Swiss club: the Switzerland preset joins, after France.
@@ -674,7 +674,7 @@ mod tests {
         let s = suggestions(&c, 1).unwrap();
         assert_eq!(s.iter().map(|x| x.key.as_str()).collect::<Vec<_>>(), vec!["FR:lyon,marseille,strasbourg", "preset:switzerland"]);
         assert_eq!(s[1].place_fr, "en Suisse");
-        assert_eq!(s[1].name, "Résidence Suisse");
+        assert_eq!(s[1].name, "Warm-up Suisse");
         assert_eq!(list_words(&["A".into(), "B".into(), "C".into(), "D".into(), "E".into()], "et", |k| format!("{} autres villes", k)), "A, B, C et 2 autres villes");
 
         // Actions shows the best one for the campaign running dry.
@@ -740,7 +740,7 @@ mod tests {
         let llm = FakeLlm::new(&refs);
         let r = create(&c, 1, zone.clone(), None, Some(&llm), Some(&FakeInsrt)).unwrap();
         assert_eq!((r.targets, r.drafts, r.with_ai), (6, 6, 6), "{:?}", r.errors);
-        assert_eq!(r.name, "Résidence France (Lyon, Marseille, Strasbourg)");
+        assert_eq!(r.name, "Warm-up France (Lyon, Marseille, Strasbourg)");
         let new = load(&c, r.campaign_id).unwrap();
         let src = load(&c, 1).unwrap();
         // Config cloned, zone and pitch adapted, autopilot left off.
