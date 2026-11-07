@@ -364,7 +364,7 @@ export function BulkSend() {
   };
 
   return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,380px)_1fr]">
+    <div className="grid grid-cols-1 gap-5 @lg:grid-cols-[minmax(0,380px)_1fr]">
       {/* Audience */}
       <div className="space-y-4">
         <div className="card p-4">

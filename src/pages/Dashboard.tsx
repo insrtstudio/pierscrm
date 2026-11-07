@@ -143,11 +143,11 @@ export function Dashboard() {
       )}
 
       {/* Stat band */}
-      <div className="grid grid-cols-2 border-b border-border sm:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 border-b border-border @sm:grid-cols-3 @2xl:grid-cols-6">
         {stat.map((s, i) => (
           <div
             key={i}
-            className="border-b border-r border-border px-6 py-6 last:border-r-0 xl:border-b-0"
+            className="border-b border-r border-border px-6 py-6 last:border-r-0 @2xl:border-b-0"
           >
             <div className="eyebrow">
               {s.label}
@@ -164,9 +164,9 @@ export function Dashboard() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] 2xl:grid-cols-[1fr_460px]">
+      <div className="grid grid-cols-1 @lg:grid-cols-[1fr_360px] @2xl:grid-cols-[1fr_460px]">
         {/* Left: pipeline + upcoming */}
-        <div className="border-b border-border p-8 lg:border-b-0 lg:border-r">
+        <div className="border-b border-border p-8 @lg:border-b-0 @lg:border-r">
           <div className="mb-5 flex items-baseline justify-between">
             <div className="kicker">{t("dashboard.by_status")}</div>
             <Link to="/contacts" className="kicker hover:text-accent">

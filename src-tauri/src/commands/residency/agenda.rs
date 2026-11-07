@@ -18,7 +18,7 @@ use crate::AppState;
 #[derive(Serialize, Debug, Clone)]
 pub struct DoneItem {
     pub key: String,
-    /// first_emails | followups | emails | reply | auto_reply | dismissed |
+    /// first_emails | followups | emails | reply | auto_reply | dismissed | done_elsewhere |
     /// handled | expand_later | campaign | thanks | rebook | routing |
     /// offer_sent | offer_accepted | paid | dm
     pub kind: String,
@@ -314,6 +314,29 @@ pub fn done(conn: &Connection, start: &str, end: &str) -> Result<Vec<DoneItem>, 
         x.name = Some(name);
         x.campaign_id = camp;
         x.campaign = camp_name;
+        x.at = Some(at);
+        out.push(x);
+    }
+
+    // Closed by hand from the page, for a contact with nothing above to say it.
+    let day = local_day("k.actions_done_at");
+    let mut st = conn
+        .prepare(&format!(
+            "SELECT k.id, {day}, k.actions_done_at, k.name FROM contacts k
+             WHERE k.actions_done_at IS NOT NULL AND {day} BETWEEN ?1 AND ?2
+               AND NOT EXISTS (SELECT 1 FROM reply_insights i WHERE i.contact_id = k.id AND i.handled_at >= k.actions_done_at)
+               AND NOT EXISTS (SELECT 1 FROM reply_desk d WHERE d.contact_id = k.id AND d.state = 'ignored' AND d.updated_at >= k.actions_done_at)"
+        ))
+        .map_err(err)?;
+    let rows: Vec<(i64, String, String, String)> = st
+        .query_map(params![start, end], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .map_err(err)?
+        .flatten()
+        .collect();
+    for (id, d, at, name) in rows {
+        let mut x = DoneItem::new(format!("cd{}", id), "done_elsewhere", d);
+        x.contact_id = Some(id);
+        x.name = Some(name);
         x.at = Some(at);
         out.push(x);
     }

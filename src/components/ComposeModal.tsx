@@ -185,6 +185,7 @@ export function invalidateAfterSend(qc: QueryClient) {
     "suppressions",
     "campaigns",
     "followups",
+    "open_replies",
     "contacts",
     "dashboard",
     "kpis",
@@ -206,6 +207,7 @@ export function ComposeModal({
   initialCampaignId,
   initialTo,
   initialAttachments,
+  inThread,
   onSent,
 }: {
   open: boolean;
@@ -221,6 +223,8 @@ export function ComposeModal({
   /// Documents PiersCRM generated (offers: contract, rider, invoices). The
   /// backend refuses any other file.
   initialAttachments?: { path: string; file_name: string }[];
+  /// An answer: sent inside the contact's conversation.
+  inThread?: boolean;
   onSent?: () => void;
 }) {
   const { t } = useTranslation();
@@ -309,6 +313,7 @@ export function ComposeModal({
         subject: renderedSubject,
         body: renderedBody,
         attachments: attachments.map((a) => a.path),
+        in_thread: inThread,
       });
       if (res.ok) {
         toast(t("emails.sent_ok"), "ok");

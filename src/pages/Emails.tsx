@@ -1350,7 +1350,7 @@ function LogTab() {
 export function GuardrailsTab() {
   const { t } = useTranslation();
   return (
-    <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,420px)_1fr]">
+    <div className="grid grid-cols-1 gap-5 @xl:grid-cols-[minmax(0,420px)_1fr]">
       <div className="space-y-5">
         <div className="card space-y-2 p-5">
           <SectionTitle>{t("emails.quota_title")}</SectionTitle>

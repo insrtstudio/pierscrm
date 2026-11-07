@@ -73,7 +73,7 @@ export function Contacts() {
   const [artist, setArtist] = useState(() => params.get("artist") || "all");
   const [sort, setSort] = useState(() => params.get("sort") || "priority");
   const [org, setOrg] = useState(() => params.get("org") || "all");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => params.get("q") || "");
   useEffect(() => {
     const next: Record<string, string> = {};
     if (category !== "all") next.category = category;
@@ -1024,7 +1024,7 @@ function ContactHistory({ contactId }: { contactId: number }) {
       {emails.length === 0 && linked.length === 0 ? (
         <p className="text-xs text-fg-subtle">{t("contacts.history_empty")}</p>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 @md:grid-cols-2">
           <div>
             <div className="mb-1 text-2xs uppercase tracking-wide text-fg-subtle">
               {t("contacts.history_emails")} ({emails.length})

@@ -106,19 +106,19 @@ export function ServicesTable() {
               : Math.round(credit.remaining).toLocaleString("fr-FR")
             : null;
         return (
-          <div key={row.id} className="grid items-center gap-x-5 gap-y-2 px-5 py-3.5 lg:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto]">
+          <div key={row.id} className="grid items-center gap-x-5 gap-y-2 px-5 py-3.5 @lg:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto]">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-sm font-semibold">
                 <KeyRound size={14} className="text-fg-subtle" /> {t(`services.${row.id}.name`)}
               </div>
               <div className="text-2xs text-fg-subtle">{t(`services.${row.id}.purpose`)}</div>
             </div>
-            <div className={clsx("grid gap-2", row.fields.length > 1 && "sm:grid-cols-2 xl:grid-cols-3")}>
+            <div className={clsx("grid gap-2", row.fields.length > 1 && "@sm:grid-cols-2 @xl:grid-cols-3")}>
               {row.fields.map((f) => (
                 <AutoField key={f.key} field={f} initial={values[f.key] ?? ""} label={f.label ? t(`services.field.${f.label}`) : undefined} />
               ))}
             </div>
-            <div className="flex items-center gap-3 lg:justify-end">
+            <div className="flex items-center gap-3 @lg:justify-end">
               <span className={clsx("whitespace-nowrap rounded-full px-2 py-0.5 text-2xs font-medium", tone[status] ?? tone.unknown)}>
                 {t(`services.status.${status}`)}
                 {balance && status !== "missing" ? ` · ${balance}` : ""}

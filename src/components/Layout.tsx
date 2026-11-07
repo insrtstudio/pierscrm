@@ -335,7 +335,7 @@ export function Layout() {
         <TopBar />
         <UpdateBanner />
         <DeliverabilityBanner />
-        <div className="flex-1 overflow-y-auto">
+        <div className="page-scroll flex-1 overflow-y-auto">
           <Outlet />
         </div>
         <RunDock />
@@ -372,11 +372,11 @@ export function PageHeader({
       <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
         <div className="min-w-0">
           {kicker && <div className="kicker mb-1.5">{kicker}</div>}
-          <h1 className="font-display text-[26px] leading-none xl:text-[28px]">{title}</h1>
+          <h1 className="font-display text-[26px] leading-none @xl:text-[28px]">{title}</h1>
         </div>
         {children}
         <div className="flex-1" />
-        {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
+        {actions && <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">{actions}</div>}
       </div>
       {subtitle && <p className="mt-2.5 max-w-3xl text-[13px] text-fg-subtle">{subtitle}</p>}
     </div>

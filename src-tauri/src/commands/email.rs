@@ -578,6 +578,12 @@ pub struct SendResult {
     pub code: Option<String>,
 }
 
+/// "Re: ...", not "Rex Club x Piers".
+fn is_answer_subject(subject: &str) -> bool {
+    let s = subject.trim().to_lowercase();
+    s.starts_with("re:") || s.starts_with("re :")
+}
+
 #[tauri::command(async)]
 pub fn send_email(
     app: AppHandle,
@@ -588,6 +594,7 @@ pub fn send_email(
     subject: String,
     body: String,
     attachments: Option<Vec<String>>,
+    in_thread: Option<bool>,
 ) -> Result<SendResult, String> {
     // Only documents PiersCRM generated (app data dir) can be attached.
     let files = attachments
@@ -595,7 +602,16 @@ pub fn send_email(
         .iter()
         .map(|p| super::offers::docs::load_attachment(&app, p))
         .collect::<Result<Vec<_>, _>>()?;
-    send_one_with(&state.pool, contact_id, campaign_id, &to, &subject, &body, &files).map(|(r, _)| r)
+    // An answer written from Aujourd'hui lands in the conversation, as long as
+    // the subject still says it is one.
+    let thread = match (in_thread.unwrap_or(false), contact_id) {
+        (true, Some(cid)) if is_answer_subject(&subject) => {
+            let conn = state.pool.get().map_err(|e| e.to_string())?;
+            super::actions::thread_of(&conn, cid)
+        }
+        _ => None,
+    };
+    send_one_full(&state.pool, contact_id, campaign_id, &to, &subject, &body, thread.as_ref(), &files).map(|(r, _)| r)
 }
 
 /// One email through every guardrail (suppression list, daily cap), with our
@@ -625,19 +641,6 @@ pub(crate) fn send_one_in_thread(
     thread: Option<&ThreadRef>,
 ) -> Result<(SendResult, Option<i64>), String> {
     send_one_full(pool, contact_id, campaign_id, to, subject, body, thread, &[])
-}
-
-/// `send_one` with file attachments (name, bytes).
-pub(crate) fn send_one_with(
-    pool: &crate::db::DbPool,
-    contact_id: Option<i64>,
-    campaign_id: Option<i64>,
-    to: &str,
-    subject: &str,
-    body: &str,
-    attachments: &[(String, Vec<u8>)],
-) -> Result<(SendResult, Option<i64>), String> {
-    send_one_full(pool, contact_id, campaign_id, to, subject, body, None, attachments)
 }
 
 #[allow(clippy::too_many_arguments)]

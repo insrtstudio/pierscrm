@@ -32,6 +32,7 @@ import {
   Send,
   Target,
   Undo2,
+  X,
   type LucideIcon,
   Instagram,
 } from "lucide-react";
@@ -39,10 +40,14 @@ import {
   getContact,
   listCampaigns,
   listDossiers,
-  listEmailsPage,
+  actionDone,
+  actionDraft,
+  actionFollowupDone,
+  dismissFollowup,
   listEvents,
   listEventVisas,
   listFollowups,
+  listOpenReplies,
   listTasks,
   saveTask,
 } from "../lib/api";
@@ -62,6 +67,7 @@ import {
   type ResidencyAction,
 } from "../lib/residency";
 import { IntentBadge } from "./Residency";
+import { deskIgnore } from "../lib/replyDesk";
 import { followupDone, followupDraft, gigFollowups, tourActions, type FollowupKind } from "../lib/routing";
 import { TourRoutingModal } from "../components/TourRouting";
 import { DraftCompose } from "../components/Offers";
@@ -72,14 +78,13 @@ import {
   money,
   offerEmailDraft,
   setAdvancingItem,
+  setOfferPayment,
   type EmailDraft,
 } from "../lib/offers";
 
 /// How far ahead "soon" reaches for things placed on today (visa dossiers,
 /// advancing): further out, nothing is actionable yet.
 const HORIZON_DAYS = 14;
-/// Replies older than this are assumed handled.
-const REPLY_DAYS = 10;
 /// Dots drawn in a day header, at most.
 const MAX_DOTS = 10;
 
@@ -109,12 +114,14 @@ type Action = {
   kind: Kind;
   title: string;
   detail?: string;
-  cta?: { label: string; run: () => void };
+  cta?: { label: string; run: () => void; busy?: boolean };
   /// Reply classification (residency agent).
   intent?: string | null;
   dismiss?: () => void;
-  /// Tooltip of the dismiss button ("Traité" by default).
+  /// Label of the dismiss button ("Fait" by default).
   dismissLabel?: string;
+  /// A second way out: this one is over for good ("Ne plus relancer").
+  cancel?: { label: string; run: () => void };
 };
 
 /// An action on its column: late ones sit on today, with their own date.
@@ -131,6 +138,8 @@ type ComposeState = {
   body?: string;
   campaignId?: number | null;
   insightId?: number | null;
+  /// An answer: sent inside the contact's conversation.
+  inThread?: boolean;
   /// Thank-you / rebook draft: marked handled once sent (routing.rs).
   gigFollowup?: { eventId: number; kind: FollowupKind };
 };
@@ -173,6 +182,7 @@ const DONE_ICON: Record<Done["kind"], LucideIcon> = {
   paid: Banknote,
   gig: Disc3,
   dm: Instagram,
+  done_elsewhere: CheckCheck,
 };
 
 /// Someone is waiting on these: the icon takes the accent.
@@ -232,17 +242,13 @@ export function Actions() {
   const [weekStart, setWeekStart] = useState(() => mondayOf(todayDay()));
   const weekEnd = addDays(weekStart, 6);
   const horizon = toDay(new Date(Date.now() + HORIZON_DAYS * 86_400_000));
-  const replySince = toDay(new Date(Date.now() - REPLY_DAYS * 86_400_000));
   // Client lists cover today's horizon and the visible week.
   const rangeFrom = weekStart < today ? weekStart : today;
   const rangeTo = weekEnd > horizon ? weekEnd : horizon;
   const isThisWeek = today >= weekStart && today <= weekEnd;
 
   const { data: followups = [] } = useQuery({ queryKey: ["followups"], queryFn: listFollowups });
-  const { data: replies } = useQuery({
-    queryKey: ["emails", "page", "actions-replies"],
-    queryFn: () => listEmailsPage({ replied: true, limit: 50 }),
-  });
+  const { data: replies = [] } = useQuery({ queryKey: ["open_replies"], queryFn: listOpenReplies, refetchInterval: 120_000 });
   const { data: campaigns = [] } = useQuery({ queryKey: ["campaigns"], queryFn: listCampaigns });
   const { data: tasks = [] } = useQuery({ queryKey: ["tasks"], queryFn: listTasks });
   const { data: events = [] } = useQuery({
@@ -271,7 +277,22 @@ export function Actions() {
   // Chaining dates and bringing clubs back (commands/routing.rs).
   const { data: gigFollow = [] } = useQuery({ queryKey: ["routing_followups"], queryFn: gigFollowups });
   const { data: tours = [] } = useQuery({ queryKey: ["routing_tours"], queryFn: tourActions });
-  const refreshWeek = () => qc.invalidateQueries({ queryKey: ["residency_actions"] });
+  const refreshWeek = () => {
+    qc.invalidateQueries({ queryKey: ["residency_actions"] });
+    qc.invalidateQueries({ queryKey: ["open_replies"] });
+  };
+  // Handled outside the CRM: the line goes, here and wherever it also shows.
+  const closeLine = useMutation({
+    mutationFn: (run: () => Promise<unknown>) => run(),
+    onSuccess: () => {
+      refreshWeek();
+      for (const key of ["followups", "reply_desk", "reply_desk_count", "offer_payments", "advancing", "dashboard"])
+        qc.invalidateQueries({ queryKey: [key] });
+      toast(t("actions.line_done"), "ok");
+    },
+    onError: (e) => toast(errorMessage(e), "error"),
+  });
+  const close = (run: () => Promise<unknown>) => () => closeLine.mutate(run);
   const gigDone = useMutation({
     mutationFn: ({ eventId, kind }: { eventId: number; kind: FollowupKind | "routing" }) => followupDone(eventId, kind),
     onSuccess: () => {
@@ -332,6 +353,32 @@ export function Actions() {
     if (c) setCompose({ contact: c, ...prefill });
   };
 
+  // "Répondre" / "Relancer" open on a written draft, for review. A reply drafts
+  // in the second or so a click takes: the button says so meanwhile.
+  const [drafting, setDrafting] = useState<string | null>(null);
+  const composeDrafted = async (key: string, contactId: number, kind: "reply" | "followup", prefill?: Omit<ComposeState, "contact">) => {
+    if (drafting) return;
+    setDrafting(key);
+    try {
+      const c = await getContact(contactId);
+      if (!c) return;
+      try {
+        const d = await actionDraft(contactId, kind);
+        setCompose({ ...prefill, contact: c, subject: d.subject, body: d.body, inThread: true });
+      } catch (e) {
+        toast(errorMessage(e), "error");
+        setCompose({ ...prefill, contact: c });
+      }
+    } finally {
+      setDrafting(null);
+    }
+  };
+  const draftCta = (key: string, label: string, contactId: number, kind: "reply" | "followup", prefill?: Omit<ComposeState, "contact">) => ({
+    label: drafting === key ? t("actions.drafting") : label,
+    busy: drafting === key,
+    run: () => composeDrafted(key, contactId, kind, prefill),
+  });
+
   const openDraft = async (load: () => Promise<EmailDraft>, eventId?: number) => {
     try {
       setDraft({ d: await load(), eventId });
@@ -352,20 +399,28 @@ export function Actions() {
   const fromAgent = (a: ResidencyAction): Action | null => {
     const day = a.day.slice(0, 10);
     const camp = a.campaign_id;
-    const reply = (label: string) =>
-      a.contact_id
+    const reply = (label: string, kind: "reply" | "followup" = "reply") => {
+      if (!a.contact_id) return undefined;
+      const prefill = { campaignId: camp, insightId: a.insight_id };
+      // The agent's suggestion when it wrote one, else a draft on the click.
+      return a.suggested_body
         ? {
             label,
             run: () =>
               openCompose(a.contact_id!, {
+                ...prefill,
                 subject: a.suggested_subject ?? undefined,
                 body: a.suggested_body ?? undefined,
-                campaignId: camp,
-                insightId: a.insight_id,
+                inThread: true,
               }),
           }
+        : draftCta(a.key, label, a.contact_id, kind, prefill);
+    };
+    const dismiss = a.insight_id
+      ? () => handled.mutate(a.insight_id!)
+      : a.contact_id
+        ? close(() => actionDone(a.contact_id!))
         : undefined;
-    const dismiss = a.insight_id ? () => handled.mutate(a.insight_id!) : undefined;
     switch (a.kind) {
       case "plan": {
         const next = utcDate(a.next_at);
@@ -410,6 +465,7 @@ export function Actions() {
           title: t("actions.snoozed", { name: a.name }),
           detail: a.suggested_subject ?? undefined,
           cta: { label: t("actions.agent_cta"), run: () => navigate(`/replies?item=${a.desk_id}`) },
+          dismiss: a.desk_id ? close(() => deskIgnore(a.desk_id!)) : undefined,
         };
       case "reply":
       case "unread":
@@ -442,7 +498,7 @@ export function Actions() {
           title: t("actions.agent_wrong", { name: a.name }),
           detail: a.mentioned_email ? t("actions.agent_wrong_hint", { email: a.mentioned_email }) : a.summary ?? undefined,
           intent: "wrong_person",
-          cta: a.contact_id ? { label: t("actions.agent_wrong_cta"), run: () => navigate("/contacts") } : undefined,
+          cta: a.contact_id ? { label: t("actions.agent_wrong_cta"), run: () => navigate(`/contacts?q=${encodeURIComponent(a.name)}`) } : undefined,
           dismiss,
         };
       case "expand": {
@@ -499,7 +555,8 @@ export function Actions() {
                   min: Math.max(1, Math.round((a.seconds ?? 0) / 60)),
                 }),
           detail: a.summary ?? undefined,
-          cta: reply(t("actions.agent_hot_cta")),
+          cta: reply(t("actions.agent_hot_cta"), "followup"),
+          dismiss,
         };
     }
     return null;
@@ -521,23 +578,25 @@ export function Actions() {
           f.email_count > 0
             ? t("actions.followup_detail", { count: f.email_count, days: f.days_since })
             : t("actions.followup_manual", { date: formatDate(f.due) }),
-        cta: { label: t("actions.followup_cta"), run: () => openCompose(f.contact_id) },
+        cta: draftCta(`f${f.contact_id}`, t("actions.followup_cta"), f.contact_id, "followup"),
+        dismiss: close(() => actionFollowupDone(f.contact_id)),
+        cancel: { label: t("actions.followup_stop"), run: close(() => dismissFollowup(f.contact_id)) },
       });
     }
 
     const agentReplied = new Set(week?.reply_contacts ?? []);
-    for (const e of replies?.rows ?? []) {
-      const day = clampDay(e.replied_at);
-      if (day < replySince || !e.contact_id) continue;
+    for (const r of replies) {
       // The residency agent already lists (and classified) this reply.
-      if (agentReplied.has(e.contact_id)) continue;
+      if (agentReplied.has(r.contact_id)) continue;
+      const key = `r${r.reply_id}`;
       out.push({
-        key: `r${e.id}`,
-        day,
+        key,
+        day: clampDay(r.received_at),
         kind: "reply",
-        title: t("actions.reply", { to: e.to_addr }),
-        detail: e.subject,
-        cta: { label: t("actions.reply_cta"), run: () => openCompose(e.contact_id!) },
+        title: t("actions.reply", { to: r.name }),
+        detail: r.subject,
+        cta: draftCta(key, t("actions.reply_cta"), r.contact_id, "reply"),
+        dismiss: close(() => actionDone(r.contact_id)),
       });
     }
 
@@ -648,6 +707,8 @@ export function Actions() {
           label: t("offers.action_invoice_cta"),
           run: () => openDraft(() => offerEmailDraft(p.offer_id, p.part === "deposit" ? "invoice_deposit" : "invoice_balance")),
         },
+        dismiss: close(() => setOfferPayment(p.offer_id, p.part, today)),
+        dismissLabel: t("actions.mark_paid"),
       });
     }
 
@@ -661,6 +722,7 @@ export function Actions() {
           title: t("offers.action_adv_email", { title: g.title }),
           detail: [g.venue, g.city, formatDate(g.date)].filter(Boolean).join(" · "),
           cta: { label: t("offers.action_adv_email_cta"), run: () => openDraft(() => advancingEmailDraft(g.event_id), g.event_id) },
+          dismiss: close(() => setAdvancingItem(g.event_id, "email", "done")),
         });
       }
       const due = g.items.filter((i) => !i.state && i.due <= rangeTo);
@@ -673,6 +735,7 @@ export function Actions() {
           title: t("offers.action_adv_items", { title: g.title, count: due.length }),
           detail: due.map((i) => t(`offers.adv_${i.key}`)).join(", "),
           cta: { label: t("actions.gig_cta"), run: () => navigate("/agenda") },
+          dismiss: close(() => Promise.all(due.map((i) => setAdvancingItem(g.event_id, i.key, "done")))),
         });
       }
     }
@@ -693,7 +756,7 @@ export function Actions() {
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [followups, replies, campaigns, tasks, events, visas, dossiers, payments, advancing, quota, week, gigFollow, tours, today, horizon, rangeTo, lang]);
+  }, [followups, replies, campaigns, tasks, events, visas, dossiers, payments, advancing, quota, week, gigFollow, tours, today, horizon, rangeTo, lang, drafting]);
 
   const doneLine = (d: DoneItem): Done => {
     const who = d.name ?? "";
@@ -757,7 +820,7 @@ export function Actions() {
       );
     return cols;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientActions, week, events, weekStart, today, isThisWeek, lang, expandCreate.isPending]);
+  }, [clientActions, week, events, weekStart, today, isThisWeek, lang, expandCreate.isPending, drafting]);
 
   const totals = useMemo(
     () => ({
@@ -778,11 +841,11 @@ export function Actions() {
     <div className="px-page pb-10 pt-6">
       {/* Week header: range, tally, navigation */}
       <div className="mb-5 flex flex-wrap items-end gap-x-6 gap-y-3">
-        <div>
+        <div className="min-w-0">
           <div className="kicker">{isThisWeek ? t("actions.this_week") : t("actions.week")}</div>
-          <div className="font-condensed text-[34px] leading-none tracking-tight">{weekLabel}</div>
+          <div className="font-condensed text-[28px] leading-none tracking-tight @md:text-[34px]">{weekLabel}</div>
         </div>
-        <div className="flex flex-wrap items-center gap-2 pb-1 text-2xs">
+        <div className="order-last flex w-full flex-wrap items-center gap-2 text-2xs @2xl:order-none @2xl:w-auto @2xl:pb-1">
           <span className="badge bg-ok/10 text-ok">
             <Check size={11} />
             {t("actions.done_count", { count: totals.done })}
@@ -811,9 +874,10 @@ export function Actions() {
           <EmptyState icon={CalendarCheck} title={t("actions.empty")} hint={t("actions.empty_hint")} />
         </div>
       ) : (
-        // Seven columns on a wide window (scrolling sideways rather than
-        // squeezing a card under ~160px), one day under the other below.
-        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[repeat(7,minmax(160px,1fr))] xl:gap-2 xl:overflow-x-auto xl:pb-2">
+        // The seven days side by side when the page has room for them. Below,
+        // today comes first across the whole width, then what is coming, then
+        // what is past: nothing is ever cut off to the right.
+        <div className="grid items-start gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,230px),1fr))] @week:items-stretch @week:gap-2 @week:[grid-template-columns:repeat(7,minmax(0,1fr))]">
           {days.map((d) => {
             const isToday = d.day === today;
             const past = d.day < today;
@@ -822,12 +886,14 @@ export function Actions() {
               <section
                 key={d.day}
                 className={clsx(
-                  "flex min-w-0 flex-col rounded-md border p-2 xl:min-h-[420px]",
+                  "flex min-w-0 flex-col rounded-md border p-2 @week:order-none @week:col-auto @week:min-h-[420px]",
                   isToday ? "border-accent bg-accent-soft/30 shadow-soft" : "border-border bg-surface",
-                  past && !isToday && "bg-surface/60"
+                  isToday && isThisWeek && "order-first col-span-full",
+                  past && !isToday && "bg-surface/60",
+                  past && isThisWeek && "order-last"
                 )}
               >
-                <header className="mb-2 flex items-start justify-between gap-2 px-1">
+                <header className="mb-2 flex flex-wrap items-start justify-between gap-x-2 gap-y-1 px-1">
                   <div className="flex items-baseline gap-1.5">
                     <span className={clsx("font-condensed text-[26px] leading-none tabular", isToday ? "text-accent" : past ? "text-fg-faint" : "text-fg")}>
                       {parseDay(d.day)!.getDate()}
@@ -837,7 +903,7 @@ export function Actions() {
                     </span>
                   </div>
                   {dots > 0 && (
-                    <div className="pt-1 text-right">
+                    <div className="ml-auto pt-1 text-right">
                       <div className="flex flex-wrap justify-end gap-[3px]" aria-hidden>
                         {d.done.slice(0, MAX_DOTS).map((x) => (
                           <span key={x.key} className="h-1.5 w-1.5 rounded-full bg-ok" />
@@ -860,7 +926,12 @@ export function Actions() {
                   <div className="px-1 py-3 text-2xs text-fg-faint">{past ? t("actions.nothing_done") : t("actions.nothing_planned")}</div>
                 )}
 
-                <ul className="flex flex-col gap-1.5">
+                <ul
+                  className={clsx(
+                    "flex flex-col gap-1.5",
+                    isToday && isThisWeek && "@sm:grid @sm:items-start @sm:[grid-template-columns:repeat(auto-fill,minmax(260px,1fr))] @week:flex @week:items-stretch"
+                  )}
+                >
                   {d.todo.map((a) => (
                     <ActionCard
                       key={a.key}
@@ -917,6 +988,7 @@ export function Actions() {
           initialSubject={compose.subject}
           initialBody={compose.body}
           initialCampaignId={compose.campaignId}
+          inThread={compose.inThread}
           onSent={() => {
             refreshWeek();
             if (compose.insightId) handled.mutate(compose.insightId);
@@ -969,7 +1041,7 @@ function ActionCard({
       </button>
       {(open || lateLabel) && (
         <div className="flex flex-wrap items-center gap-1.5 px-2 pb-1">
-          {lateLabel && <span className="badge bg-danger/10 text-danger">{t("actions.late_since", { date: lateLabel })}</span>}
+          {lateLabel && <span className="badge max-w-full bg-danger/10 text-danger">{t("actions.late_since", { date: lateLabel })}</span>}
           {open &&
             a.intent &&
             (a.intent === "unread" ? (
@@ -979,15 +1051,25 @@ function ActionCard({
             ))}
         </div>
       )}
-      {(a.cta || a.dismiss) && (
-        <div className="flex items-center justify-end gap-1 px-1.5 pb-1.5">
+      {(a.cta || a.dismiss || a.cancel) && (
+        <div className="flex flex-wrap items-center justify-end gap-1 px-1.5 pb-1.5">
+          {a.cancel && (
+            <button className="btn-icon h-7 w-7" onClick={a.cancel.run} title={a.cancel.label} aria-label={a.cancel.label}>
+              <X size={13} />
+            </button>
+          )}
           {a.dismiss && (
-            <button className="btn-icon h-7 w-7" onClick={a.dismiss} title={a.dismissLabel ?? t("actions.agent_done")} aria-label={a.dismissLabel ?? t("actions.agent_done")}>
-              <Check size={13} />
+            <button className="btn-ghost h-7 gap-1 px-2 text-[10px]" onClick={a.dismiss} title={a.dismissLabel ?? t("actions.agent_done")}>
+              <Check size={12} />
+              {a.dismissLabel ?? t("actions.agent_done")}
             </button>
           )}
           {a.cta && (
-            <button className="btn-outline h-auto min-h-7 whitespace-normal px-3 py-1 text-center text-[10px] leading-tight" onClick={a.cta.run}>
+            <button
+              className="btn-outline h-auto min-h-7 whitespace-normal px-3 py-1 text-center text-[10px] leading-tight"
+              onClick={a.cta.run}
+              disabled={a.cta.busy}
+            >
               {a.kind === "task" && <Check size={12} />}
               {a.cta.label}
             </button>

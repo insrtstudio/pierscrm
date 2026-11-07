@@ -113,7 +113,7 @@ export function Budget() {
       />
       <div className="space-y-6 px-page pb-10 pt-6">
         {/* Summary */}
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 @lg:grid-cols-4">
           <Summary
             icon={TrendingDown}
             label={t("budget.total_expense")}

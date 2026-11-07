@@ -788,6 +788,8 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // reply_desk: replies awaiting Thibault and stalled threads, with their
     // drafts. Additive, see commands/reply_desk.rs.
     crate::commands::reply_desk::migrate(conn);
+    // contacts.actions_done_at: handled outside the CRM. See commands/actions.rs.
+    crate::commands::actions::migrate(conn);
     // ---- Deliverability (sending budget, sender health) ----
     // emails.from_addr: the sending address of each email. Additive, see
     // commands/deliverability/mod.rs.

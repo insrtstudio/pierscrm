@@ -346,6 +346,7 @@ pub fn hot_signals(conn: &Connection, campaign_id: Option<i64>) -> Vec<HotSignal
                            AND (r.contact_id = p.contact_id OR lower(trim(r.from_addr)) = lower(trim(k.email)))
                            AND r.received_at >= datetime('now', '-60 days'))
            AND k.status NOT IN ('declined','confirmed')
+           AND datetime(p.at) > COALESCE(k.actions_done_at, '')
          ORDER BY p.type = 'feedback' DESC, p.seconds DESC, p.at DESC",
     ) else {
         return Vec::new();

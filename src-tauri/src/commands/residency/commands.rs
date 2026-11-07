@@ -900,6 +900,7 @@ pub fn actions(conn: &Connection) -> Result<Vec<ActionItem>, String> {
              JOIN contacts k ON k.id = m.contact_id
              WHERE r.kind = 'reply' AND NOT EXISTS (SELECT 1 FROM reply_insights i WHERE i.email_reply_id = r.id)
                AND r.received_at >= datetime('now', '-14 days')
+               AND r.received_at > COALESCE(k.actions_done_at, '')
              GROUP BY r.id",
         )
         .map_err(|e| e.to_string())?;

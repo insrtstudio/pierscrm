@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod artists;
 pub mod campaigns;
 pub mod contacts;

@@ -568,7 +568,7 @@ function CountriesTab() {
   });
 
   return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[240px_1fr]">
+    <div className="grid grid-cols-1 gap-5 @lg:grid-cols-[240px_1fr]">
       {/* Country list */}
       <div className="card h-fit overflow-hidden">
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
@@ -637,7 +637,7 @@ function CountriesTab() {
 
           <div className="mt-5 space-y-5">
             <CountryField label={t("visa.work_rules")} value={current.work_rules} />
-            <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-5 @md:grid-cols-2">
               <CountryField label={t("visa.visa_types")} value={current.visa_types} />
               <CountryField
                 label={t("visa.processing_time")}

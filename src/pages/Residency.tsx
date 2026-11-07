@@ -299,7 +299,7 @@ function PitchTab({ view }: { view: ResidencyView }) {
   const setAsset = (i: number, k: string, v: string) =>
     set("assets", cfg.assets.map((a, j) => (j === i ? { ...a, [k]: v } : a)));
   return (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+    <div className="grid gap-6 @xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
       <div className="space-y-5">
         <div className="card space-y-4 p-5">
           <div className="eyebrow text-fg">{t("residency.pitch")}</div>
@@ -396,7 +396,7 @@ function PitchTab({ view }: { view: ResidencyView }) {
           ))}
         </div>
       </div>
-      <div className="xl:col-span-2">
+      <div className="@xl:col-span-2">
         <SaveBar dirty={dirty} busy={save.isPending} onSave={() => save.mutate()} />
       </div>
     </div>
@@ -869,7 +869,7 @@ function SequenceTab({ view }: { view: ResidencyView }) {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className="grid gap-6 @xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="space-y-4">
           {cfg.steps.map((s, i) => (
             <div key={i} className="card space-y-3 p-5">
@@ -1245,7 +1245,7 @@ function ReportsTab({ view }: { view: ResidencyView }) {
     </div>
   );
   return (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+    <div className="grid gap-6 @xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
       <div className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
           <select className="input w-56" value={r?.day ?? ""} onChange={(e) => setDay(e.target.value)}>
@@ -1269,7 +1269,7 @@ function ReportsTab({ view }: { view: ResidencyView }) {
             {r.synthesis && (
               <div className="card whitespace-pre-line p-5 text-sm leading-relaxed">{r.synthesis}</div>
             )}
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 @md:grid-cols-4">
               {stat(t("residency.r_sent"), d.yesterday.sent, d.total.sent)}
               {stat(t("residency.r_bounced"), d.yesterday.bounced, d.total.bounced)}
               {stat(t("residency.r_opened"), d.yesterday.opened, d.total.opened)}
@@ -1301,7 +1301,7 @@ function ReportsTab({ view }: { view: ResidencyView }) {
                 </ul>
               )}
             </div>
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 @md:grid-cols-2">
               <div className="card p-5 text-sm">
                 <div className="eyebrow mb-2 text-fg">{t("residency.r_next")}</div>
                 {d.next_actions.length === 0 ? (

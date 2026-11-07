@@ -675,6 +675,7 @@ fn reply_candidates(conn: &Connection, now: NaiveDateTime) -> Vec<ReplyCand> {
          LEFT JOIN reply_insights i ON i.email_reply_id = r.id
          WHERE r.kind = 'reply' AND COALESCE(r.received_at, r.created_at) >= ?1
            AND k.status <> 'declined'
+           AND COALESCE(r.received_at, r.created_at) > COALESCE(k.actions_done_at, '')
            AND NOT EXISTS (SELECT 1 FROM reply_desk d WHERE d.thread_key = 'r:' || r.id)
            AND NOT EXISTS (SELECT 1 FROM emails s WHERE s.status = 'sent' AND s.sent_at > COALESCE(r.received_at, r.created_at)
                              AND (s.contact_id = k.id OR lower(trim(s.to_addr)) = lower(trim(r.from_addr))))

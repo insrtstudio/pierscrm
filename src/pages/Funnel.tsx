@@ -101,7 +101,7 @@ export function Funnel() {
         <Loader />
       ) : (
         <>
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+          <div className="grid gap-6 @xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
             <FunnelBars rep={rep} />
             <DigestCard />
           </div>
@@ -159,7 +159,7 @@ function FunnelBars({ rep }: { rep: FunnelReport }) {
           })}
         </div>
       )}
-      <div className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-4 sm:grid-cols-4">
+      <div className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-4 @sm:grid-cols-4">
         <Mini label={t("funnel.median_reply")} value={rep.median_reply_hours == null ? "–" : t("funnel.hours", { n: Math.round(rep.median_reply_hours) })} />
         <Mini label={t("funnel.median_confirm")} value={rep.median_reply_to_confirmed_days == null ? "–" : t("funnel.days", { n: Math.round(rep.median_reply_to_confirmed_days) })} />
         <Mini label={t("funnel.fee_collected")} value={euro(rep.total.fee_collected)} />
@@ -260,7 +260,7 @@ function Variants({ groups }: { groups: VariantGroup[] }) {
       {groups.length === 0 ? (
         <EmptyState icon={FlaskConical} title={t("funnel.ab_empty")} hint={t("funnel.ab_empty_hint")} />
       ) : (
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid gap-4 @lg:grid-cols-2">
           {groups.map((g) => (
             <div key={`${g.campaign_id}-${g.template_id ?? 0}-${g.step ?? 0}`} className="panel p-4">
               <div className="flex flex-wrap items-baseline gap-2">

@@ -111,7 +111,7 @@ export function RunOutcomeSummary({ run, stats }: { run: ViRun; stats: ViRunStat
         <CheckCircle2 size={15} className={hits > 0 ? "text-ok" : "text-fg-subtle"} />
         {t(`report.headline.${run.type_}`, { count: hits, hits: fmtN(hits), seen: fmtN(seen) })}
       </div>
-      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+      <div className="mt-2 grid grid-cols-2 gap-2 @sm:grid-cols-3 @xl:grid-cols-6">
         {tiles.map((x) => (
           <div key={x.key} className="border border-border px-3 py-2" title={t(`report.tile_hint.${x.key}`, "")}>
             <div className={clsx("font-condensed text-lg tabular", x.value > 0 ? x.tone ?? "text-fg" : "text-fg-faint")}>

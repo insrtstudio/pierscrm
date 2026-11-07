@@ -210,7 +210,7 @@ function OverviewTab() {
       {kpisLoading ? (
         <Loader />
       ) : (
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 @lg:grid-cols-4">
           <div className="border border-border px-4 py-3">
             <div className="flex items-baseline gap-2">
               {kpis?.artist_popularity == null && kpis?.spotify_metrics_unavailable ? (
@@ -603,7 +603,7 @@ function PlannerTab() {
   };
 
   return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[320px_1fr]">
+    <div className="grid grid-cols-1 gap-5 @lg:grid-cols-[320px_1fr]">
       <div className="card h-fit space-y-3 p-5">
         <div className="kicker">{t("pulse.planner_title")}</div>
         <p className="text-2xs leading-relaxed text-fg-subtle">{t("pulse.planner_hint")}</p>

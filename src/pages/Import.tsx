@@ -257,7 +257,7 @@ export function Import() {
               <p className="mt-0.5 text-xs text-fg-subtle">
                 {t("import.mapping_help")}
               </p>
-              <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2">
+              <div className="mt-4 grid grid-cols-1 gap-2 @md:grid-cols-2">
                 {sheet?.headers.map((h, i) => (
                   <div
                     key={i}

@@ -236,7 +236,7 @@ function DnsCard() {
   });
   const r = run.data ?? data?.dns ?? null;
   return (
-    <div className="card p-6 xl:col-span-2">
+    <div className="card p-6 @xl:col-span-2">
       <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
         {r?.ready ? <ShieldCheck size={15} className="text-ok" /> : <ShieldAlert size={15} />}
         {t("deliverability.dns_title")}

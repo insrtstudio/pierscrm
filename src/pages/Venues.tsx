@@ -1230,7 +1230,7 @@ function RunsTab() {
   };
 
   return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[340px_1fr]">
+    <div className="grid grid-cols-1 gap-5 @lg:grid-cols-[340px_1fr]">
       {/* Launcher */}
       <div className="card h-fit p-5">
         <div className="kicker mb-3">{t("venues.new_run")}</div>

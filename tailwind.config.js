@@ -1,3 +1,8 @@
+// Layouts answer to the room the page really has, not to the window: the same
+// window leaves 200px less with the sidebar open. `.page-scroll` (Layout) is the
+// container. Modals live outside it and keep the plain breakpoints.
+const PAGE_WIDTHS = { sm: 560, md: 680, lg: 860, xl: 1040, "2xl": 1280, week: 1240 };
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
@@ -78,5 +83,7 @@ export default {
       },
     },
   },
-  plugins: [],
+  plugins: [({ addVariant }) => {
+      for (const [name, width] of Object.entries(PAGE_WIDTHS)) addVariant(`@${name}`, `@container page (min-width: ${width}px)`);
+    }],
 };

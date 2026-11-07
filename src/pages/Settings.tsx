@@ -271,7 +271,7 @@ export function Settings() {
     <section id={`settings-${k}`} className="scroll-mt-4">
       <h2 className="mb-1 text-base font-semibold">{t(`settings.sec_${k}`)}</h2>
       <p className="mb-4 text-xs text-fg-subtle">{t(`settings.sec_${k}_help`)}</p>
-      <div className={clsx("grid items-start gap-6", !wide && "xl:grid-cols-2")}>{body}</div>
+      <div className={clsx("grid items-start gap-6", !wide && "@xl:grid-cols-2")}>{body}</div>
     </section>
   );
 
@@ -280,7 +280,7 @@ export function Settings() {
       <PageHeader title={t("settings.title")} subtitle={t("settings.subtitle")} />
       <div className="flex gap-8 px-page pb-16 pt-6">
         {/* Side menu: every section one click away, nothing hidden behind a tab. */}
-        <nav className="sticky top-4 hidden w-44 shrink-0 self-start lg:block">
+        <nav className="sticky top-4 hidden w-44 shrink-0 self-start @lg:block">
           {SECTIONS.map((k) => (
             <button
               key={k}
@@ -449,7 +449,7 @@ export function Settings() {
             "agent",
             <>
               <ResidencySettingsCard />
-              <div className="xl:col-span-2">
+              <div className="@xl:col-span-2">
                 <AgentLibraryPanel />
               </div>
             </>,
@@ -459,7 +459,7 @@ export function Settings() {
             <>
               <DeliverabilityPanel />
               <EmailVerifierCard />
-              <div className="xl:col-span-2">
+              <div className="@xl:col-span-2">
                 <GuardrailsTab />
               </div>
             </>,

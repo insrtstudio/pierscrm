@@ -192,6 +192,11 @@
       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent;
   }
 
+  /* The room a page has: @sm: to @2xl: and @week: (tailwind.config.js). */
+  .page-scroll {
+    container: page / inline-size;
+  }
+
   /* ---- Surfaces (Tahoe grouped boxes: generous radius, hairline) ---- */
   .card {
     @apply rounded-xl border border-border bg-surface;

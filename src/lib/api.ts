@@ -145,6 +145,8 @@ export const sendEmail = (p: {
   body: string;
   /// Paths of documents PiersCRM generated (offers); anything else is refused.
   attachments?: string[];
+  /// An answer: lands in the contact's conversation (In-Reply-To, References).
+  in_thread?: boolean;
 }) =>
   invoke<SendResult>("send_email", {
     contactId: p.contact_id ?? null,
@@ -153,7 +155,27 @@ export const sendEmail = (p: {
     subject: p.subject,
     body: p.body,
     attachments: p.attachments?.length ? p.attachments : null,
+    inThread: p.in_thread ?? null,
   });
+/// Aujourd'hui (commands/actions.rs): replies still waiting, lines closed by
+/// hand when it was handled outside the CRM, drafts behind Répondre / Relancer.
+export interface OpenReply {
+  reply_id: number;
+  contact_id: number;
+  name: string;
+  subject: string;
+  received_at: string;
+}
+export interface ActionDraft {
+  subject: string;
+  body: string;
+  by: string;
+}
+export const listOpenReplies = () => invoke<OpenReply[]>("list_open_replies");
+export const actionDone = (contactId: number) => invoke<void>("action_done", { contactId });
+export const actionFollowupDone = (contactId: number) => invoke<void>("action_followup_done", { contactId });
+export const actionDraft = (contactId: number, kind: "reply" | "followup") =>
+  invoke<ActionDraft>("action_draft", { contactId, kind });
 export const listEmails = (contactId?: number) =>
   invoke<EmailLog[]>("list_emails", { contactId: contactId ?? null });
 export const listFollowups = () => invoke<Followup[]>("list_followups");

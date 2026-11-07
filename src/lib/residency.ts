@@ -318,6 +318,7 @@ export interface DoneItem {
   key: string;
   kind:
     | "first_emails"
+    | "done_elsewhere"
     | "followups"
     | "emails"
     | "reply"

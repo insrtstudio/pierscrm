@@ -57,7 +57,7 @@ export function CreditsPanel() {
           <RefreshCw size={14} className={clsx(isFetching && "animate-spin")} /> {t("credits.refresh")}
         </button>
       </div>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 @sm:grid-cols-2">
         {(data ?? []).map((c) => (
           <CreditCard key={c.service} c={c} onChange={(list) => qc.setQueryData(QK, list)} />
         ))}

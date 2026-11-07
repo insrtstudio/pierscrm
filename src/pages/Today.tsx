@@ -31,7 +31,7 @@ export function Today() {
   return (
     <div>
       <PageHeader title={t("nav.today")} subtitle={dateLabel.charAt(0).toUpperCase() + dateLabel.slice(1)} />
-      <div className="grid gap-3 px-page pt-6 md:grid-cols-3">
+      <div className="grid gap-3 px-page pt-6 [grid-template-columns:repeat(auto-fit,minmax(min(100%,205px),1fr))]">
         <Tile
           to="/replies"
           icon={Inbox}
@@ -72,7 +72,9 @@ export function Today() {
           hint={t("today.campaigns_hint", { count: active })}
         />
       </div>
-      <CreditsBanner />
+      <div className="px-page pt-4 empty:hidden">
+        <CreditsBanner />
+      </div>
       <DmQueue />
       <Actions />
     </div>
@@ -100,26 +102,24 @@ function Tile({
     <Link
       to={to}
       className={clsx(
-        "card group flex items-center gap-4 px-4 py-3.5 transition-colors hover:border-fg/30",
+        "card group relative flex min-w-0 items-start gap-3 px-3.5 py-3.5 transition-colors hover:border-fg/30",
         hot && "border-accent/40 bg-accent-soft/30"
       )}
     >
       <div
         className={clsx(
-          "flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
+          "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
           danger ? "bg-danger/10 text-danger" : hot ? "bg-accent/15 text-accent-2" : "bg-fg/[0.05] text-fg-subtle"
         )}
       >
-        <Icon size={18} strokeWidth={1.75} />
+        <Icon size={17} strokeWidth={1.75} />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="eyebrow text-[10px]">{label}</div>
-        <div className="mt-0.5 flex items-baseline gap-2">
-          <span className="font-condensed text-[26px] leading-none tabular">{value}</span>
-        </div>
-        {hint && <div className="mt-1 truncate text-xs text-fg-subtle">{hint}</div>}
+        <div className="eyebrow truncate pr-2.5 text-[10px] tracking-[0.08em]">{label}</div>
+        <div className="mt-1 truncate font-condensed text-[26px] leading-none tabular">{value}</div>
+        {hint && <div className="mt-1 line-clamp-2 text-xs leading-snug text-fg-subtle">{hint}</div>}
       </div>
-      <ArrowUpRight size={15} className="shrink-0 text-fg-faint transition-colors group-hover:text-fg" />
+      <ArrowUpRight size={14} className="absolute right-2.5 top-2.5 text-fg-faint transition-colors group-hover:text-fg" />
     </Link>
   );
 }

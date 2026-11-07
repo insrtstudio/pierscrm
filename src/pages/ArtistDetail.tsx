@@ -205,9 +205,9 @@ export function ArtistDetail() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 px-page pb-10 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 px-page pb-10 @lg:grid-cols-3">
         {/* EPK — printable one-pager */}
-        <div className="lg:col-span-2">
+        <div className="@lg:col-span-2">
           <div id="epk-print" className="epk card overflow-hidden">
             <div className="flex gap-6 border-b border-border p-6">
               <div className="h-32 w-32 shrink-0 overflow-hidden rounded-2xl bg-gradient-to-br from-accent/30 to-surface-2">
