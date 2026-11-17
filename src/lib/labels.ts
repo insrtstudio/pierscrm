@@ -160,6 +160,22 @@ export const addLabelsToDemo = (id: number, labelIds: number[]) =>
   invoke<number>("label_demo_add_labels", { id, labelIds });
 export const openWave = (id: number) => invoke<number>("label_demo_open_wave", { id });
 export const createDemoKit = (id: number) => invoke<{ id: string; title: string }>("label_demo_create_kit", { id });
+/// What the insrt page of a demo shows right now (site: GET press-kits/<id>/page).
+export interface PagePreview {
+  kit: { id: string; title: string; audience?: string | null };
+  artist: { name: string; slug: string; genres: string[] };
+  previewUrl?: string | null;
+  tracks: { title: string; durationSec?: number | null; heading?: string | null }[];
+  numbers: Record<"fr" | "en", { display: string; label: string; source: "youtube" | "spotify" | "manual" }[]>;
+  videos: { title: string; views?: number | null }[];
+  bio: { fr: string; en: string };
+  links: { streaming: string[]; social: string[] };
+  heroPhoto: boolean;
+  epkPdf: boolean;
+  contacts: { booking: boolean; management: boolean };
+  metrics: { fetchedAt?: string | null; spotify: boolean; youtube: boolean; errors: string[] };
+}
+export const demoPage = (id: number) => invoke<PagePreview>("label_demo_page", { id });
 export const redraftDemo = (id: number) => invoke<number>("label_demo_redraft", { id });
 export const setTargetOutcome = (targetId: number, outcome: Outcome | null) =>
   invoke<void>("label_target_set_outcome", { targetId, outcome });

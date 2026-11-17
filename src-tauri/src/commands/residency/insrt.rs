@@ -165,6 +165,13 @@ pub trait Insrt: Send + Sync {
         let _ = kit;
         Err("insrt: mise à jour du dossier presse indisponible.".into())
     }
+    /// What the page of a kit shows right now (tracks, live numbers, videos,
+    /// bio...) and a link to look at it: `GET press-kits/<id>/page`, passed
+    /// through as the site sends it. Defaulted like `push_gig`.
+    fn kit_page(&self, press_kit_id: &str) -> Result<serde_json::Value, String> {
+        let _ = press_kit_id;
+        Err("insrt: aperçu de la page indisponible.".into())
+    }
     /// One-click unsubscribes recorded after `since`. Defaulted like `push_gig`.
     fn unsubscribes(&self, since: &str) -> Result<UnsubscribePage, String> {
         let _ = since;
@@ -287,6 +294,16 @@ impl Insrt for HttpInsrt {
             .send()
             .map_err(|e| format!("insrt: {}", e))?;
         parse_press_link(&Self::check(resp)?)
+    }
+
+    fn kit_page(&self, press_kit_id: &str) -> Result<serde_json::Value, String> {
+        let resp = self
+            .http
+            .get(format!("{}/api/crm/v1/press-kits/{}/page", self.base, press_kit_id))
+            .bearer_auth(&self.token)
+            .send()
+            .map_err(|e| format!("insrt: {}", e))?;
+        serde_json::from_str(&Self::check(resp)?).map_err(|e| format!("insrt: réponse illisible ({})", e))
     }
 
     fn activity(&self, since: &str, press_kit_id: &str) -> Result<ActivityPage, String> {

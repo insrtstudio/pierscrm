@@ -230,6 +230,7 @@ pub fn run() {
             commands::labels::label_demo_open_wave,
             commands::labels::label_demo_redraft,
             commands::labels::label_demo_create_kit,
+            commands::labels::label_demo_page,
             commands::labels::label_target_set_outcome,
             commands::labels::label_target_mark_submitted,
             commands::labels::label_demo_set_status,

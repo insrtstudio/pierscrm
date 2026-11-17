@@ -41,6 +41,7 @@ import {
   addLabelsToDemo,
   createDemo,
   createDemoKit,
+  demoPage,
   demosList,
   getDemo,
   importRadarLabels,
@@ -60,6 +61,7 @@ import {
   type Label,
   type LabelInput,
   type Outcome,
+  type PagePreview,
   type TargetState,
 } from "../lib/labels";
 
@@ -891,6 +893,8 @@ function DemoStep({ view: v, onSaved }: { view: DemoView; onSaved: () => void })
   const subjKey = lang === "en" ? "subject_en" : "subject";
   const bodyKey = lang === "en" ? "body_en" : "body";
   return (
+    <div className="space-y-5">
+    {mode !== "url" && v.press_kit_id && <PagePreviewCard demoId={v.card.id} kitId={v.press_kit_id} />}
     <div className="grid gap-5 @xl:grid-cols-[minmax(0,27rem)_minmax(0,1fr)]">
       <div className="card space-y-4 p-5">
         <div className="eyebrow">{t("labels.section_track")}</div>
@@ -959,6 +963,145 @@ function DemoStep({ view: v, onSaved }: { view: DemoView; onSaved: () => void })
           </button>
         </div>
       </div>
+    </div>
+    </div>
+  );
+}
+
+/// What the listening page shows right now, read from the site, and what is
+/// missing on it. Everything comes from the artist profile on insrt.studio:
+/// the list says where to fill what the site cannot read by itself.
+function missingOf(p: PagePreview, t: T): { text: string; blocking?: boolean }[] {
+  const out: { text: string; blocking?: boolean }[] = [];
+  const labels = p.numbers.fr.map((n) => n.label.toLowerCase()).join(" | ");
+  if (p.tracks.length === 0) out.push({ text: t("labels.preview_miss_tracks"), blocking: true });
+  if (p.kit.audience !== "label") out.push({ text: t("labels.preview_miss_audience") });
+  if (!p.metrics.spotify) out.push({ text: t("labels.preview_miss_spotify") });
+  if (!p.metrics.youtube) out.push({ text: t("labels.preview_miss_youtube") });
+  const manual = [
+    !/instagram/.test(labels) && t("labels.preview_num_instagram"),
+    !/auditeur|listener/.test(labels) && t("labels.preview_num_listeners"),
+    !/stream|écoute/.test(labels) && t("labels.preview_num_streams"),
+    !/date|show|gig|soirée/.test(labels) && t("labels.preview_num_shows"),
+  ].filter(Boolean) as string[];
+  if (manual.length) out.push({ text: t("labels.preview_miss_manual", { list: manual.join(", ") }) });
+  if (!p.bio.en) out.push({ text: t("labels.preview_miss_bio_en") });
+  if (!p.bio.fr) out.push({ text: t("labels.preview_miss_bio_fr") });
+  if (p.videos.length === 0) out.push({ text: t("labels.preview_miss_videos") });
+  if (!p.heroPhoto) out.push({ text: t("labels.preview_miss_photo") });
+  if (p.links.streaming.length === 0) out.push({ text: t("labels.preview_miss_links") });
+  if (!p.contacts.booking && !p.contacts.management) out.push({ text: t("labels.preview_miss_contact") });
+  for (const e of p.metrics.errors) out.push({ text: e });
+  return out;
+}
+
+const mmss = (s?: number | null) => (s ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}` : "");
+
+function PagePreviewCard({ demoId, kitId }: { demoId: number; kitId: string }) {
+  const { t } = useTranslation();
+  const { data: p, isLoading, error, refetch, isFetching } = useQuery({
+    queryKey: ["label_demo_page", demoId, kitId],
+    queryFn: () => demoPage(demoId),
+    retry: false,
+    staleTime: 60_000,
+  });
+  const missing = p ? missingOf(p, t as T) : [];
+  return (
+    <div className="card space-y-4 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="eyebrow">{t("labels.preview_title")}</div>
+          <p className="mt-1 text-[12.5px] text-fg-subtle">{t("labels.preview_hint")}</p>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-ghost" disabled={isFetching} onClick={() => refetch()}>
+            {t("labels.preview_refresh")}
+          </button>
+          {p?.previewUrl && (
+            <button className="btn-outline" onClick={() => openUrl(p.previewUrl!)}>
+              <ExternalLink size={13} /> {t("labels.preview_open")}
+            </button>
+          )}
+        </div>
+      </div>
+      {isLoading && <Loader />}
+      {error != null && <p className="text-[13px] text-warn">{t("labels.preview_error", { error: errorMessage(error) })}</p>}
+      {p && (
+        <>
+          <div className={clsx("rounded-lg border p-4", missing.length ? "border-warn/40 bg-warn/5" : "border-ok/40 bg-ok/5")}>
+            <div className="text-sm font-medium">
+              {missing.length ? t("labels.preview_missing", { count: missing.length }) : t("labels.preview_complete")}
+            </div>
+            {missing.length > 0 && (
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-[13px]">
+                {missing.map((m, i) => (
+                  <li key={i} className={m.blocking ? "text-danger" : "text-fg-subtle"}>
+                    {m.text}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="grid gap-x-8 gap-y-5 @xl:grid-cols-3">
+            <div>
+              <div className="eyebrow mb-2">
+                1 · {t("labels.preview_tracks")} · {p.tracks.length}
+              </div>
+              <ul className="text-[13px]">
+                {p.tracks.map((x, i) => (
+                  <li key={i}>
+                    {x.heading && <div className="eyebrow mt-2 text-[10px] text-fg-faint">{x.heading}</div>}
+                    <div className="flex justify-between gap-3 border-b border-border py-1.5">
+                      <span className="truncate">{x.title}</span>
+                      <span className="shrink-0 tabular text-fg-subtle">{mmss(x.durationSec)}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div>
+              <div className="eyebrow mb-2">
+                2 · {t("labels.preview_numbers")} · {p.numbers.fr.length}
+              </div>
+              <ul className="text-[13px]">
+                {p.numbers.fr.map((n, i) => (
+                  <li key={i} className="flex items-baseline justify-between gap-3 border-b border-border py-1.5">
+                    <span className="min-w-0">
+                      <span className="font-condensed text-lg tabular">{n.display}</span> <span className="text-fg-subtle">{n.label}</span>
+                    </span>
+                    <span className={clsx("badge shrink-0", n.source === "manual" ? "bg-muted text-fg-subtle" : "bg-ok/10 text-ok")}>
+                      {t(n.source === "manual" ? "labels.preview_src_manual" : "labels.preview_src_live")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="space-y-3 text-[13px]">
+              <div>
+                <div className="eyebrow mb-2">
+                  3 · {t("labels.preview_videos")} · {p.videos.length}
+                </div>
+                <ul>
+                  {p.videos.map((x, i) => (
+                    <li key={i} className="flex justify-between gap-3 border-b border-border py-1.5">
+                      <span className="truncate">{x.title}</span>
+                      <span className="shrink-0 tabular text-fg-subtle">{x.views != null ? x.views.toLocaleString() : ""}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <div className="eyebrow mb-2">4 · {t("labels.preview_links")}</div>
+                <p className="text-fg-subtle">{[...p.links.streaming, ...p.links.social].join(", ") || "·"}</p>
+              </div>
+              <div>
+                <div className="eyebrow mb-2">5 · {t("labels.preview_bio")}</div>
+                <p className="line-clamp-4 text-fg-subtle">{p.bio.en || p.bio.fr || "·"}</p>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

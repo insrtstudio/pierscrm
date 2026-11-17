@@ -1240,6 +1240,21 @@ pub async fn label_demo_create_kit(state: State<'_, AppState>, id: i64) -> Resul
     .map_err(|e| e.to_string())?
 }
 
+/// "Aperçu de la page": what the insrt page of this demo shows right now and
+/// a link to open it, so what is missing is seen before anything is sent.
+#[tauri::command]
+pub async fn label_demo_page(state: State<'_, AppState>, id: i64) -> Result<serde_json::Value, String> {
+    let pool = state.pool.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let kit = load(&conn, id).and_then(|r| r.config.press_kit_id).ok_or("Aucune page d'écoute insrt pour cette démo.")?;
+        let client = residency::insrt::client(&conn).ok_or("insrt.studio n'est pas réglé (Réglages).")?;
+        client.kit_page(&kit)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Rewrite the first emails still in draft from the current templates (after
 /// the templates, the track title or the listening link changed).
 #[tauri::command(async)]
