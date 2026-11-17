@@ -25,6 +25,8 @@ pub fn list_campaigns(state: State<'_, AppState>) -> Result<Vec<Campaign>, Strin
                     COALESCE((SELECT COUNT(*) FROM campaign_contacts cc WHERE cc.campaign_id = c.id AND cc.state = 'planned'), 0) AS planned_count,
                     COALESCE((SELECT COUNT(*) FROM campaign_contacts cc WHERE cc.campaign_id = c.id), 0) AS audience_count
              FROM campaigns c
+             -- Label demos have their own screens (commands/labels.rs).
+             WHERE c.kind <> 'label'
              ORDER BY (c.target_date IS NULL), c.target_date, c.id DESC",
         )
         .map_err(|e| e.to_string())?;

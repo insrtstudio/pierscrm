@@ -147,7 +147,7 @@ pub fn apply_gates(conn: &Connection, smtp_ok: bool, now: DateTime<Utc>) -> Gate
 }
 
 fn autopilot_ids(conn: &Connection) -> Vec<i64> {
-    super::active_ids(conn)
+    super::sending_ids(conn)
         .into_iter()
         .filter(|id| load(conn, *id).map_or(false, |r| r.autopilot))
         .collect()
@@ -280,12 +280,14 @@ pub fn tz_of(conn: &Connection, contact_id: i64, cfg: &Config) -> Tz {
         .query_row(
             "SELECT pays FROM vi_venues WHERE crm_contact_id = ?1 AND pays IS NOT NULL
              UNION ALL
-             SELECT pays FROM vi_promoter_orgs WHERE crm_contact_id = ?1 AND pays IS NOT NULL LIMIT 1",
+             SELECT pays FROM vi_promoter_orgs WHERE crm_contact_id = ?1 AND pays IS NOT NULL
+             UNION ALL
+             SELECT country FROM labels WHERE contact_id = ?1 AND country IS NOT NULL LIMIT 1",
             params![contact_id],
             |r| r.get(0),
         )
         .ok();
-    Tz::for_country(&pays.unwrap_or_else(|| cfg.zone.default_country()))
+    Tz::for_country(&pays.map(|p| crate::commands::labels::iso_of(&p)).unwrap_or_else(|| cfg.zone.default_country()))
 }
 
 fn due_messages(conn: &Connection, now: DateTime<Utc>) -> Vec<DueMsg> {
@@ -296,7 +298,7 @@ fn due_messages(conn: &Connection, now: DateTime<Utc>) -> Vec<DueMsg> {
          JOIN campaigns c ON c.id = m.campaign_id
          JOIN contacts k ON k.id = m.contact_id
          WHERE m.status = 'scheduled' AND (m.scheduled_for IS NULL OR m.scheduled_for <= ?1)
-           AND r.autopilot = 1 AND r.paused_reason IS NULL AND c.status = 'active' AND c.kind = 'residency'
+           AND r.autopilot = 1 AND r.paused_reason IS NULL AND c.status = 'active' AND c.kind IN ('residency', 'label')
          ORDER BY COALESCE(m.scheduled_for, m.updated_at), m.step DESC, m.id",
     ) else {
         return Vec::new();
@@ -663,7 +665,7 @@ fn tick(pool: &DbPool, app: &tauri::AppHandle, now: DateTime<Utc>) {
             }
         }
         // Pixel opens, on the same 30-minute rhythm.
-        if !super::active_ids(&conn).is_empty() {
+        if !super::sending_ids(&conn).is_empty() {
             if let Err(e) = super::report::poll_opens(&conn) {
                 eprintln!("[residency] {}", e);
             }
@@ -690,6 +692,8 @@ fn tick(pool: &DbPool, app: &tauri::AppHandle, now: DateTime<Utc>) {
             notify(app, built);
         }
     }
+    // Label demos: close the labels that stayed silent, open the next wave.
+    crate::commands::labels::tick(&conn, Some(app), now);
     drop(conn);
     // Collectives prospection: refill, open countries, feed the lookup.
     super::prospect::daily(pool, app, now);

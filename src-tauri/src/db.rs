@@ -822,6 +822,10 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     crate::commands::org_type::migrate(conn);
     // The residency pitch becomes warm-up / last-minute cover, once.
     crate::commands::residency::warmup::migrate(conn);
+    // ---- Labels (demo submissions) ----
+    // labels, label_demos, label_targets, and the first import of the labels
+    // Radar already found. Additive, see commands/labels.
+    crate::commands::labels::migrate(conn);
 
     Ok(())
 }

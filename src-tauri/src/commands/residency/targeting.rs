@@ -891,6 +891,19 @@ pub fn target_info(conn: &Connection, contact_id: i64, cfg: &Config) -> Option<T
         if let Some(p) = pays.filter(|p| !p.trim().is_empty()) {
             country = iso_country(&p);
         }
+    } else if let Ok((pays, person)) = conn.query_row(
+        // A record label (commands/labels): its own country decides the
+        // language, its demo contact the first name.
+        "SELECT country, contact_name FROM labels WHERE contact_id = ?1 LIMIT 1",
+        params![contact_id],
+        |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+    ) {
+        // Unknown country: English, a label's working language.
+        country = pays.filter(|p| !p.trim().is_empty()).map(|p| crate::commands::labels::iso_of(&p)).unwrap_or_else(|| "XX".into());
+        info.city = String::new();
+        if info.first_name.is_none() {
+            info.first_name = first_name_of(person.as_deref());
+        }
     }
     info.lang = language_for(&country, Some(&info.city), &cfg.lang).to_string();
     info.country = country;

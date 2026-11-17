@@ -255,6 +255,10 @@ pub struct Config {
     pub capacity_max: i64,
     #[serde(default = "default_min_events")]
     pub min_events: i64,
+    /// Label demo campaigns (commands/labels): the title of the track sent,
+    /// {{track}} in the templates. Empty for a club campaign.
+    #[serde(default)]
+    pub track: String,
 }
 
 fn default_ask() -> String {
@@ -301,6 +305,7 @@ impl Default for Config {
             capacity_min: default_cap_min(),
             capacity_max: default_cap_max(),
             min_events: default_min_events(),
+            track: String::new(),
         }
     }
 }
@@ -505,6 +510,19 @@ pub fn active_ids(conn: &Connection) -> Vec<i64> {
     let Ok(mut st) = conn.prepare(
         "SELECT r.campaign_id FROM residency_campaigns r JOIN campaigns c ON c.id = r.campaign_id
          WHERE c.status = 'active' AND c.kind = 'residency' ORDER BY r.campaign_id",
+    ) else {
+        return Vec::new();
+    };
+    st.query_map([], |r| r.get(0)).map(|it| it.flatten().collect()).unwrap_or_default()
+}
+
+/// Campaigns the engine sends for: residency campaigns and label demo
+/// campaigns (commands/labels), which reuse the queue, the gates and the
+/// stop-on-reply rule.
+pub fn sending_ids(conn: &Connection) -> Vec<i64> {
+    let Ok(mut st) = conn.prepare(
+        "SELECT r.campaign_id FROM residency_campaigns r JOIN campaigns c ON c.id = r.campaign_id
+         WHERE c.status = 'active' AND c.kind IN ('residency', 'label') ORDER BY r.campaign_id",
     ) else {
         return Vec::new();
     };

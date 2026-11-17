@@ -61,6 +61,7 @@ pub fn warm_targets(conn: &Connection, now: DateTime<Utc>) -> Vec<Warm> {
                                   AND m1.step = 1 AND m1.status = 'sent'
          LEFT JOIN emails e ON e.id = m1.sent_email_id
          WHERE p.at >= ?1 AND p.campaign_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM campaigns c WHERE c.id = p.campaign_id AND c.kind = 'label')
            AND (   (p.type = 'listen' AND COALESCE(p.seconds, 0) >= ?2)
                 OR p.type IN ('feedback', 'download')
                 OR (p.type = 'view' AND p.at >= datetime(COALESCE(e.sent_at, m1.updated_at), ?3)))

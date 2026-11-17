@@ -16,6 +16,7 @@ import {
   Activity,
   Users,
   Megaphone,
+  Disc3,
   Inbox,
   Wallet,
   Settings as SettingsIcon,
@@ -56,6 +57,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/contacts", key: "prospect", icon: Users },
       { to: "/campaigns", key: "campaigns", icon: Megaphone },
+      { to: "/labels", key: "labels", icon: Disc3 },
       { to: "/artists", key: "artists", icon: Mic2 },
     ],
   },

@@ -32,6 +32,7 @@ pub mod ra;
 pub mod vi;
 pub mod visa;
 pub mod residency;
+pub mod labels;
 pub mod routing;
 pub mod reply_desk;
 pub mod playbook;

@@ -71,6 +71,11 @@ pub fn vars_for(info: &TargetInfo, cfg: &Config, artist: &str, press_url: Option
         info.promoter.clone().filter(|p| !p.trim().is_empty()).unwrap_or_else(|| info.venue.clone()),
     );
     v.insert("venue".into(), info.venue.clone());
+    // Label demo campaigns: the label's name and the track sent.
+    v.insert("label".into(), info.venue.clone());
+    if !cfg.track.trim().is_empty() {
+        v.insert("track".into(), cfg.track.trim().to_string());
+    }
     if !info.city.trim().is_empty() {
         v.insert("city".into(), super::zone::city_label(&info.city, &info.lang));
     }
@@ -381,7 +386,7 @@ pub fn artist_name(conn: &Connection, campaign_id: i64) -> String {
 
 /// The contact's personal press link: the one already stored on a message of
 /// this campaign, else created through the insrt API (idempotent per contact).
-fn press_link_for(
+pub(crate) fn press_link_for(
     conn: &Connection,
     campaign_id: i64,
     cfg: &Config,

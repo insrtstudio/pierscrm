@@ -24,6 +24,8 @@ const Emails = lazy(() => import("./pages/Emails").then((m) => ({ default: m.Ema
 const ResidencyPage = lazy(() =>
   import("./pages/Residency").then((m) => ({ default: m.ResidencyPage }))
 );
+const LabelsSection = lazy(() => import("./pages/Labels").then((m) => ({ default: m.LabelsSection })));
+const LabelDemoPage = lazy(() => import("./pages/Labels").then((m) => ({ default: m.LabelDemoPage })));
 const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
 
 function Fallback() {
@@ -81,6 +83,8 @@ export function App() {
           <Route path="contacts" element={page(<Prospection />)} />
           <Route path="campaigns" element={page(<Emails section="campaigns" />)} />
           <Route path="campaigns/:id" element={page(<ResidencyPage />)} />
+          <Route path="labels" element={page(<LabelsSection />)} />
+          <Route path="labels/:id" element={page(<LabelDemoPage />)} />
           <Route path="artists" element={page(<ArtistsSection />)} />
           <Route path="artists/:id" element={page(<ArtistDetail />)} />
           <Route path="results" element={page(<Results />)} />

@@ -123,7 +123,7 @@ const SHARED_EMAIL_MIN: i64 = 3;
 
 /// SQL boolean over `col`, true when the address could plausibly reach someone
 /// who listens to submissions.
-fn pitchable_sql(col: &str) -> String {
+pub(crate) fn pitchable_sql(col: &str) -> String {
     let mut parts: Vec<String> = NON_PITCH_LOCALS
         .iter()
         // Exact local part plus `dsa-authorities@`, `privacy.team@`, `no_reply@`...

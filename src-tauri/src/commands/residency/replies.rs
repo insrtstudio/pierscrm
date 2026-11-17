@@ -64,7 +64,7 @@ pub fn pending(conn: &Connection) -> Vec<Pending> {
               OR (r.contact_id IS NULL AND k.email IS NOT NULL AND lower(trim(k.email)) = lower(trim(r.from_addr)))
          JOIN campaign_messages m ON m.contact_id = k.id AND m.status = 'sent'
          JOIN emails e ON e.id = m.sent_email_id
-         JOIN campaigns c ON c.id = m.campaign_id AND c.kind = 'residency'
+         JOIN campaigns c ON c.id = m.campaign_id AND c.kind IN ('residency', 'label')
          WHERE r.kind IN ('reply','auto_reply','unsubscribe')
            AND NOT EXISTS (SELECT 1 FROM reply_insights i WHERE i.email_reply_id = r.id)
            AND COALESCE(r.received_at, r.created_at) >= e.sent_at

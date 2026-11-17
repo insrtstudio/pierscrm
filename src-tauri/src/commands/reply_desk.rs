@@ -675,6 +675,9 @@ fn reply_candidates(conn: &Connection, now: NaiveDateTime) -> Vec<ReplyCand> {
          LEFT JOIN reply_insights i ON i.email_reply_id = r.id
          WHERE r.kind = 'reply' AND COALESCE(r.received_at, r.created_at) >= ?1
            AND k.status <> 'declined'
+           -- A label answering a demo is not a booking conversation: no draft
+           -- here, it is followed in Labels (commands/labels.rs).
+           AND COALESCE(c.kind, '') <> 'label'
            AND COALESCE(r.received_at, r.created_at) > COALESCE(k.actions_done_at, '')
            AND NOT EXISTS (SELECT 1 FROM reply_desk d WHERE d.thread_key = 'r:' || r.id)
            AND NOT EXISTS (SELECT 1 FROM emails s WHERE s.status = 'sent' AND s.sent_at > COALESCE(r.received_at, r.created_at)
@@ -757,7 +760,10 @@ fn insert_item(
 fn create_nudges(conn: &Connection, now: NaiveDateTime) -> usize {
     let days = nudge_days(conn);
     let ids: Vec<i64> = conn
-        .prepare("SELECT id FROM contacts WHERE status = 'in_discussion'")
+        .prepare(
+            "SELECT id FROM contacts WHERE status = 'in_discussion'
+               AND id NOT IN (SELECT contact_id FROM labels WHERE contact_id IS NOT NULL)",
+        )
         .and_then(|mut st| st.query_map([], |r| r.get(0)).map(|it| it.flatten().collect()))
         .unwrap_or_default();
     let mut n = 0;
