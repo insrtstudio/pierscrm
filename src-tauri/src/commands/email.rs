@@ -33,6 +33,77 @@ pub(crate) fn load_smtp_from(pool: &crate::db::DbPool) -> Result<SmtpConfig, Str
     Ok(cfg)
 }
 
+/// The second sending account, for label demos: its own address, name and
+/// password (setting `smtp_labels`), the server of the main account unless it
+/// names another. `None` while no address is set.
+pub(crate) fn load_labels_smtp(pool: &crate::db::DbPool) -> Result<Option<SmtpConfig>, String> {
+    let main = load_smtp_from(pool)?;
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    let Some(j) = setting(&conn, "smtp_labels") else { return Ok(None) };
+    let mut cfg: SmtpConfig = serde_json::from_str(&j).map_err(|e| e.to_string())?;
+    if cfg.from_email.trim().is_empty() {
+        return Ok(None);
+    }
+    crate::secrets::smtp_labels_fill(&mut cfg);
+    if cfg.host.trim().is_empty() {
+        cfg.host = main.host.clone();
+        cfg.port = main.port;
+        cfg.encryption = main.encryption.clone();
+    }
+    if cfg.username.trim().is_empty() {
+        cfg.username = cfg.from_email.trim().to_string();
+    }
+    Ok(Some(cfg))
+}
+
+/// The labels account has an address and a password.
+pub(crate) fn labels_sender_ready(conn: &rusqlite::Connection) -> bool {
+    let Some(mut cfg) = setting(conn, "smtp_labels").and_then(|j| serde_json::from_str::<SmtpConfig>(&j).ok()) else {
+        return false;
+    };
+    if cfg.from_email.trim().is_empty() {
+        return false;
+    }
+    crate::secrets::smtp_labels_fill(&mut cfg);
+    !cfg.password.trim().is_empty()
+}
+
+/// Is this email for a label (a demo, its follow-up, an answer to an A&R)?
+pub(crate) fn is_label_mail(conn: &rusqlite::Connection, contact_id: Option<i64>, campaign_id: Option<i64>) -> bool {
+    let by_campaign = campaign_id
+        .and_then(|id| conn.query_row("SELECT kind = 'label' FROM campaigns WHERE id = ?1", params![id], |r| r.get::<_, bool>(0)).ok())
+        .unwrap_or(false);
+    by_campaign
+        || contact_id
+            .and_then(|id| {
+                conn.query_row("SELECT COALESCE(category, '') = 'label' FROM contacts WHERE id = ?1", params![id], |r| r.get::<_, bool>(0)).ok()
+            })
+            .unwrap_or(false)
+}
+
+/// Told to the user when a label email has no account to leave from. Label
+/// emails never fall back on the booking address.
+pub const LABELS_SENDER_MISSING: &str = "Adresse d'envoi des labels non configurée (Réglages, Email).";
+
+/// The account an email leaves from, and whether it is the labels one.
+pub(crate) fn sender_for(
+    pool: &crate::db::DbPool,
+    contact_id: Option<i64>,
+    campaign_id: Option<i64>,
+) -> Result<(SmtpConfig, bool), String> {
+    let label = {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        is_label_mail(&conn, contact_id, campaign_id)
+    };
+    if !label {
+        return Ok((load_smtp_from(pool)?, false));
+    }
+    match load_labels_smtp(pool)? {
+        Some(cfg) if !cfg.password.trim().is_empty() => Ok((cfg, true)),
+        _ => Err(LABELS_SENDER_MISSING.into()),
+    }
+}
+
 /// Editable email signature, stored as JSON under the `email_signature` setting
 /// and appended to every outgoing message (both the plain-text and HTML parts).
 #[derive(Deserialize, Default)]
@@ -560,6 +631,44 @@ pub fn save_smtp_config(state: State<'_, AppState>, mut config: SmtpConfig) -> R
     Ok(())
 }
 
+/// The labels account as the Settings page sees it (masked password).
+#[tauri::command(async)]
+pub fn get_labels_smtp(state: State<'_, AppState>) -> Result<SmtpConfig, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let mut cfg: SmtpConfig = match setting(&conn, "smtp_labels") {
+        Some(j) => serde_json::from_str(&j).map_err(|e| e.to_string())?,
+        None => SmtpConfig { host: String::new(), ..SmtpConfig::default() },
+    };
+    crate::secrets::smtp_labels_fill(&mut cfg);
+    Ok(crate::secrets::smtp_masked(cfg))
+}
+
+#[tauri::command(async)]
+pub fn save_labels_smtp(state: State<'_, AppState>, mut config: SmtpConfig) -> Result<(), String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    config.from_email = config.from_email.trim().to_string();
+    if !config.from_email.is_empty() && config.from_email.parse::<lettre::Address>().is_err() {
+        return Err("Adresse d'envoi invalide.".into());
+    }
+    crate::secrets::smtp_labels_store(&mut config)?;
+    let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES ('smtp_labels', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![json],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Log in to the labels account (SMTP), as `test_smtp` does for the main one.
+#[tauri::command(async)]
+pub fn test_labels_smtp(state: State<'_, AppState>) -> Result<bool, String> {
+    let cfg = load_labels_smtp(&state.pool)?.ok_or(LABELS_SENDER_MISSING)?;
+    let transport = build_transport(&cfg)?;
+    transport.test_connection().map_err(|e| e.to_string())
+}
+
 #[tauri::command(async)]
 pub fn test_smtp(state: State<'_, AppState>) -> Result<bool, String> {
     let cfg = load_smtp(&state)?;
@@ -654,7 +763,7 @@ fn send_one_full(
     thread: Option<&ThreadRef>,
     attachments: &[(String, Vec<u8>)],
 ) -> Result<(SendResult, Option<i64>), String> {
-    let cfg = load_smtp_from(pool)?;
+    let (cfg, for_label) = sender_for(pool, contact_id, campaign_id)?;
     if cfg.from_email.trim().is_empty() {
         return Err("Sender email is not configured (Settings → Email).".into());
     }
@@ -708,7 +817,14 @@ fn send_one_full(
             return Ok((SendResult { ok: false, error: Some(reason), tracked: false, code: Some(code) }, None));
         }
         // Open-tracking: only if a public tracking base URL is configured.
-        (setting(&conn, "tracking_base_url"), load_signature(&conn), deliverability::unsubscribe_config(&conn))
+        // A label reads the address the email came from, not the booking one.
+        let signature = load_signature(&conn).map(|mut s| {
+            if for_label {
+                s.booking_email = cfg.from_email.trim().to_string();
+            }
+            s
+        });
+        (setting(&conn, "tracking_base_url"), signature, deliverability::unsubscribe_config(&conn))
     };
     // Signed when insrt is configured: the token is also the one-click link's.
     let token = unsub.new_token();
@@ -1288,6 +1404,24 @@ mod body_html_tests {
 mod tests {
     use super::human_date;
     use chrono::Datelike;
+
+    #[test]
+    fn label_mail_is_told_from_booking_mail() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate_for_tests(&c).unwrap();
+        c.execute_batch(
+            "INSERT INTO campaigns (id, name, kind) VALUES (1, 'Clubs', 'residency'), (2, 'Demos', 'label');
+             INSERT INTO contacts (id, name, category) VALUES (10, 'Rex', 'venue'), (11, 'Alpha', 'label');",
+        )
+        .unwrap();
+        assert!(!super::is_label_mail(&c, Some(10), Some(1)));
+        assert!(super::is_label_mail(&c, Some(10), Some(2)));
+        // An answer to an A&R written outside the demo still leaves from the labels address.
+        assert!(super::is_label_mail(&c, Some(11), None));
+        assert!(!super::is_label_mail(&c, None, None));
+        // No labels account: not ready, so a demo waits instead of borrowing the booking address.
+        assert!(!super::labels_sender_ready(&c));
+    }
 
     #[test]
     fn date_variable_formatting() {

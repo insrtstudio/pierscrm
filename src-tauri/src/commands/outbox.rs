@@ -1219,8 +1219,21 @@ pub fn sync_replies_blocking(pool: &DbPool) -> Result<SyncResult, String> {
     }
     let _guard = SyncGuard;
     let cfg = crate::commands::email::load_smtp_from(pool)?;
+    let labels = crate::commands::email::load_labels_smtp(pool)?.filter(|c| !c.password.trim().is_empty());
     let conn = pool.get().map_err(|e| e.to_string())?;
-    let res = run_sync(&conn, &cfg);
+    // The labels account has its own inbox: answers to a demo land there.
+    let res = run_sync(&conn, &cfg, "").and_then(|mut r| match &labels {
+        Some(l) if !l.from_email.trim().eq_ignore_ascii_case(cfg.from_email.trim()) => {
+            let more = run_sync(&conn, l, "_labels").map_err(|e| format!("Boîte des labels ({}) : {}", l.from_email.trim(), e))?;
+            r.scanned += more.scanned;
+            r.replies += more.replies;
+            r.bounces += more.bounces;
+            r.unsubscribes += more.unsubscribes;
+            r.no_answer += more.no_answer;
+            Ok(r)
+        }
+        _ => Ok(r),
+    });
     put_setting(&conn, "imap_last_sync", &chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
     match &res {
         Ok(r) => {
@@ -1322,7 +1335,10 @@ pub(crate) fn save_to_sent(pool: &DbPool, cfg: &crate::models::SmtpConfig, raw: 
     });
 }
 
-fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncResult, String> {
+/// `suffix` keeps one scan position per mailbox ("" main, "_labels").
+fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig, suffix: &str) -> Result<SyncResult, String> {
+    let mark_key = format!("imap_sync_mark{}", suffix);
+    let rescan_key = format!("imap_rescan_v1{}", suffix);
     let mut out = SyncResult::default();
     let own = cfg.from_email.trim().to_string();
     let (host, port, user) = imap_target(conn, cfg)?;
@@ -1353,13 +1369,13 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
     // EXAMINE = read-only: the server never sets \Seen on what we fetch.
     let mbox = session.examine("INBOX").map_err(|e| e.to_string())?;
     let validity = mbox.uid_validity.unwrap_or(0);
-    let mark: SyncMark = get_setting(conn, "imap_sync_mark")
+    let mark: SyncMark = get_setting(conn, &mark_key)
         .and_then(|j| serde_json::from_str(&j).ok())
         .unwrap_or_default();
     // One full rescan of the window after the matching widened (auto-replies
     // without references, replies from another address of the club): already
     // recorded messages are skipped by their message-id.
-    let rescan = get_setting(conn, "imap_rescan_v1").is_none();
+    let rescan = get_setting(conn, &rescan_key).is_none();
     let min_uid = if mark.uid_validity == validity && !rescan { mark.last_uid } else { 0 };
 
     let mut uids: Vec<u32> = session
@@ -1504,11 +1520,11 @@ fn run_sync(conn: &Connection, cfg: &crate::models::SmtpConfig) -> Result<SyncRe
     let _ = session.logout();
     put_setting(
         conn,
-        "imap_sync_mark",
+        &mark_key,
         &serde_json::to_string(&SyncMark { uid_validity: validity, last_uid: max_uid }).unwrap_or_default(),
     );
     if rescan {
-        put_setting(conn, "imap_rescan_v1", "1");
+        put_setting(conn, &rescan_key, "1");
     }
     out.no_answer = status::apply_no_answer(conn);
     Ok(out)

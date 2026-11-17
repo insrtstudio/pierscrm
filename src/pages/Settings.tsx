@@ -15,6 +15,9 @@ import {
   saveSmtpConfig,
   setSetting,
   testSmtp,
+  getLabelsSmtp,
+  saveLabelsSmtp,
+  testLabelsSmtp,
 } from "../lib/api";
 import type { SmtpConfig } from "../lib/types";
 import { PageHeader } from "../components/Layout";
@@ -59,6 +62,75 @@ const LEGACY: Record<string, Section> = { integrations: "services", general: "ap
 /// placeholder, never the real value; saving the untouched mask keeps the
 /// stored secret. Focusing selects it so typing replaces it whole.
 const selectOnFocus = { onFocus: (e: FocusEvent<HTMLInputElement>) => e.currentTarget.select() };
+
+/** The address label demos leave from: its own mailbox on the same server. */
+function LabelsSenderCard() {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["smtp-labels"], queryFn: getLabelsSmtp });
+  const [cfg, setCfg] = useState<SmtpConfig | null>(null);
+  const [testing, setTesting] = useState(false);
+  useEffect(() => {
+    if (data) setCfg(data);
+  }, [data]);
+  const store = async () => {
+    if (!cfg) return;
+    await saveLabelsSmtp(cfg);
+    qc.invalidateQueries({ queryKey: ["smtp-labels"] });
+    qc.invalidateQueries({ queryKey: ["label_demo"] });
+  };
+  const [save, saveBusy] = useSubmit(async () => {
+    await store();
+    toast(t("settings.saved"), "ok");
+  });
+  const runTest = async () => {
+    setTesting(true);
+    try {
+      await store();
+      const ok = await testLabelsSmtp();
+      toast(ok ? t("settings.test_ok") : t("settings.test_failed"), ok ? "ok" : "error");
+    } catch (e) {
+      toast(`${t("settings.test_failed")}: ${errorMessage(e)}`, "error");
+    } finally {
+      setTesting(false);
+    }
+  };
+  if (!cfg) return null;
+  const inp = (k: "from_email" | "from_name" | "password") => ({
+    className: "input",
+    value: cfg[k] ?? "",
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCfg({ ...cfg, [k]: e.target.value }),
+  });
+  return (
+    <div className="card p-6">
+      <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
+        <Mail size={15} /> {t("settings.labels_sender")}
+      </div>
+      <p className="mb-4 text-xs text-fg-subtle">{t("settings.labels_sender_help")}</p>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+        <Field label={t("settings.from_email")}>
+          <input {...inp("from_email")} placeholder="prenom@insrt.fr" />
+        </Field>
+        <Field label={t("settings.from_name")}>
+          <input {...inp("from_name")} placeholder="Piers" />
+        </Field>
+        <Field label={t("settings.labels_sender_password")} className="col-span-2">
+          <input type="password" autoComplete="off" {...inp("password")} {...selectOnFocus} />
+        </Field>
+      </div>
+      <div className="mt-5 flex justify-end gap-2">
+        <button className="btn-outline" onClick={runTest} disabled={testing || saveBusy}>
+          <Plug size={15} />
+          {testing ? t("settings.testing") : t("settings.test")}
+        </button>
+        <button className="btn-primary" onClick={save} disabled={saveBusy}>
+          {t("common.save")}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function Settings() {
   const [active, setActive] = useState<Section>("services");
@@ -353,6 +425,8 @@ export function Settings() {
             </button>
           </div>
         </div>
+
+        <LabelsSenderCard />
 
         {/* Email signature */}
         <div className="card p-6">

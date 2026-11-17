@@ -120,6 +120,7 @@ export interface DemoView {
   close_days: number;
   insrt_ready: boolean;
   smtp_ready: boolean;
+  sender: string | null;
   next_send?: string | null;
   targets: Target[];
 }

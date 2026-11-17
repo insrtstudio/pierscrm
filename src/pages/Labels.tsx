@@ -802,6 +802,9 @@ export function LabelDemoPage() {
             <span>{v.card.paused_reason ?? t("labels.smtp_missing")}</span>
           </div>
         )}
+        {v.smtp_ready && v.sender && (
+          <p className="mb-3 text-xs text-fg-subtle">{t("labels.sender_line", { email: v.sender })}</p>
+        )}
         <nav className="mb-6 grid grid-cols-2 gap-2 @lg:grid-cols-4" aria-label={t("labels.steps")}>
           {STEPS.map((s, i) => (
             <button

@@ -46,6 +46,8 @@ pub const SECRET_KEYS: &[&str] = &[
 
 /// Vault key of the SMTP password (stored inside the `smtp` JSON setting before).
 pub const SMTP_PASSWORD: &str = "smtp_password";
+/// Password of the second sending account (label demos).
+pub const SMTP_LABELS_PASSWORD: &str = "smtp_labels_password";
 
 pub fn is_secret(key: &str) -> bool {
     SECRET_KEYS.contains(&key)
@@ -251,8 +253,12 @@ pub fn ui_setting(conn: &Connection, key: &str) -> Option<String> {
 // ---------------- SMTP password ----------------
 
 pub fn smtp_fill_with(vault: &Vault, cfg: &mut SmtpConfig) {
+    smtp_fill_key(vault, SMTP_PASSWORD, cfg)
+}
+
+pub fn smtp_fill_key(vault: &Vault, key: &str, cfg: &mut SmtpConfig) {
     if cfg.password.is_empty() {
-        match vault.get(SMTP_PASSWORD) {
+        match vault.get(key) {
             Ok(Some(p)) => cfg.password = p,
             Ok(None) => {}
             Err(e) => eprintln!("[secrets] keychain read failed for smtp: {}", e),
@@ -262,17 +268,21 @@ pub fn smtp_fill_with(vault: &Vault, cfg: &mut SmtpConfig) {
 
 /// Before the `smtp` JSON is written: move the password to the vault and blank it.
 pub fn smtp_store_with(vault: &Vault, cfg: &mut SmtpConfig) -> Result<(), String> {
+    smtp_store_key(vault, SMTP_PASSWORD, cfg)
+}
+
+pub fn smtp_store_key(vault: &Vault, key: &str, cfg: &mut SmtpConfig) -> Result<(), String> {
     if cfg.password == MASK {
         cfg.password.clear();
         return Ok(());
     }
     if cfg.password.is_empty() {
-        if let Err(e) = vault.put(SMTP_PASSWORD, None) {
+        if let Err(e) = vault.put(key, None) {
             eprintln!("[secrets] keychain delete failed for smtp: {}", e);
         }
         return Ok(());
     }
-    match vault.put(SMTP_PASSWORD, Some(&cfg.password)) {
+    match vault.put(key, Some(&cfg.password)) {
         Ok(()) => cfg.password.clear(),
         Err(e) => eprintln!("[secrets] keychain write failed for smtp, kept in DB: {}", e),
     }
@@ -286,6 +296,15 @@ pub fn smtp_fill(cfg: &mut SmtpConfig) {
 
 pub fn smtp_store(cfg: &mut SmtpConfig) -> Result<(), String> {
     smtp_store_with(vault(), cfg)
+}
+
+/// Same two, for the labels account.
+pub fn smtp_labels_fill(cfg: &mut SmtpConfig) {
+    smtp_fill_key(vault(), SMTP_LABELS_PASSWORD, cfg)
+}
+
+pub fn smtp_labels_store(cfg: &mut SmtpConfig) -> Result<(), String> {
+    smtp_store_key(vault(), SMTP_LABELS_PASSWORD, cfg)
 }
 
 /// The config as the Settings page sees it (password replaced by MASK).

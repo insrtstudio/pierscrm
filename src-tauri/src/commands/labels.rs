@@ -1028,6 +1028,8 @@ pub struct DemoView {
     pub close_days: i64,
     pub insrt_ready: bool,
     pub smtp_ready: bool,
+    /// The address demos leave from (the labels account), once set.
+    pub sender: Option<String>,
     pub next_send: Option<String>,
     pub targets: Vec<TargetRow>,
 }
@@ -1038,9 +1040,9 @@ pub fn label_demo_get(state: State<'_, AppState>, id: i64) -> Result<DemoView, S
     let now = Utc::now();
     let d = demo(&conn, id)?;
     let r = load(&conn, id).ok_or("Démo introuvable.")?;
-    let smtp_ready = crate::commands::email::load_smtp_from(&state.pool)
-        .map(|c| !c.host.trim().is_empty() && !c.from_email.trim().is_empty() && !c.password.trim().is_empty())
-        .unwrap_or(false);
+    let account = crate::commands::email::load_labels_smtp(&state.pool).ok().flatten();
+    let smtp_ready = account.as_ref().is_some_and(|c| !c.host.trim().is_empty() && !c.password.trim().is_empty());
+    let sender = account.map(|c| c.from_email.trim().to_string());
     Ok(DemoView {
         kit_owned_id: kit_owned(&conn, id),
         card: card(&conn, id, now).ok_or("Démo introuvable.")?,
@@ -1053,6 +1055,7 @@ pub fn label_demo_get(state: State<'_, AppState>, id: i64) -> Result<DemoView, S
         close_days: d.close_days,
         insrt_ready: residency::insrt::client(&conn).is_some(),
         smtp_ready,
+        sender,
         next_send: engine::next_send_estimate(&conn, id, &r.config, now).map(engine::fmt),
         targets: targets(&conn, id, now),
     })

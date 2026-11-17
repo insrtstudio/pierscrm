@@ -136,14 +136,23 @@ pub fn is_auth_error(text: &str) -> bool {
 /// Apply the gate to every residency campaign with the autopilot on.
 pub fn apply_gates(conn: &Connection, smtp_ok: bool, now: DateTime<Utc>) -> Gate {
     let gate = safety_gate(conn, smtp_ok, now);
+    let labels_ok = crate::commands::email::labels_sender_ready(conn);
     for id in autopilot_ids(conn) {
         match &gate {
+            // A demo waits for the labels address, it never borrows the booking one.
+            Gate::Open if !labels_ok && is_label(conn, id) => {
+                set_pause(conn, id, "soft", crate::commands::email::LABELS_SENDER_MISSING)
+            }
             Gate::Open => clear_soft_pause(conn, id),
             Gate::Soft(r) => set_pause(conn, id, "soft", r),
             Gate::Hard(r) => set_pause(conn, id, "hard", r),
         }
     }
     gate
+}
+
+fn is_label(conn: &Connection, campaign_id: i64) -> bool {
+    conn.query_row("SELECT kind = 'label' FROM campaigns WHERE id = ?1", params![campaign_id], |r| r.get(0)).unwrap_or(false)
 }
 
 fn autopilot_ids(conn: &Connection) -> Vec<i64> {
@@ -437,6 +446,11 @@ pub fn send_picked(conn: &Connection, mailer: &dyn Mailer, m: &DueMsg, now: Date
         .unwrap_or_default();
     match mailer.send(m.contact_id, m.campaign_id, &m.to, &m.subject, &m.body) {
         Err(e) => {
+            // A demo never leaves from the booking address: it waits for its own.
+            if e == crate::commands::email::LABELS_SENDER_MISSING {
+                set_pause(conn, m.campaign_id, "soft", &e);
+                return Sent::Paused;
+            }
             if e.contains("Sender email") || e.contains("SMTP host") {
                 set_pause(conn, m.campaign_id, "soft", "SMTP non configuré (Réglages, Email).");
                 return Sent::Paused;

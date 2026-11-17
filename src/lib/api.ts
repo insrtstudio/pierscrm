@@ -137,6 +137,10 @@ export const importFile = (req: {
 export const getSmtpConfig = () => invoke<SmtpConfig>("get_smtp_config");
 export const saveSmtpConfig = (config: SmtpConfig) => invoke<void>("save_smtp_config", { config });
 export const testSmtp = () => invoke<boolean>("test_smtp");
+// Second sending account, for label demos (server taken from the main one).
+export const getLabelsSmtp = () => invoke<SmtpConfig>("get_labels_smtp");
+export const saveLabelsSmtp = (config: SmtpConfig) => invoke<void>("save_labels_smtp", { config });
+export const testLabelsSmtp = () => invoke<boolean>("test_labels_smtp");
 export const sendEmail = (p: {
   contact_id?: number | null;
   campaign_id?: number | null;
