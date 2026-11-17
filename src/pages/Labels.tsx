@@ -57,7 +57,6 @@ import {
   setTargetOutcome,
   type DemoCard,
   type DemoView,
-  type KitPage,
   type Label,
   type LabelInput,
   type Outcome,
@@ -286,10 +285,9 @@ function ListenBlock({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
-  const [page, setPage] = useState<KitPage>(v.kit_page);
   const owned = v.kit_owned_id ?? null;
   const [create, creating] = useSubmit(async () => {
-    await createDemoKit(v.card.id, page);
+    await createDemoKit(v.card.id);
     toast(owned ? t("labels.page_updated") : t("labels.page_created"));
     onCreated();
   });
@@ -306,23 +304,11 @@ function ListenBlock({
       {mode === "own" && (
         <div className="space-y-3">
           <p className="text-[12.5px] text-fg-subtle">{t("labels.own_hint")}</p>
-          <Field label={t("labels.page_stats")}>
-            <textarea
-              className="input font-mono text-[12.5px]"
-              rows={5}
-              value={page.stats}
-              onChange={(e) => setPage({ ...page, stats: e.target.value })}
-              placeholder={t("labels.page_stats_placeholder")}
-            />
-            <p className="mt-1.5 text-[12.5px] text-fg-subtle">{t("labels.page_stats_hint")}</p>
-          </Field>
-          <Field label={t("labels.page_pitch_en")}>
-            <textarea className="input text-[13px]" rows={3} value={page.pitch_en} onChange={(e) => setPage({ ...page, pitch_en: e.target.value })} />
-          </Field>
-          <Field label={t("labels.page_pitch_fr")}>
-            <textarea className="input text-[13px]" rows={3} value={page.pitch_fr} onChange={(e) => setPage({ ...page, pitch_fr: e.target.value })} />
-            <p className="mt-1.5 text-[12.5px] text-fg-subtle">{t("labels.page_pitch_hint")}</p>
-          </Field>
+          <ul className="list-disc space-y-1 pl-5 text-[12.5px] text-fg-subtle">
+            {(["tracks", "numbers", "videos", "bio"] as const).map((k) => (
+              <li key={k}>{t(`labels.page_auto_${k}`)}</li>
+            ))}
+          </ul>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span className={clsx("text-[12.5px]", owned ? "text-ok" : "text-fg-subtle")}>
               {owned ? t("labels.page_ready", { title: v.press_kit_title ?? "" }) : t("labels.page_none")}

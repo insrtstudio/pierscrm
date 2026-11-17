@@ -1022,7 +1022,6 @@ pub struct DemoView {
     pub listen_url: Option<String>,
     /// The insrt page this demo created (None: none, or a kit picked from the list).
     pub kit_owned_id: Option<String>,
-    pub kit_page: KitPage,
     pub steps: Vec<Step>,
     pub window: Window,
     pub wave_size: i64,
@@ -1042,10 +1041,8 @@ pub fn label_demo_get(state: State<'_, AppState>, id: i64) -> Result<DemoView, S
     let smtp_ready = crate::commands::email::load_smtp_from(&state.pool)
         .map(|c| !c.host.trim().is_empty() && !c.from_email.trim().is_empty() && !c.password.trim().is_empty())
         .unwrap_or(false);
-    let (kit_owned_id, kit_page) = kit_page(&conn, id);
     Ok(DemoView {
-        kit_owned_id,
-        kit_page,
+        kit_owned_id: kit_owned(&conn, id),
         card: card(&conn, id, now).ok_or("Démo introuvable.")?,
         press_kit_id: r.config.press_kit_id.clone(),
         press_kit_title: r.config.press_kit_title.clone(),
@@ -1178,71 +1175,29 @@ pub fn label_demo_open_wave(state: State<'_, AppState>, id: i64) -> Result<usize
     open_wave(&conn, id, client.as_deref())
 }
 
-/// What the demo's own listening page shows besides the tracks. A label
-/// looks at the project's figures first, so the page carries numbers (one per
-/// line, "12 000 | auditeurs mensuels | monthly listeners") and, if wanted, a
-/// short presentation. No headline slogan: the page says "Démos".
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
-pub struct KitPage {
-    #[serde(default)]
-    pub stats: String,
-    #[serde(default)]
-    pub pitch_fr: String,
-    #[serde(default)]
-    pub pitch_en: String,
-}
-
-const KIT_DEFAULT_KEY: &str = "label_kit_page_default";
-
-/// The kit JSON insrt stores (same shape as its back office).
-pub fn kit_content(page: &KitPage) -> serde_json::Value {
-    let stats: Vec<serde_json::Value> = page
-        .stats
-        .lines()
-        .map(|l| l.split('|').map(str::trim).collect::<Vec<_>>())
-        .filter(|p| !p[0].is_empty())
-        .take(12)
-        .map(|p| {
-            let fr = p.get(1).copied().unwrap_or("");
-            let en = p.get(2).copied().filter(|x| !x.is_empty()).unwrap_or(fr);
-            serde_json::json!({ "value": p[0], "label": { "fr": fr, "en": en } })
-        })
-        .collect();
+/// The kit insrt stores for a demo page. Nothing is typed here: marked as a
+/// page for a label, insrt shows the tracks first, then the artist's figures
+/// read live (YouTube, Spotify, the numbers of the artist profile), the
+/// latest videos and the bio. Nothing to keep up to date per demo.
+pub fn kit_content() -> serde_json::Value {
     serde_json::json!({
         "headline": { "fr": "Démos", "en": "Demos" },
-        "pitch": { "fr": page.pitch_fr.trim(), "en": page.pitch_en.trim() },
-        "stats": stats,
+        "audience": "label",
     })
 }
 
-/// The page of a demo: (id of the kit it created, if any; its content, or
-/// the content of the last page written, to start the next demo from).
-fn kit_page(conn: &Connection, id: i64) -> (Option<String>, KitPage) {
-    let row: Option<(Option<String>, Option<String>, Option<String>, Option<String>)> = conn
-        .query_row(
-            "SELECT kit_owned_id, kit_stats, kit_pitch_fr, kit_pitch_en FROM label_demos WHERE campaign_id = ?1",
-            params![id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )
-        .ok();
-    match row {
-        Some((owned, Some(stats), fr, en)) => {
-            (owned, KitPage { stats, pitch_fr: fr.unwrap_or_default(), pitch_en: en.unwrap_or_default() })
-        }
-        other => (
-            other.and_then(|r| r.0),
-            engine::get(conn, KIT_DEFAULT_KEY).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default(),
-        ),
-    }
+/// Id of the insrt page this demo created, if any.
+fn kit_owned(conn: &Connection, id: i64) -> Option<String> {
+    conn.query_row("SELECT kit_owned_id FROM label_demos WHERE campaign_id = ?1", params![id], |r| r.get(0)).ok().flatten()
 }
 
-/// "Créer la page d'écoute" / "Mettre à jour la page": a listening page of
-/// its own on insrt for this demo (a press kit named after it), with the
-/// figures and the presentation given. Every label then gets a personal link
+/// "Créer la page d'écoute": a listening page of its own on insrt for this
+/// demo (a press kit named after it). Every label then gets a personal link
 /// to it, written when its first email is drafted. The page plays the tracks
-/// ticked for the listening page in the insrt back office. Only a page this
-/// demo created is ever rewritten: a kit picked from the list is left alone.
-pub fn create_kit(conn: &Connection, id: i64, page: &KitPage, insrt: &dyn Insrt) -> Result<(String, String), String> {
+/// ticked for the listening page in the insrt back office and fills itself
+/// (see `kit_content`). Only a page this demo created is ever rewritten: a
+/// kit picked from the list is left alone.
+pub fn create_kit(conn: &Connection, id: i64, insrt: &dyn Insrt) -> Result<(String, String), String> {
     let d = demo(conn, id)?;
     let mut cfg = load(conn, id).map(|r| r.config).ok_or("Démo introuvable.")?;
     let artist: String = conn
@@ -1252,25 +1207,17 @@ pub fn create_kit(conn: &Connection, id: i64, page: &KitPage, insrt: &dyn Insrt)
         .unwrap_or_else(|| "Piers".into());
     let name = if cfg.track.trim().is_empty() { d.name.clone() } else { cfg.track.trim().to_string() };
     let title = format!("Démos labels · {}", name);
-    let (owned, _) = kit_page(conn, id);
     let ack = insrt.upsert_press_kit(&residency::insrt::PressKitUpsert {
-        id: owned,
+        id: kit_owned(conn, id),
         artist_slug: residency::insrt::slug(&artist),
         title: title.clone(),
-        content: kit_content(page),
+        content: kit_content(),
     })?;
     let title = if ack.title.is_empty() { title } else { ack.title };
     cfg.press_kit_id = Some(ack.id.clone());
     cfg.press_kit_title = Some(title.clone());
     save_config(conn, id, &cfg)?;
-    conn.execute(
-        "UPDATE label_demos SET kit_owned_id = ?2, kit_stats = ?3, kit_pitch_fr = ?4, kit_pitch_en = ?5 WHERE campaign_id = ?1",
-        params![id, ack.id, page.stats, page.pitch_fr, page.pitch_en],
-    )
-    .map_err(|e| e.to_string())?;
-    if let Ok(v) = serde_json::to_string(page) {
-        engine::put(conn, KIT_DEFAULT_KEY, &v);
-    }
+    conn.execute("UPDATE label_demos SET kit_owned_id = ?2 WHERE campaign_id = ?1", params![id, ack.id]).map_err(|e| e.to_string())?;
     Ok((ack.id, title))
 }
 
@@ -1281,12 +1228,12 @@ pub struct KitRef {
 }
 
 #[tauri::command]
-pub async fn label_demo_create_kit(state: State<'_, AppState>, id: i64, page: KitPage) -> Result<KitRef, String> {
+pub async fn label_demo_create_kit(state: State<'_, AppState>, id: i64) -> Result<KitRef, String> {
     let pool = state.pool.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let client = residency::insrt::client(&conn).ok_or("insrt.studio n'est pas réglé (Réglages).")?;
-        let (id, title) = create_kit(&conn, id, &page, client.as_ref())?;
+        let (id, title) = create_kit(&conn, id, client.as_ref())?;
         Ok(KitRef { id, title })
     })
     .await
@@ -1507,20 +1454,12 @@ mod tests {
     }
 
     #[test]
-    fn listening_page_carries_the_figures() {
-        let page = KitPage {
-            stats: "12 000 | auditeurs mensuels | monthly listeners\n\n 85 | dates jouées \n | sans valeur".into(),
-            pitch_fr: " House et tech house. ".into(),
-            pitch_en: String::new(),
-        };
-        let c = kit_content(&page);
-        assert_eq!(c["stats"].as_array().unwrap().len(), 2);
-        assert_eq!(c["stats"][0]["value"], "12 000");
-        assert_eq!(c["stats"][0]["label"]["en"], "monthly listeners");
-        // No English label: the French one is shown rather than nothing.
-        assert_eq!(c["stats"][1]["label"]["en"], "dates jouées");
-        assert_eq!(c["pitch"]["fr"], "House et tech house.");
+    fn listening_page_is_marked_for_labels() {
+        let c = kit_content();
+        assert_eq!(c["audience"], "label");
         assert_eq!(c["headline"]["en"], "Demos");
+        // Nothing typed: figures and bio are read live by the page.
+        assert!(c.get("stats").is_none() && c.get("pitch").is_none());
     }
 
     #[test]

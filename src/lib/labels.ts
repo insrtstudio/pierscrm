@@ -114,7 +114,6 @@ export interface DemoView {
   listen_url?: string | null;
   /// The insrt page this demo created (null: none, or a page picked from the list).
   kit_owned_id?: string | null;
-  kit_page: KitPage;
   steps: Step[];
   window: { days: number[]; start: string; end: string };
   wave_size: number;
@@ -123,14 +122,6 @@ export interface DemoView {
   smtp_ready: boolean;
   next_send?: string | null;
   targets: Target[];
-}
-
-/// What the demo's own listening page shows besides the tracks: figures (one
-/// per line, "value | label | English label") and an optional presentation.
-export interface KitPage {
-  stats: string;
-  pitch_fr: string;
-  pitch_en: string;
 }
 
 export interface DemoPatch {
@@ -168,8 +159,7 @@ export const setDemoTargets = (id: number, labelIds: number[]) =>
 export const addLabelsToDemo = (id: number, labelIds: number[]) =>
   invoke<number>("label_demo_add_labels", { id, labelIds });
 export const openWave = (id: number) => invoke<number>("label_demo_open_wave", { id });
-export const createDemoKit = (id: number, page: KitPage) =>
-  invoke<{ id: string; title: string }>("label_demo_create_kit", { id, page });
+export const createDemoKit = (id: number) => invoke<{ id: string; title: string }>("label_demo_create_kit", { id });
 export const redraftDemo = (id: number) => invoke<number>("label_demo_redraft", { id });
 export const setTargetOutcome = (targetId: number, outcome: Outcome | null) =>
   invoke<void>("label_target_set_outcome", { targetId, outcome });
