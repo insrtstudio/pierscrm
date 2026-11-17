@@ -985,12 +985,12 @@ function missingOf(p: PagePreview, t: T): { text: string; blocking?: boolean }[]
     !/date|show|gig|soirée/.test(labels) && t("labels.preview_num_shows"),
   ].filter(Boolean) as string[];
   if (manual.length) out.push({ text: t("labels.preview_miss_manual", { list: manual.join(", ") }) });
-  if (!p.bio.en) out.push({ text: t("labels.preview_miss_bio_en") });
-  if (!p.bio.fr) out.push({ text: t("labels.preview_miss_bio_fr") });
+  const own = p.bioOwn ?? { fr: !!p.bio.fr, en: !!p.bio.en };
+  if (!own.en) out.push({ text: t(own.fr ? "labels.preview_miss_bio_en" : "labels.preview_miss_bio") });
+  else if (!own.fr) out.push({ text: t("labels.preview_miss_bio_fr") });
   if (p.videos.length === 0) out.push({ text: t("labels.preview_miss_videos") });
   if (!p.heroPhoto) out.push({ text: t("labels.preview_miss_photo") });
-  if (p.links.streaming.length === 0) out.push({ text: t("labels.preview_miss_links") });
-  if (!p.contacts.booking && !p.contacts.management) out.push({ text: t("labels.preview_miss_contact") });
+  if (p.downloads === false) out.push({ text: t("labels.preview_miss_downloads") });
   for (const e of p.metrics.errors) out.push({ text: e });
   return out;
 }
@@ -1046,6 +1046,7 @@ function PagePreviewCard({ demoId, kitId }: { demoId: number; kitId: string }) {
             <div>
               <div className="eyebrow mb-2">
                 1 · {t("labels.preview_tracks")} · {p.tracks.length}
+                {p.downloads && <span className="ml-2 normal-case tracking-normal text-ok">{t("labels.preview_downloads")}</span>}
               </div>
               <ul className="text-[13px]">
                 {p.tracks.map((x, i) => (
@@ -1091,12 +1092,13 @@ function PagePreviewCard({ demoId, kitId }: { demoId: number; kitId: string }) {
                 </ul>
               </div>
               <div>
-                <div className="eyebrow mb-2">4 · {t("labels.preview_links")}</div>
-                <p className="text-fg-subtle">{[...p.links.streaming, ...p.links.social].join(", ") || "·"}</p>
-              </div>
-              <div>
-                <div className="eyebrow mb-2">5 · {t("labels.preview_bio")}</div>
-                <p className="line-clamp-4 text-fg-subtle">{p.bio.en || p.bio.fr || "·"}</p>
+                <div className="eyebrow mb-2">4 · {t("labels.preview_bio")}</div>
+                {(["en", "fr"] as const).map((l) => (
+                  <p key={l} className="mb-2 line-clamp-3 text-fg-subtle">
+                    <span className="badge mr-2 bg-muted text-fg-subtle">{l.toUpperCase()}</span>
+                    {p.bio[l] || "·"}
+                  </p>
+                ))}
               </div>
             </div>
           </div>

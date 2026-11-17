@@ -168,7 +168,12 @@ export interface PagePreview {
   tracks: { title: string; durationSec?: number | null; heading?: string | null }[];
   numbers: Record<"fr" | "en", { display: string; label: string; source: "youtube" | "spotify" | "manual" }[]>;
   videos: { title: string; views?: number | null }[];
+  /// What each language of the page shows.
   bio: { fr: string; en: string };
+  /// false: that language falls back to the other one.
+  bioOwn?: { fr: boolean; en: boolean };
+  /// Track downloads open on the page.
+  downloads?: boolean;
   links: { streaming: string[]; social: string[] };
   heroPhoto: boolean;
   epkPdf: boolean;
