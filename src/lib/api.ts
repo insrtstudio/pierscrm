@@ -253,6 +253,11 @@ export const listCampaigns = () => invoke<Campaign[]>("list_campaigns");
 export const saveCampaign = (campaign: Campaign) =>
   invoke<number>("save_campaign", { campaign });
 export const deleteCampaign = (id: number) => invoke<void>("delete_campaign", { id });
+/// End a campaign: unsent emails cancelled, contacts not handed back to the
+/// manual follow-ups, history kept.
+export const stopCampaign = (id: number) => invoke<{ cancelled: number; released: number }>("campaign_stop", { id });
+/// Back to active with sending paused; returns the drafts to validate again.
+export const reopenCampaign = (id: number) => invoke<number>("campaign_reopen", { id });
 export const listCampaignRecipients = (campaignId: number) =>
   invoke<number[]>("list_campaign_recipients", { campaignId });
 // Campaign audience (campaign_contacts): planned recipients and their state.

@@ -39,9 +39,9 @@ export function Prospection() {
     <TabbedPage
       title={t("nav.prospect")}
       tabs={[
-        { key: "pipeline", label: t("sections.prospect_pipeline"), render: () => <Contacts /> },
-        { key: "venues", label: t("sections.discovery_venues"), render: () => <Venues /> },
-        { key: "curators", label: t("sections.discovery_curators"), render: () => <Radar /> },
+        { key: "pipeline", label: t("sections.prospect_pipeline"), subtitle: t("sections.prospect_pipeline_sub"), render: () => <Contacts /> },
+        { key: "venues", label: t("sections.discovery_venues"), subtitle: t("sections.discovery_venues_sub"), render: () => <Venues /> },
+        { key: "curators", label: t("sections.discovery_curators"), subtitle: t("sections.discovery_curators_sub"), render: () => <Radar /> },
       ]}
     />
   );

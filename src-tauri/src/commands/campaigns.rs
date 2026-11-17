@@ -66,9 +66,22 @@ pub fn save_campaign(state: State<'_, AppState>, campaign: Campaign) -> Result<i
 #[tauri::command(async)]
 pub fn delete_campaign(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let conn = state.pool.get().map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM campaigns WHERE id=?1", params![id])
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    crate::commands::residency::stop::delete(&conn, id)
+}
+
+/// "Terminer la campagne": nothing more leaves, its contacts are not handed
+/// back to the manual follow-ups, the history stays (residency/stop.rs).
+#[tauri::command(async)]
+pub fn campaign_stop(state: State<'_, AppState>, id: i64) -> Result<crate::commands::residency::stop::Stopped, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    crate::commands::residency::stop::stop(&conn, id)
+}
+
+/// "Rouvrir": active again, autopilot off, cancelled emails back as drafts.
+#[tauri::command(async)]
+pub fn campaign_reopen(state: State<'_, AppState>, id: i64) -> Result<usize, String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    crate::commands::residency::stop::reopen(&conn, id)
 }
 
 /// Contacts already mailed in a campaign (a sent email carries its id, or goes to

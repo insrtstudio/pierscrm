@@ -411,6 +411,8 @@ pub(crate) fn followups(conn: &rusqlite::Connection) -> Result<Vec<Followup>, St
          FROM agg a JOIN contacts c ON c.id = a.cid
          WHERE COALESCE(c.followup_dismissed, 0) = 0
            AND c.status NOT IN ('confirmed', 'declined', 'no_answer')
+           -- A label is followed up by its demo (commands/labels), never by hand here.
+           AND COALESCE(c.category, '') <> 'label'
            AND a.cnt < {ceiling}
            AND (a.last_reply IS NULL OR a.last_reply < a.last_email)
            AND NOT EXISTS (SELECT 1 FROM email_replies r

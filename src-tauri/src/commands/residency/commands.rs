@@ -798,6 +798,11 @@ pub fn actions(conn: &Connection) -> Result<Vec<ActionItem>, String> {
         if due_today == 0 && r.paused_reason.is_none() {
             continue;
         }
+        // Paused by hand after it ran: the user knows, and Campagnes shows it.
+        // A campaign never started still says its validated emails wait.
+        if !r.autopilot && r.paused_reason.is_none() && r.autopilot_confirmed_at.is_some() {
+            continue;
+        }
         let planned = due_today.min((r.config.daily_max - engine::campaign_sent_today(conn, id)).max(0));
         let mut a = ActionItem::new(format!("rp{}", id), "plan", today.clone(), name.clone());
         a.campaign_id = Some(id);

@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { TabbedPage, Loader, ErrorState, EmptyState } from "../components/Layout";
 import { Field, Modal, errorMessage, useConfirm, useToast } from "../components/ui";
+import { reopenCampaign, stopCampaign } from "../lib/api";
 import { InsrtActivityPanel } from "../components/InsrtActivity";
 import { TimingBadge } from "../components/FitTiming";
 import {
@@ -107,11 +108,11 @@ export function ResidencyPage() {
       title={v.campaign.name}
       subtitle={t("residency.subtitle")}
       tabs={[
-        { key: "pitch", label: t("residency.tab_pitch"), render: () => wrap(<PitchTab view={v} />) },
-        { key: "target", label: t("residency.tab_target"), render: () => wrap(<TargetTab view={v} />) },
-        { key: "sequence", label: t("residency.tab_sequence"), render: () => wrap(<SequenceTab view={v} />) },
-        { key: "follow", label: t("residency.tab_follow"), render: () => wrap(<FollowTab view={v} />) },
-        { key: "reports", label: t("residency.tab_reports"), render: () => wrap(<ReportsTab view={v} />) },
+        { key: "pitch", label: t("residency.tab_pitch"), subtitle: t("residency.tab_pitch_sub"), render: () => wrap(<PitchTab view={v} />) },
+        { key: "target", label: t("residency.tab_target"), subtitle: t("residency.tab_target_sub"), render: () => wrap(<TargetTab view={v} />) },
+        { key: "sequence", label: t("residency.tab_sequence"), subtitle: t("residency.tab_sequence_sub"), render: () => wrap(<SequenceTab view={v} />) },
+        { key: "follow", label: t("residency.tab_follow"), subtitle: t("residency.tab_follow_sub"), render: () => wrap(<FollowTab view={v} />) },
+        { key: "reports", label: t("residency.tab_reports"), subtitle: t("residency.tab_reports_sub"), render: () => wrap(<ReportsTab view={v} />) },
       ]}
     />
   );
@@ -153,7 +154,27 @@ function StatusBar({ view }: { view: ResidencyView }) {
     },
     onError: (e) => toast(errorMessage(e), "error"),
   });
-  const line = s.paused_reason
+  const confirm = useConfirm();
+  const ended = view.campaign.status !== "active";
+  const end = useMutation({
+    mutationFn: () => stopCampaign(view.campaign.id!),
+    onSuccess: (r) => {
+      invalidate();
+      toast(t("residency.ended_ok", { cancelled: r.cancelled }), "ok");
+    },
+    onError: (e) => toast(errorMessage(e), "error"),
+  });
+  const reopen = useMutation({
+    mutationFn: () => reopenCampaign(view.campaign.id!),
+    onSuccess: (n) => {
+      invalidate();
+      toast(t("residency.reopened_ok", { count: n }), "ok");
+    },
+    onError: (e) => toast(errorMessage(e), "error"),
+  });
+  const line = ended
+    ? t("residency.status_done")
+    : s.paused_reason
     ? t("residency.status_paused", { reason: s.paused_reason })
     : s.autopilot
       ? [
@@ -168,15 +189,19 @@ function StatusBar({ view }: { view: ResidencyView }) {
   return (
     <div className="mb-6 space-y-3">
       <div className="card flex flex-wrap items-center gap-4 p-4">
-        <Bot size={18} className={clsx(s.autopilot && !s.paused_reason ? "text-ok" : "text-fg-faint")} />
+        <Bot size={18} className={clsx(!ended && s.autopilot && !s.paused_reason ? "text-ok" : "text-fg-faint")} />
         <div className="min-w-0 flex-1">
           <div className="eyebrow text-fg">{t("residency.autopilot")}</div>
-          <div className={clsx("mt-0.5 text-sm", s.paused_reason ? "text-danger" : "text-fg-subtle")}>{line}</div>
+          <div className={clsx("mt-0.5 text-sm", s.paused_reason && !ended ? "text-danger" : "text-fg-subtle")}>{line}</div>
         </div>
         <div className="text-2xs text-fg-subtle tabular">
           {t("residency.ai_cost", { eur: view.cost.cost_eur.toFixed(2), calls: view.cost.calls })}
         </div>
-        {s.autopilot && !s.paused_reason ? (
+        {ended ? (
+          <button className="btn-outline" onClick={() => reopen.mutate()} disabled={reopen.isPending}>
+            {t("residency.reopen")}
+          </button>
+        ) : s.autopilot && !s.paused_reason ? (
           <button className="btn-danger" onClick={() => toggle.mutate(false)} disabled={toggle.isPending}>
             <Pause size={15} /> {t("residency.pause")}
           </button>
@@ -186,7 +211,16 @@ function StatusBar({ view }: { view: ResidencyView }) {
             disabled={toggle.isPending}
             onClick={() => (s.confirmed && !s.paused_reason ? toggle.mutate(true) : setConfirmOpen(true))}
           >
-            <Play size={15} /> {s.paused_reason || s.autopilot ? t("residency.resume") : t("residency.start")}
+            <Play size={15} /> {s.paused_reason || s.autopilot || s.confirmed ? t("residency.resume") : t("residency.launch")}
+          </button>
+        )}
+        {!ended && (
+          <button
+            className="btn-ghost text-fg-subtle"
+            disabled={end.isPending}
+            onClick={() => confirm(t("residency.end_confirm", { name: view.campaign.name })) && end.mutate()}
+          >
+            {t("residency.end_campaign")}
           </button>
         )}
       </div>
@@ -957,7 +991,7 @@ function SequenceTab({ view }: { view: ResidencyView }) {
               <Field label={t("residency.start")}>
                 <input type="time" className="input" value={cfg.window.start} onChange={(e) => set("window", { ...cfg.window, start: e.target.value })} />
               </Field>
-              <Field label={t("residency.end")}>
+              <Field label={t("residency.end_campaign")}>
                 <input type="time" className="input" value={cfg.window.end} onChange={(e) => set("window", { ...cfg.window, end: e.target.value })} />
               </Field>
             </div>

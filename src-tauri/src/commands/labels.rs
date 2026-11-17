@@ -81,6 +81,12 @@ pub fn migrate(conn: &Connection) {
             UNIQUE (campaign_id, label_id)
         )",
         "CREATE INDEX IF NOT EXISTS idx_label_targets_campaign ON label_targets(campaign_id, wave, rank)",
+        // The listening page the demo created on insrt, and what it shows:
+        // the figures a label looks at, an optional short presentation.
+        "ALTER TABLE label_demos ADD COLUMN kit_owned_id TEXT",
+        "ALTER TABLE label_demos ADD COLUMN kit_stats TEXT",
+        "ALTER TABLE label_demos ADD COLUMN kit_pitch_fr TEXT",
+        "ALTER TABLE label_demos ADD COLUMN kit_pitch_en TEXT",
     ] {
         let _ = conn.execute(stmt, []);
     }
@@ -371,36 +377,32 @@ pub fn label_steps() -> Vec<Step> {
     vec![
         Step {
             offset_days: 0,
-            subject: "{{track}}, démo pour {{label}}".into(),
+            subject: "Démos pour {{label}}".into(),
             body: "Hello,\n\n\
-                   Moi c'est Thibault, je produis sous le nom de {{artist}}, house et tech house. J'aime bien ce que vous sortez chez {{label}}, et je pense que {{track}} peut trouver sa place chez vous.\n\n\
-                   Le morceau est en écoute privée juste en dessous, il n'est sorti nulle part.\n{{press_link}}\n\n\
-                   Si ça vous parle, je vous envoie les fichiers.\n\n\
-                   À bientôt,\nThibault"
+                   Thibault, je produis sous le nom de {{artist}} (house, tech house). Je vous envoie mes dernières démos, aucune n'est sortie.\n{{press_link}}\n\n\
+                   Si un morceau vous intéresse, je vous envoie les fichiers.\n\n\
+                   Merci,\nThibault"
                 .into(),
-            subject_en: "{{track}}, demo for {{label}}".into(),
+            subject_en: "Demos for {{label}}".into(),
             body_en: "Hey,\n\n\
-                      I'm Thibault, I produce as {{artist}}, house and tech house. Really like what you're putting out on {{label}}, and I think {{track}} could fit in.\n\n\
-                      The track is on a private link just below, unreleased.\n{{press_link}}\n\n\
-                      If it sounds good to you, I'll send over the files.\n\n\
-                      Cheers,\nThibault"
+                      Thibault here, I produce as {{artist}} (house, tech house). Sending you my latest demos, all unreleased.\n{{press_link}}\n\n\
+                      If a track works for you, I'll send the files over.\n\n\
+                      Thanks,\nThibault"
                 .into(),
             ..Default::default()
         },
         Step {
             offset_days: FOLLOWUP_DAYS,
-            subject: "Re: {{track}}, démo pour {{label}}".into(),
+            subject: "Re: Démos pour {{label}}".into(),
             body: "Hello,\n\n\
-                   Petite relance au sujet de {{track}}, je sais que vous recevez beaucoup de démos.\n\n\
-                   Le lien d'écoute est toujours là.\n{{press_link}}\n\n\
-                   Et si ce n'est pas pour {{label}}, dites-le-moi simplement, aucun souci.\n\n\
+                   Je me permets de relancer pour mes démos.\n{{press_link}}\n\n\
+                   Si ce n'est pas pour {{label}}, dites-le-moi, aucun souci.\n\n\
                    Merci,\nThibault"
                 .into(),
-            subject_en: "Re: {{track}}, demo for {{label}}".into(),
+            subject_en: "Re: Demos for {{label}}".into(),
             body_en: "Hey,\n\n\
-                      Quick bump about {{track}}, I know you get a lot of demos.\n\n\
-                      The private link is still up.\n{{press_link}}\n\n\
-                      And if it's not one for {{label}}, just tell me, no worries at all.\n\n\
+                      Following up on my demos.\n{{press_link}}\n\n\
+                      If it's not for {{label}}, just say so, no worries.\n\n\
                       Thanks,\nThibault"
                 .into(),
             ..Default::default()
@@ -453,7 +455,7 @@ pub fn create_demo(
 ) -> Result<i64, String> {
     let track = track.trim();
     if track.is_empty() {
-        return Err("Donnez le titre du morceau.".into());
+        return Err("Donnez un nom à la démo.".into());
     }
     if let Some(u) = clean(listen_url.clone()) {
         if !u.starts_with("http") {
@@ -1018,6 +1020,9 @@ pub struct DemoView {
     pub press_kit_id: Option<String>,
     pub press_kit_title: Option<String>,
     pub listen_url: Option<String>,
+    /// The insrt page this demo created (None: none, or a kit picked from the list).
+    pub kit_owned_id: Option<String>,
+    pub kit_page: KitPage,
     pub steps: Vec<Step>,
     pub window: Window,
     pub wave_size: i64,
@@ -1037,7 +1042,10 @@ pub fn label_demo_get(state: State<'_, AppState>, id: i64) -> Result<DemoView, S
     let smtp_ready = crate::commands::email::load_smtp_from(&state.pool)
         .map(|c| !c.host.trim().is_empty() && !c.from_email.trim().is_empty() && !c.password.trim().is_empty())
         .unwrap_or(false);
+    let (kit_owned_id, kit_page) = kit_page(&conn, id);
     Ok(DemoView {
+        kit_owned_id,
+        kit_page,
         card: card(&conn, id, now).ok_or("Démo introuvable.")?,
         press_kit_id: r.config.press_kit_id.clone(),
         press_kit_title: r.config.press_kit_title.clone(),
@@ -1068,7 +1076,7 @@ pub fn save_demo(conn: &Connection, id: i64, p: DemoPatch) -> Result<(), String>
     demo(conn, id)?;
     let track = p.track.trim().to_string();
     if track.is_empty() {
-        return Err("Donnez le titre du morceau.".into());
+        return Err("Donnez un nom à la démo.".into());
     }
     if p.steps.is_empty() || p.steps[0].offset_days != 0 {
         return Err("Le premier mail part à J0.".into());
@@ -1168,6 +1176,121 @@ pub fn label_demo_open_wave(state: State<'_, AppState>, id: i64) -> Result<usize
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let client = residency::insrt::client(&conn);
     open_wave(&conn, id, client.as_deref())
+}
+
+/// What the demo's own listening page shows besides the tracks. A label
+/// looks at the project's figures first, so the page carries numbers (one per
+/// line, "12 000 | auditeurs mensuels | monthly listeners") and, if wanted, a
+/// short presentation. No headline slogan: the page says "Démos".
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KitPage {
+    #[serde(default)]
+    pub stats: String,
+    #[serde(default)]
+    pub pitch_fr: String,
+    #[serde(default)]
+    pub pitch_en: String,
+}
+
+const KIT_DEFAULT_KEY: &str = "label_kit_page_default";
+
+/// The kit JSON insrt stores (same shape as its back office).
+pub fn kit_content(page: &KitPage) -> serde_json::Value {
+    let stats: Vec<serde_json::Value> = page
+        .stats
+        .lines()
+        .map(|l| l.split('|').map(str::trim).collect::<Vec<_>>())
+        .filter(|p| !p[0].is_empty())
+        .take(12)
+        .map(|p| {
+            let fr = p.get(1).copied().unwrap_or("");
+            let en = p.get(2).copied().filter(|x| !x.is_empty()).unwrap_or(fr);
+            serde_json::json!({ "value": p[0], "label": { "fr": fr, "en": en } })
+        })
+        .collect();
+    serde_json::json!({
+        "headline": { "fr": "Démos", "en": "Demos" },
+        "pitch": { "fr": page.pitch_fr.trim(), "en": page.pitch_en.trim() },
+        "stats": stats,
+    })
+}
+
+/// The page of a demo: (id of the kit it created, if any; its content, or
+/// the content of the last page written, to start the next demo from).
+fn kit_page(conn: &Connection, id: i64) -> (Option<String>, KitPage) {
+    let row: Option<(Option<String>, Option<String>, Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT kit_owned_id, kit_stats, kit_pitch_fr, kit_pitch_en FROM label_demos WHERE campaign_id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .ok();
+    match row {
+        Some((owned, Some(stats), fr, en)) => {
+            (owned, KitPage { stats, pitch_fr: fr.unwrap_or_default(), pitch_en: en.unwrap_or_default() })
+        }
+        other => (
+            other.and_then(|r| r.0),
+            engine::get(conn, KIT_DEFAULT_KEY).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default(),
+        ),
+    }
+}
+
+/// "Créer la page d'écoute" / "Mettre à jour la page": a listening page of
+/// its own on insrt for this demo (a press kit named after it), with the
+/// figures and the presentation given. Every label then gets a personal link
+/// to it, written when its first email is drafted. The page plays the tracks
+/// ticked for the listening page in the insrt back office. Only a page this
+/// demo created is ever rewritten: a kit picked from the list is left alone.
+pub fn create_kit(conn: &Connection, id: i64, page: &KitPage, insrt: &dyn Insrt) -> Result<(String, String), String> {
+    let d = demo(conn, id)?;
+    let mut cfg = load(conn, id).map(|r| r.config).ok_or("Démo introuvable.")?;
+    let artist: String = conn
+        .query_row("SELECT a.name FROM campaigns c JOIN artists a ON a.id = c.artist_id WHERE c.id = ?1", params![id], |r| r.get(0))
+        .ok()
+        .or_else(|| crate::commands::email::sole_artist(conn))
+        .unwrap_or_else(|| "Piers".into());
+    let name = if cfg.track.trim().is_empty() { d.name.clone() } else { cfg.track.trim().to_string() };
+    let title = format!("Démos labels · {}", name);
+    let (owned, _) = kit_page(conn, id);
+    let ack = insrt.upsert_press_kit(&residency::insrt::PressKitUpsert {
+        id: owned,
+        artist_slug: residency::insrt::slug(&artist),
+        title: title.clone(),
+        content: kit_content(page),
+    })?;
+    let title = if ack.title.is_empty() { title } else { ack.title };
+    cfg.press_kit_id = Some(ack.id.clone());
+    cfg.press_kit_title = Some(title.clone());
+    save_config(conn, id, &cfg)?;
+    conn.execute(
+        "UPDATE label_demos SET kit_owned_id = ?2, kit_stats = ?3, kit_pitch_fr = ?4, kit_pitch_en = ?5 WHERE campaign_id = ?1",
+        params![id, ack.id, page.stats, page.pitch_fr, page.pitch_en],
+    )
+    .map_err(|e| e.to_string())?;
+    if let Ok(v) = serde_json::to_string(page) {
+        engine::put(conn, KIT_DEFAULT_KEY, &v);
+    }
+    Ok((ack.id, title))
+}
+
+#[derive(Serialize)]
+pub struct KitRef {
+    pub id: String,
+    pub title: String,
+}
+
+#[tauri::command]
+pub async fn label_demo_create_kit(state: State<'_, AppState>, id: i64, page: KitPage) -> Result<KitRef, String> {
+    let pool = state.pool.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let client = residency::insrt::client(&conn).ok_or("insrt.studio n'est pas réglé (Réglages).")?;
+        let (id, title) = create_kit(&conn, id, &page, client.as_ref())?;
+        Ok(KitRef { id, title })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Rewrite the first emails still in draft from the current templates (after
@@ -1335,7 +1458,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(lang, "en");
-        assert_eq!(subject, "Night Drive, demo for Alpha");
+        assert_eq!(subject, "Demos for Alpha");
         assert!(body.contains("https://soundcloud.com/piers/night-drive/s-abc"));
         assert!(content::unresolved(&format!("{}\n{}", subject, body)).is_empty());
 
@@ -1381,6 +1504,23 @@ mod tests {
         set_outcome(&c, tid, Some("declined"), "user");
         assert_eq!(advance(&c, id, Utc::now(), None), 1);
         assert_eq!(state_of(&c, id, "Gamma"), "to_validate");
+    }
+
+    #[test]
+    fn listening_page_carries_the_figures() {
+        let page = KitPage {
+            stats: "12 000 | auditeurs mensuels | monthly listeners\n\n 85 | dates jouées \n | sans valeur".into(),
+            pitch_fr: " House et tech house. ".into(),
+            pitch_en: String::new(),
+        };
+        let c = kit_content(&page);
+        assert_eq!(c["stats"].as_array().unwrap().len(), 2);
+        assert_eq!(c["stats"][0]["value"], "12 000");
+        assert_eq!(c["stats"][0]["label"]["en"], "monthly listeners");
+        // No English label: the French one is shown rather than nothing.
+        assert_eq!(c["stats"][1]["label"]["en"], "dates jouées");
+        assert_eq!(c["pitch"]["fr"], "House et tech house.");
+        assert_eq!(c["headline"]["en"], "Demos");
     }
 
     #[test]

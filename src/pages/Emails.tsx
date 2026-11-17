@@ -28,6 +28,8 @@ import clsx from "clsx";
 import {
   applyOpens,
   deleteCampaign,
+  reopenCampaign,
+  stopCampaign,
   deleteTemplate,
   dismissFollowup,
   listDismissedFollowups,
@@ -482,6 +484,7 @@ function CampaignsTab() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const confirm = useConfirm();
+  const toast = useToast();
   const { data: campaigns = [] } = useQuery({ queryKey: ["campaigns"], queryFn: listCampaigns });
   const { data: artists = [] } = useQuery({ queryKey: ["artists"], queryFn: listArtists });
   const [editing, setEditing] = useState<Campaign | null>(null);
@@ -495,34 +498,37 @@ function CampaignsTab() {
 
   const delMut = useMutation({
     mutationFn: (id: number) => deleteCampaign(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["campaigns"] }),
+    onSuccess: () => {
+      for (const k of [["campaigns"], ["followups"], ["residency_actions"], ["agenda_week"]]) qc.invalidateQueries({ queryKey: k });
+    },
   });
 
   const artistName = (id?: number | null) => artists.find((a) => a.id === id)?.name;
 
-  return (
-    <div className="space-y-4">
-      <button
-        className="btn-primary"
-        onClick={() =>
-          setEditing({ name: "", status: "active", color: CAMPAIGN_COLORS[0] } as Campaign)
-        }
-      >
-        <Plus size={16} />
-        {t("campaigns.new")}
-      </button>
-      <button className="btn-outline ml-2" onClick={() => setNewResidency(true)}>
-        <Plus size={16} />
-        {t("residency.new")}
-      </button>
-
-      {campaigns.length === 0 ? (
-        <div className="card">
-          <EmptyState icon={Megaphone} title={t("campaigns.no_campaigns")} />
-        </div>
-      ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-4">
-          {campaigns.map((c) => {
+  // "Terminer" ends a campaign and keeps its figures; the trash removes it.
+  // Either way nothing is left behind in Aujourd'hui (residency/stop.rs).
+  const after = () => {
+    for (const k of [["campaigns"], ["followups"], ["residency_actions"], ["agenda_week"]]) qc.invalidateQueries({ queryKey: k });
+  };
+  const endMut = useMutation({
+    mutationFn: (id: number) => stopCampaign(id),
+    onSuccess: (r) => {
+      after();
+      toast(t("residency.ended_ok", { cancelled: r.cancelled }), "ok");
+    },
+    onError: (e) => toast(errorMessage(e), "error"),
+  });
+  const reopenMut = useMutation({
+    mutationFn: (id: number) => reopenCampaign(id),
+    onSuccess: (n) => {
+      after();
+      toast(t("residency.reopened_ok", { count: n }), "ok");
+    },
+    onError: (e) => toast(errorMessage(e), "error"),
+  });
+  const running = campaigns.filter((c) => c.status === "active" || c.status === "scheduled");
+  const ended = campaigns.filter((c) => !running.includes(c));
+  const card = (c: Campaign) => {
             const rate = c.sent_count ? Math.round((c.opened_count / c.sent_count) * 100) : 0;
             // Calendar days: the old ms diff rounded "tomorrow, before noon" to 0.
             const dd = daysUntil(c.target_date);
@@ -582,7 +588,7 @@ function CampaignsTab() {
                   </div>
                 </div>
 
-                <div className="mt-3 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                <div className="mt-3 flex flex-wrap items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                   <button
                     className="btn-ghost mr-auto px-2 py-1.5 text-xs"
                     onClick={() => setAudienceOf(c)}
@@ -590,28 +596,72 @@ function CampaignsTab() {
                     <Users size={14} />
                     {t("campaigns.audience")} · {c.audience_count ?? 0}
                   </button>
-                  {c.kind !== "residency" && (
+                  {c.kind !== "residency" && (c.status === "active" || c.status === "scheduled") && (
                     <button className="btn-outline h-8 px-3" onClick={() => navigate(bulkUrl(c.id!))}>
                       <Send size={13} />
                       {t("campaigns.prepare_send")}
                     </button>
                   )}
-                  <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                  <button className="btn-ghost px-2 py-1.5" onClick={() => setEditing(c)}>
+                  {c.status === "active" || c.status === "scheduled" ? (
+                    <button
+                      className="btn-ghost px-2 py-1.5 text-xs"
+                      disabled={endMut.isPending}
+                      onClick={() => confirm(t("residency.end_confirm", { name: c.name })) && endMut.mutate(c.id!)}
+                    >
+                      {t("campaigns.end")}
+                    </button>
+                  ) : (
+                    <button className="btn-ghost px-2 py-1.5 text-xs" disabled={reopenMut.isPending} onClick={() => reopenMut.mutate(c.id!)}>
+                      {t("campaigns.reopen")}
+                    </button>
+                  )}
+                  <button className="btn-ghost px-2 py-1.5" aria-label={t("common.edit")} onClick={() => setEditing(c)}>
                     <Pencil size={14} />
                   </button>
                   <button
                     className="btn-ghost px-2 py-1.5 text-danger"
-                    onClick={() => confirm(t("common.confirm_delete")) && delMut.mutate(c.id!)}
+                    aria-label={t("common.delete")}
+                    onClick={() => confirm(t("campaigns.delete_confirm", { name: c.name })) && delMut.mutate(c.id!)}
                   >
                     <Trash2 size={14} />
                   </button>
-                  </div>
                 </div>
               </div>
             );
-          })}
+  };
+
+  return (
+    <div className="space-y-4">
+      <button
+        className="btn-primary"
+        onClick={() =>
+          setEditing({ name: "", status: "active", color: CAMPAIGN_COLORS[0] } as Campaign)
+        }
+      >
+        <Plus size={16} />
+        {t("campaigns.new")}
+      </button>
+      <button className="btn-outline ml-2" onClick={() => setNewResidency(true)}>
+        <Plus size={16} />
+        {t("residency.new")}
+      </button>
+
+      {campaigns.length === 0 ? (
+        <div className="card">
+          <EmptyState icon={Megaphone} title={t("campaigns.no_campaigns")} />
         </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(400px,1fr))] gap-4">{running.map(card)}</div>
+          {ended.length > 0 && (
+            <>
+              <div className="eyebrow pt-4">
+                {t("campaigns.ended")} · {ended.length}
+              </div>
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(400px,1fr))] gap-4 opacity-75">{ended.map(card)}</div>
+            </>
+          )}
+        </>
       )}
 
       {audienceOf && <AudienceModal campaign={audienceOf} onClose={() => setAudienceOf(null)} />}

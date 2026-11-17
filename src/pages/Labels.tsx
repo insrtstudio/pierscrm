@@ -40,6 +40,7 @@ import {
   CLOSED_STATES,
   addLabelsToDemo,
   createDemo,
+  createDemoKit,
   demosList,
   getDemo,
   importRadarLabels,
@@ -56,6 +57,7 @@ import {
   setTargetOutcome,
   type DemoCard,
   type DemoView,
+  type KitPage,
   type Label,
   type LabelInput,
   type Outcome,
@@ -231,22 +233,18 @@ function NewDemoModal({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [track, setTrack] = useState("");
-  const [kit, setKit] = useState("");
-  const [listenUrl, setListenUrl] = useState("");
-  const { data: kits } = useQuery({ queryKey: ["press_kits"], queryFn: pressKits, retry: false });
   const [submit, busy] = useSubmit(async () => {
-    const k = kits?.find((x) => x.id === kit);
-    const id = await createDemo(track, k?.id, k?.title, listenUrl);
+    const id = await createDemo(track);
     qc.invalidateQueries({ queryKey: ["label_demos"] });
-    navigate(`/labels/${id}?step=labels`);
+    navigate(`/labels/${id}?step=demo`);
   });
   return (
     <Modal open onClose={onClose} title={t("labels.new_demo")}>
       <div className="space-y-4">
         <Field label={t("labels.track")}>
           <input className="input" autoFocus value={track} onChange={(e) => setTrack(e.target.value)} placeholder={t("labels.track_placeholder")} />
+          <p className="mt-1.5 text-[12.5px] text-fg-subtle">{t("labels.track_hint")}</p>
         </Field>
-        <KitFields kits={kits} kit={kit} setKit={setKit} listenUrl={listenUrl} setListenUrl={setListenUrl} />
         <div className="flex justify-end gap-2 pt-1">
           <button className="btn-ghost" onClick={onClose}>
             {t("common.cancel")}
@@ -260,40 +258,103 @@ function NewDemoModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-/// Where the label listens: a personal insrt page (tracked), with a plain
-/// link as a fallback.
-function KitFields({
+type ListenMode = "own" | "existing" | "url";
+
+/// Where the labels listen. Three ways, one at a time: a page created for
+/// this demo (with the figures a label looks at), a page that already exists
+/// on insrt, or any other link.
+function ListenBlock({
+  view: v,
+  mode,
+  setMode,
   kits,
   kit,
   setKit,
   listenUrl,
   setListenUrl,
+  onCreated,
 }: {
+  view: DemoView;
+  mode: ListenMode;
+  setMode: (m: ListenMode) => void;
   kits?: { id: string; title: string }[];
   kit: string;
   setKit: (v: string) => void;
   listenUrl: string;
   setListenUrl: (v: string) => void;
+  onCreated: () => void;
 }) {
   const { t } = useTranslation();
+  const toast = useToast();
+  const [page, setPage] = useState<KitPage>(v.kit_page);
+  const owned = v.kit_owned_id ?? null;
+  const [create, creating] = useSubmit(async () => {
+    await createDemoKit(v.card.id, page);
+    toast(owned ? t("labels.page_updated") : t("labels.page_created"));
+    onCreated();
+  });
+  const others = (kits ?? []).filter((k) => k.id !== owned);
   return (
-    <>
-      <Field label={t("labels.kit")}>
-        <select className="input" value={kit} onChange={(e) => setKit(e.target.value)}>
-          <option value="">{t("labels.kit_none")}</option>
-          {kits?.map((k) => (
-            <option key={k.id} value={k.id}>
-              {k.title}
-            </option>
-          ))}
-        </select>
-        <p className="mt-1.5 text-[12.5px] text-fg-subtle">{kits?.length ? t("labels.kit_hint") : t("labels.kit_missing")}</p>
-      </Field>
-      <Field label={`${t("labels.listen_url")} (${t("common.optional")})`}>
-        <input className="input" value={listenUrl} onChange={(e) => setListenUrl(e.target.value)} placeholder="https://soundcloud.com/…/s-…" />
-        <p className="mt-1.5 text-[12.5px] text-fg-subtle">{t("labels.listen_url_hint")}</p>
-      </Field>
-    </>
+    <div className="space-y-3">
+      <div className="eyebrow pt-2">{t("labels.listen_title")}</div>
+      <p className="text-[12.5px] text-fg-subtle">{t("labels.listen_intro")}</p>
+      <Segmented
+        items={(["own", "existing", "url"] as ListenMode[]).map((k) => ({ key: k, label: t(`labels.listen_mode_${k}`) }))}
+        value={mode}
+        onChange={setMode}
+      />
+      {mode === "own" && (
+        <div className="space-y-3">
+          <p className="text-[12.5px] text-fg-subtle">{t("labels.own_hint")}</p>
+          <Field label={t("labels.page_stats")}>
+            <textarea
+              className="input font-mono text-[12.5px]"
+              rows={5}
+              value={page.stats}
+              onChange={(e) => setPage({ ...page, stats: e.target.value })}
+              placeholder={t("labels.page_stats_placeholder")}
+            />
+            <p className="mt-1.5 text-[12.5px] text-fg-subtle">{t("labels.page_stats_hint")}</p>
+          </Field>
+          <Field label={t("labels.page_pitch_en")}>
+            <textarea className="input text-[13px]" rows={3} value={page.pitch_en} onChange={(e) => setPage({ ...page, pitch_en: e.target.value })} />
+          </Field>
+          <Field label={t("labels.page_pitch_fr")}>
+            <textarea className="input text-[13px]" rows={3} value={page.pitch_fr} onChange={(e) => setPage({ ...page, pitch_fr: e.target.value })} />
+            <p className="mt-1.5 text-[12.5px] text-fg-subtle">{t("labels.page_pitch_hint")}</p>
+          </Field>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className={clsx("text-[12.5px]", owned ? "text-ok" : "text-fg-subtle")}>
+              {owned ? t("labels.page_ready", { title: v.press_kit_title ?? "" }) : t("labels.page_none")}
+            </span>
+            <button className={owned ? "btn-outline" : "btn-primary"} disabled={creating || !v.insrt_ready} onClick={() => create()}>
+              {owned ? t("labels.page_update") : t("labels.page_create")}
+            </button>
+          </div>
+          {!v.insrt_ready && <p className="text-[12.5px] text-warn">{t("labels.insrt_missing")}</p>}
+        </div>
+      )}
+      {mode === "existing" && (
+        <Field label={t("labels.kit")}>
+          <select className="input" value={kit === owned ? "" : kit} onChange={(e) => setKit(e.target.value)}>
+            <option value="">{t("labels.kit_none")}</option>
+            {others.map((k) => (
+              <option key={k.id} value={k.id}>
+                {k.title}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1.5 text-[12.5px] text-fg-subtle">{others.length ? t("labels.kit_hint") : t("labels.kit_missing")}</p>
+          {!v.insrt_ready && <p className="mt-1.5 text-[12.5px] text-warn">{t("labels.insrt_missing")}</p>}
+        </Field>
+      )}
+      {mode === "url" && (
+        <Field label={t("labels.listen_url")}>
+          <input className="input" value={listenUrl} onChange={(e) => setListenUrl(e.target.value)} placeholder="https://soundcloud.com/…/s-…" />
+          <p className="mt-1.5 text-[12.5px] text-fg-subtle">{t("labels.listen_url_hint")}</p>
+        </Field>
+      )}
+    </div>
   );
 }
 
@@ -303,6 +364,35 @@ function KitFields({
 
 type ListFilter = "reachable" | "all" | "no_email" | "form" | "archived";
 
+/// Styles of a label, from its free "house, tech house" field.
+const stylesOf = (l: Label) =>
+  (l.genres ?? "")
+    .split(/[,;/|]/)
+    .map((g) => g.trim().toLowerCase())
+    .filter(Boolean);
+
+/// Every style of the list with how many labels carry it, most common first.
+function styleCounts(labels: Label[]) {
+  const n = new Map<string, number>();
+  for (const l of labels) for (const g of new Set(stylesOf(l))) n.set(g, (n.get(g) ?? 0) + 1);
+  return [...n.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+function StyleSelect({ labels, value, onChange }: { labels: Label[]; value: string; onChange: (v: string) => void }) {
+  const { t } = useTranslation();
+  const styles = useMemo(() => styleCounts(labels), [labels]);
+  return (
+    <select className="input w-auto" value={value} onChange={(e) => onChange(e.target.value)} aria-label={t("labels.genres")}>
+      <option value="">{t("labels.style_all")}</option>
+      {styles.map(([g, n]) => (
+        <option key={g} value={g}>
+          {g.charAt(0).toUpperCase() + g.slice(1)} · {n}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function LabelsTab() {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -310,6 +400,7 @@ function LabelsTab() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<ListFilter>("reachable");
   const [tier, setTier] = useState(0);
+  const [style, setStyle] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [editing, setEditing] = useState<Label | "new" | null>(null);
   const [adding, setAdding] = useState(false);
@@ -325,11 +416,12 @@ function LabelsTab() {
       if (filter === "reachable" && !isReachable(l)) return false;
       if (filter === "no_email" && (l.demo_policy !== "email" || (!!l.email && !l.suppressed))) return false;
       if (filter === "form" && l.demo_policy !== "form") return false;
+      if (style && !stylesOf(l).includes(style)) return false;
       if (tier && l.tier !== tier) return false;
       if (!q) return true;
       return [l.name, l.country, l.genres, l.email, l.notes].some((v) => v?.toLowerCase().includes(q));
     });
-  }, [data, search, filter, tier]);
+  }, [data, search, filter, tier, style]);
   const counts = useMemo(() => {
     const all = (data ?? []).filter((l) => !l.archived);
     return { all: all.length, reachable: all.filter(isReachable).length };
@@ -383,6 +475,7 @@ function LabelsTab() {
           value={filter}
           onChange={setFilter}
         />
+        <StyleSelect labels={(data ?? []).filter((l) => (filter === "archived" ? l.archived : !l.archived))} value={style} onChange={setStyle} />
         <select className="input w-auto" value={tier} onChange={(e) => setTier(Number(e.target.value))} aria-label={t("labels.tier")}>
           <option value={0}>{t("labels.tier_all")}</option>
           {[1, 2, 3].map((n) => (
@@ -781,6 +874,9 @@ function DemoStep({ view: v, onSaved }: { view: DemoView; onSaved: () => void })
   const [track, setTrack] = useState(v.card.track);
   const [kit, setKit] = useState(v.press_kit_id ?? "");
   const [listenUrl, setListenUrl] = useState(v.listen_url ?? "");
+  const [mode, setMode] = useState<ListenMode>(
+    v.press_kit_id && v.press_kit_id !== v.kit_owned_id ? "existing" : !v.press_kit_id && v.listen_url ? "url" : "own"
+  );
   const [steps, setSteps] = useState<Step[]>(v.steps);
   const [waveSize, setWaveSize] = useState(v.wave_size);
   const [closeDays, setCloseDays] = useState(v.close_days);
@@ -789,12 +885,15 @@ function DemoStep({ view: v, onSaved }: { view: DemoView; onSaved: () => void })
   const drafts = v.targets.filter((x) => x.state === "to_validate").length;
   const setStep = (i: number, patch: Partial<Step>) => setSteps((s) => s.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   const [submit, busy] = useSubmit(async () => {
-    const k = kits?.find((x) => x.id === kit);
+    // One listening link at a time: the page of this demo, another insrt
+    // page, or a plain link.
+    const kitId = mode === "own" ? (v.kit_owned_id ?? null) : mode === "existing" ? kit || null : null;
+    const k = kits?.find((x) => x.id === kitId);
     await saveDemo(v.card.id, {
       track,
-      press_kit_id: kit || null,
-      press_kit_title: k?.title ?? (kit ? v.press_kit_title : null),
-      listen_url: listenUrl,
+      press_kit_id: kitId,
+      press_kit_title: k?.title ?? (kitId ? v.press_kit_title : null),
+      listen_url: mode === "url" ? listenUrl : "",
       steps,
       wave_size: waveSize,
       close_days: closeDays,
@@ -806,14 +905,24 @@ function DemoStep({ view: v, onSaved }: { view: DemoView; onSaved: () => void })
   const subjKey = lang === "en" ? "subject_en" : "subject";
   const bodyKey = lang === "en" ? "body_en" : "body";
   return (
-    <div className="grid gap-5 @xl:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
+    <div className="grid gap-5 @xl:grid-cols-[minmax(0,27rem)_minmax(0,1fr)]">
       <div className="card space-y-4 p-5">
         <div className="eyebrow">{t("labels.section_track")}</div>
         <Field label={t("labels.track")}>
           <input className="input" value={track} onChange={(e) => setTrack(e.target.value)} />
+          <p className="mt-1.5 text-[12.5px] text-fg-subtle">{t("labels.track_hint")}</p>
         </Field>
-        <KitFields kits={kits} kit={kit} setKit={setKit} listenUrl={listenUrl} setListenUrl={setListenUrl} />
-        {kit && !v.insrt_ready && <p className="text-[12.5px] text-warn">{t("labels.insrt_missing")}</p>}
+        <ListenBlock
+          view={v}
+          mode={mode}
+          setMode={setMode}
+          kits={kits}
+          kit={kit}
+          setKit={setKit}
+          listenUrl={listenUrl}
+          setListenUrl={setListenUrl}
+          onCreated={onSaved}
+        />
         <div className="eyebrow pt-2">{t("labels.section_rhythm")}</div>
         <div className="grid grid-cols-3 gap-3">
           <Field label={t("labels.wave_size")}>
@@ -876,6 +985,7 @@ function LabelsStep({ view: v, refresh, onLaunched }: { view: DemoView; refresh:
   const confirm = useConfirm();
   const [search, setSearch] = useState("");
   const [onlyReachable, setOnlyReachable] = useState(true);
+  const [style, setStyle] = useState("");
   const { data: all } = useQuery({ queryKey: ["labels"], queryFn: labelsList });
   const waiting = v.targets.filter((x) => x.wave == null);
   const inWaves = v.targets.filter((x) => x.wave != null);
@@ -895,10 +1005,11 @@ function LabelsStep({ view: v, refresh, onLaunched }: { view: DemoView; refresh:
     const q = search.trim().toLowerCase();
     return (all ?? [])
       .filter((l) => !l.archived && !taken.has(l.id) && (!onlyReachable || isReachable(l)))
+      .filter((l) => !style || stylesOf(l).includes(style))
       .filter((l) => !q || [l.name, l.country, l.genres].some((x) => x?.toLowerCase().includes(q)))
       .slice(0, 200);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [all, search, onlyReachable, v.targets]);
+  }, [all, search, onlyReachable, style, v.targets]);
   const queued = waiting.filter((x) => x.state === "queued");
   const nextWave = v.card.current_wave + 1;
   const waveOpen = inWaves.some((x) => x.wave === v.card.current_wave && !CLOSED_STATES.includes(x.state));
@@ -978,6 +1089,7 @@ function LabelsStep({ view: v, refresh, onLaunched }: { view: DemoView; refresh:
         <div className="eyebrow">{t("labels.section_pick")}</div>
         <div className="mt-3 flex items-center gap-3">
           <input className="input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("common.search")} />
+          <StyleSelect labels={(all ?? []).filter((l) => !l.archived)} value={style} onChange={setStyle} />
           <label className="flex shrink-0 items-center gap-2 text-[13px] text-fg-subtle">
             <input type="checkbox" checked={onlyReachable} onChange={(e) => setOnlyReachable(e.target.checked)} />
             {t("labels.filter.reachable")}

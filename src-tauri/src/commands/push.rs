@@ -717,13 +717,21 @@ fn scan_opens(conn: &Connection, cfg: &PushConfig, now: DateTime<Utc>) {
                 .map(|it| it.flatten().collect())
         })
         .unwrap_or_default();
+    // An open on an email of a campaign that is over calls for nothing.
+    let ended: std::collections::HashSet<i64> = conn
+        .prepare(
+            "SELECT e.id FROM emails e JOIN campaigns c ON c.id = e.campaign_id
+             WHERE e.opened_at IS NOT NULL AND c.status <> 'active'",
+        )
+        .and_then(|mut st| st.query_map([], |r| r.get(0)).map(|it| it.flatten().collect()))
+        .unwrap_or_default();
     for (id, opened_at, subject, name) in rows {
         let Some(at) = parse_utc(&opened_at) else { continue };
         if at < since {
             continue;
         }
         let n = Notice::new("open", id, format!("Ouvert : {}", name), format!("« {} »", excerpt(&subject, 120)), -1).at(Some(at));
-        let status = if !cfg.opens {
+        let status = if !cfg.opens || ended.contains(&id) {
             "off"
         } else if cfg.opens_in_summary {
             "summary"
@@ -806,7 +814,7 @@ fn scan_problems(conn: &Connection, cfg: &PushConfig, now: DateTime<Utc>) {
         .prepare(
             "SELECT l.id, l.code, l.message, l.at, c.name
              FROM residency_log l LEFT JOIN campaigns c ON c.id = l.campaign_id
-             WHERE l.level = 'pause' AND l.at >= ?1 ORDER BY l.id",
+             WHERE l.level = 'pause' AND l.code <> 'autopilot_off' AND l.at >= ?1 ORDER BY l.id",
         )
         .and_then(|mut st| {
             st.query_map(params![since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))

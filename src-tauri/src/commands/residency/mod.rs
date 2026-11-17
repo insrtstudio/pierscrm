@@ -30,6 +30,7 @@ pub mod replies;
 pub mod prospect;
 pub mod report;
 pub mod signals;
+pub mod stop;
 pub mod targeting;
 pub mod warmup;
 pub mod zone;
