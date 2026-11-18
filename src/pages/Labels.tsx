@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { listen } from "@tauri-apps/api/event";
 import clsx from "clsx";
 import {
   AlertTriangle,
@@ -13,6 +14,11 @@ import {
   ArrowUp,
   Check,
   Disc3,
+  Globe,
+  Instagram,
+  Radar,
+  RefreshCw,
+  Search,
   ExternalLink,
   Headphones,
   Pause,
@@ -43,22 +49,29 @@ import {
   createDemoKit,
   demoPage,
   demosList,
+  findLabelContacts,
   getDemo,
   importRadarLabels,
+  labelCard,
   labelsList,
+  loadLabelTop,
   markSubmitted,
   openWave,
   redraftDemo,
   saveDemo,
   saveLabel,
+  scanBeatport,
   setDemoStatus,
   setDemoTargets,
   setLabelsArchived,
   setLabelsTier,
   setTargetOutcome,
   type DemoCard,
+  type BeatportProgress,
   type DemoView,
+  type FinderProgress,
   type Label,
+  type LabelTrack,
   type LabelInput,
   type Outcome,
   type PagePreview,
@@ -350,7 +363,10 @@ function ListenBlock({
 // The list of labels
 // ---------------------------------------------------------------------------
 
-type ListFilter = "reachable" | "all" | "no_email" | "form" | "archived";
+type ListFilter = "reachable" | "all" | "charts" | "no_email" | "form" | "archived";
+
+/** Charted tracks of a label at the last Beatport reading, all styles. */
+const chartCount = (l: Label) => (l.chart_note?.match(/\d+/g) ?? []).reduce((n, v) => n + Number(v), 0);
 
 /// Styles of a label, from its free "house, tech house" field.
 const stylesOf = (l: Label) =>
@@ -392,23 +408,69 @@ function LabelsTab() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [editing, setEditing] = useState<Label | "new" | null>(null);
   const [adding, setAdding] = useState(false);
+  const [cardId, setCardId] = useState<number | null>(null);
+  const [scan, setScan] = useState<{ done: number; total: number } | null>(null);
+  const [finding, setFinding] = useState<FinderProgress | null>(null);
   const { data, isLoading, isError, refetch } = useQuery({ queryKey: ["labels"], queryFn: labelsList });
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["labels"] });
     qc.invalidateQueries({ queryKey: ["label_demo"] });
+    qc.invalidateQueries({ queryKey: ["label_card"] });
   };
+  // The Beatport window and the contact search report through events.
+  useEffect(() => {
+    const offs = [
+      listen<BeatportProgress>("labels:beatport", ({ payload: p }) => {
+        if (p.kind === "chart") return setScan({ done: p.charts_read, total: p.charts_total });
+        if (p.kind === "label") return void qc.invalidateQueries({ queryKey: ["label_card"] });
+        setScan(null);
+        if (p.kind === "error") return toast(p.error ?? t("labels.scan_failed"), "error");
+        if (p.kind === "closed") return toast(t("labels.scan_closed"), "error");
+        if (p.summary) {
+          toast(t("labels.scan_done", { labels: p.summary.labels_seen, added: p.summary.added }));
+          setFilter("charts");
+          refresh();
+        }
+      }),
+      listen<FinderProgress>("labels:finder", ({ payload: p }) => {
+        setFinding(p.finished ? null : p);
+        if (p.finished) {
+          toast(t("labels.find_done", { found: p.found, total: p.total }));
+          refresh();
+        }
+      }),
+    ];
+    return () => offs.forEach((o) => o.then((off) => off()).catch(() => {}));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const scanMut = useMutation({
+    mutationFn: scanBeatport,
+    onSuccess: (total) => setScan({ done: 0, total }),
+    onError: (e) => toast(errorMessage(e), "error"),
+  });
+  const findMut = useMutation({
+    mutationFn: (labelIds: number[]) => findLabelContacts(labelIds),
+    onSuccess: (total) => {
+      if (total) setFinding({ done: 0, total, found: 0, finished: false });
+      setSelected(new Set());
+    },
+    onError: (e) => toast(errorMessage(e), "error"),
+  });
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return (data ?? []).filter((l) => {
+    const list = (data ?? []).filter((l) => {
       if (filter === "archived" ? !l.archived : l.archived) return false;
       if (filter === "reachable" && !isReachable(l)) return false;
       if (filter === "no_email" && (l.demo_policy !== "email" || (!!l.email && !l.suppressed))) return false;
       if (filter === "form" && l.demo_policy !== "form") return false;
+      if (filter === "charts" && !l.chart_note) return false;
       if (style && !stylesOf(l).includes(style)) return false;
       if (tier && l.tier !== tier) return false;
       if (!q) return true;
       return [l.name, l.country, l.genres, l.email, l.notes].some((v) => v?.toLowerCase().includes(q));
     });
+    // In the charts view, the labels with the most charted tracks come first.
+    return filter === "charts" ? [...list].sort((a, b) => chartCount(b) - chartCount(a)) : list;
   }, [data, search, filter, tier, style]);
   const counts = useMemo(() => {
     const all = (data ?? []).filter((l) => !l.archived);
@@ -444,6 +506,9 @@ function LabelsTab() {
         title={t("nav.labels")}
         actions={
           <>
+            <button className="btn-outline" disabled={scanMut.isPending || !!scan} onClick={() => scanMut.mutate()} title={t("labels.scan_hint")}>
+              <Radar size={14} /> {scan ? t("labels.scan_progress", scan) : t("labels.scan_beatport")}
+            </button>
             <button className="btn-outline" disabled={importMut.isPending} onClick={() => importMut.mutate()} title={t("labels.import_radar_hint")}>
               {t("labels.import_radar")}
             </button>
@@ -456,7 +521,7 @@ function LabelsTab() {
       <div className="flex flex-wrap items-center gap-2 px-page pb-4">
         <input className="input max-w-xs" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("common.search")} />
         <Segmented
-          items={(["reachable", "all", "no_email", "form", "archived"] as ListFilter[]).map((k) => ({
+          items={(["reachable", "all", "charts", "no_email", "form", "archived"] as ListFilter[]).map((k) => ({
             key: k,
             label: t(`labels.filter.${k}`) + (k === "reachable" ? ` ${counts.reachable}` : k === "all" ? ` ${counts.all}` : ""),
           }))}
@@ -480,6 +545,9 @@ function LabelsTab() {
           <button className="btn-primary" onClick={() => setAdding(true)}>
             <Send size={13} /> {t("labels.add_to_demo")}
           </button>
+          <button className="btn-outline" disabled={findMut.isPending || !!finding} onClick={() => findMut.mutate(ids)} title={t("labels.find_hint")}>
+            <Search size={13} /> {t("labels.find_contacts")}
+          </button>
           {[1, 2, 3].map((n) => (
             <button key={n} className="btn-outline" onClick={() => bulk.mutate(() => setLabelsTier(ids, n))}>
               {t(`labels.tier_${n}`)}
@@ -489,6 +557,11 @@ function LabelsTab() {
             {filter === "archived" ? <ArchiveRestore size={13} /> : <Archive size={13} />}
             {filter === "archived" ? t("labels.unarchive") : t("labels.archive")}
           </button>
+        </div>
+      )}
+      {finding && (
+        <div className="mx-page mb-3 rounded-xl border border-border bg-surface-2 px-4 py-2.5 text-sm text-fg-subtle" role="status">
+          {t("labels.find_progress", { ...finding })}
         </div>
       )}
       {isLoading ? (
@@ -525,7 +598,9 @@ function LabelsTab() {
                 </td>
                 <td>
                   <div className="flex items-center gap-1.5">
-                    <span className="font-medium">{l.name}</span>
+                    <button className="text-left font-medium hover:underline" title={t("labels.card.open")} onClick={() => setCardId(l.id)}>
+                      {l.name}
+                    </button>
                     {l.website && (
                       <button className="text-fg-faint hover:text-fg" title={l.website} onClick={() => openUrl(l.website!).catch(() => {})}>
                         <ExternalLink size={12} />
@@ -533,6 +608,7 @@ function LabelsTab() {
                     )}
                   </div>
                   {l.genres && <div className="text-[12.5px] text-fg-subtle">{l.genres}</div>}
+                  {l.chart_note && <div className="text-[12px] text-accent-2">{t("labels.in_charts", { note: l.chart_note })}</div>}
                 </td>
                 <td className="text-fg-subtle">{l.country ?? "·"}</td>
                 <td>
@@ -561,6 +637,20 @@ function LabelsTab() {
         </table>
       )}
       {editing && <LabelModal label={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={refresh} />}
+      {cardId !== null &&
+        !editing &&
+        (() => {
+          const l = data?.find((x) => x.id === cardId);
+          return l ? (
+            <LabelCardModal
+              label={l}
+              searching={!!finding || findMut.isPending}
+              onSearch={() => findMut.mutate([l.id])}
+              onEdit={() => setEditing(l)}
+              onClose={() => setCardId(null)}
+            />
+          ) : null;
+        })()}
       {adding && (
         <AddToDemoModal
           labelIds={ids}
@@ -589,6 +679,172 @@ function Channel({ label: l }: { label: Pick<Label, "demo_policy" | "email" | "d
   return <span className="font-mono text-[12px]">{l.email}</span>;
 }
 
+// ---------------------------------------------------------------------------
+// The card of a label: where to reach it, what it releases
+// ---------------------------------------------------------------------------
+
+const hostOf = (url: string) => url.replace(/^https?:\/\/(www\.)?/, "").split(/[/?#]/)[0];
+const handleOf = (url: string) => "@" + url.replace(/\/+$/, "").split("/").pop();
+
+function chartName(key: string, t: T): string {
+  const [genre, kind] = key.split(":");
+  const style = genre.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  return `${style}, ${t(kind === "hype" ? "labels.card.hype_100" : "labels.card.top_100")}`;
+}
+
+function CardLink({ icon, label, url, text }: { icon: React.ReactNode; label: string; url?: string | null; text?: string }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-center gap-2.5 py-1.5">
+      <span className="text-fg-faint">{icon}</span>
+      <span className="w-24 shrink-0 text-[12.5px] text-fg-subtle">{label}</span>
+      {url ? (
+        <button className="min-w-0 truncate text-left text-sm hover:underline" title={url} onClick={() => openUrl(url).catch(() => {})}>
+          {text ?? hostOf(url)} <ExternalLink size={11} className="inline text-fg-faint" />
+        </button>
+      ) : (
+        <span className="text-sm text-fg-faint">{t("labels.card.not_found")}</span>
+      )}
+    </div>
+  );
+}
+
+function TrackList({ tracks, chart, t }: { tracks: LabelTrack[]; chart: boolean; t: T }) {
+  return (
+    <ol className="divide-y divide-border rounded-xl border border-border">
+      {tracks.map((tr, i) => (
+        <li key={`${tr.url}-${i}`} className="flex items-center gap-3 px-3 py-2">
+          <span className="w-7 shrink-0 text-right font-mono text-[12px] text-fg-faint">{tr.position}</span>
+          <button className="min-w-0 flex-1 text-left" title={tr.url} onClick={() => openUrl(tr.url).catch(() => {})}>
+            <div className="truncate text-sm font-medium hover:underline">{tr.title}</div>
+            <div className="truncate text-[12.5px] text-fg-subtle">{tr.artists}</div>
+          </button>
+          {chart && <span className="shrink-0 text-[12px] text-fg-subtle">{chartName(tr.chart, t)}</span>}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function LabelCardModal({
+  label: l,
+  searching,
+  onSearch,
+  onEdit,
+  onClose,
+}: {
+  label: Label;
+  searching: boolean;
+  onSearch: () => void;
+  onEdit: () => void;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const { data: c } = useQuery({ queryKey: ["label_card", l.id], queryFn: () => labelCard(l.id) });
+  const [loadingTop, setLoadingTop] = useState(false);
+  useEffect(() => setLoadingTop(false), [c?.top_at]);
+  const loadTop = () => {
+    setLoadingTop(true);
+    loadLabelTop(l.id).catch((e) => {
+      setLoadingTop(false);
+      toast(errorMessage(e), "error");
+    });
+  };
+  return (
+    <Modal open onClose={onClose} title={l.name} width="max-w-2xl">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-fg-subtle">
+        {l.genres && <span>{l.genres}</span>}
+        {l.country && <span>{l.country}</span>}
+        <TierDots tier={l.tier} />
+        {l.chart_note && <span className="text-accent-2">{t("labels.in_charts", { note: l.chart_note })}</span>}
+      </div>
+
+      <div className="mt-4 rounded-xl border border-border px-3 py-1.5">
+        <CardLink icon={<Globe size={14} />} label={t("labels.website")} url={l.website} />
+        <CardLink icon={<Instagram size={14} />} label="Instagram" url={l.instagram} text={l.instagram ? handleOf(l.instagram) : undefined} />
+        <CardLink icon={<Disc3 size={14} />} label="Beatport" url={l.beatport_url} text={t("labels.card.beatport_page")} />
+        <div className="flex items-center gap-2.5 py-1.5">
+          <span className="text-fg-faint">
+            <Send size={14} />
+          </span>
+          <span className="w-24 shrink-0 text-[12.5px] text-fg-subtle">{t("labels.card.demos")}</span>
+          <Channel label={l} />
+          {l.demo_policy === "email" && l.demo_url && (
+            <button className="badge bg-fg/[0.08] text-fg hover:bg-fg/15" onClick={() => openUrl(l.demo_url!).catch(() => {})}>
+              {t("labels.policy.form")} <ExternalLink size={10} />
+            </button>
+          )}
+        </div>
+        {c?.contact_source && l.email && (
+          <p className="pb-1.5 pl-[34px] text-[12px] text-fg-subtle">
+            {t("labels.card.read_on")}{" "}
+            <button className="underline" onClick={() => openUrl(c.contact_source!).catch(() => {})}>
+              {hostOf(c.contact_source)}
+            </button>
+          </p>
+        )}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button className="btn-outline" disabled={searching} onClick={onSearch} title={t("labels.find_hint")}>
+          <Search size={13} /> {searching ? t("labels.card.searching") : t("labels.find_contacts")}
+        </button>
+        {c?.contact_find_at && <span className="text-[12px] text-fg-faint">{t("labels.card.last_search", { date: formatDate(c.contact_find_at) })}</span>}
+      </div>
+
+      {!!c?.charted.length && (
+        <section className="mt-5">
+          <h3 className="mb-2 text-sm font-medium">
+            {t("labels.card.charted")}
+            {c.chart_seen_at && <span className="ml-2 text-[12px] font-normal text-fg-faint">{formatDate(c.chart_seen_at)}</span>}
+          </h3>
+          <TrackList tracks={c.charted} chart t={t} />
+        </section>
+      )}
+
+      <section className="mt-5">
+        <div className="mb-2 flex items-center gap-2">
+          <h3 className="text-sm font-medium">{t("labels.card.top")}</h3>
+          {c?.top_at && <span className="text-[12px] text-fg-faint">{formatDate(c.top_at)}</span>}
+          <div className="flex-1" />
+          {l.beatport_url && (
+            <button className="btn-ghost" disabled={loadingTop} onClick={loadTop} title={t("labels.card.top_hint")}>
+              <RefreshCw size={13} /> {c?.top.length ? t("labels.card.top_refresh") : t("labels.card.top_load")}
+            </button>
+          )}
+        </div>
+        {c?.top.length ? (
+          <TrackList tracks={c.top} chart={false} t={t} />
+        ) : (
+          <p className="text-[12.5px] text-fg-subtle">{l.beatport_url ? t("labels.card.top_hint") : t("labels.card.no_beatport")}</p>
+        )}
+      </section>
+
+      {c?.bio && (
+        <section className="mt-5">
+          <h3 className="mb-1 text-sm font-medium">{t("labels.card.bio")}</h3>
+          <p className="whitespace-pre-line text-[13px] text-fg-subtle">{c.bio}</p>
+        </section>
+      )}
+      {l.notes && (
+        <section className="mt-5">
+          <h3 className="mb-1 text-sm font-medium">{t("labels.notes")}</h3>
+          <p className="whitespace-pre-line text-[13px] text-fg-subtle">{l.notes}</p>
+        </section>
+      )}
+
+      <div className="mt-5 flex justify-end gap-2">
+        <button className="btn-ghost" onClick={onEdit}>
+          <Pencil size={13} /> {t("common.edit")}
+        </button>
+        <button className="btn-primary" onClick={onClose}>
+          {t("common.close")}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 function LabelModal({ label, onClose, onSaved }: { label: Label | null; onClose: () => void; onSaved: () => void }) {
   const { t } = useTranslation();
   const [f, setF] = useState<LabelInput>(() => ({
@@ -603,6 +859,7 @@ function LabelModal({ label, onClose, onSaved }: { label: Label | null; onClose:
     demo_url: label?.demo_url ?? "",
     tier: label?.tier ?? 2,
     notes: label?.notes ?? "",
+    instagram: label?.instagram ?? "",
   }));
   const set = <K extends keyof LabelInput>(k: K, v: LabelInput[K]) => setF((p) => ({ ...p, [k]: v }));
   const [submit, busy] = useSubmit(async () => {
@@ -624,6 +881,9 @@ function LabelModal({ label, onClose, onSaved }: { label: Label | null; onClose:
         </Field>
         <Field label={t("labels.website")}>
           <input className="input" value={f.website ?? ""} onChange={(e) => set("website", e.target.value)} placeholder="https://" />
+        </Field>
+        <Field label={`Instagram (${t("common.optional")})`} className="sm:col-span-2">
+          <input className="input" value={f.instagram ?? ""} onChange={(e) => set("instagram", e.target.value)} placeholder="@label" />
         </Field>
         <Field label={t("labels.col_channel")} className="sm:col-span-2">
           <Segmented

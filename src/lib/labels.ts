@@ -43,6 +43,10 @@ export interface Label {
   tier: number;
   notes?: string | null;
   source?: string | null;
+  instagram?: string | null;
+  beatport_url?: string | null;
+  /** Charted tracks per style at the last Beatport reading ("Tech House 3 · House 1"). */
+  chart_note?: string | null;
   archived: boolean;
   suppressed: boolean;
   demos: LabelDemoRef[];
@@ -60,6 +64,7 @@ export interface LabelInput {
   demo_url?: string | null;
   tier: number;
   notes?: string | null;
+  instagram?: string | null;
 }
 
 export interface DemoCard {
@@ -189,3 +194,49 @@ export const markSubmitted = (targetId: number, done: boolean) =>
   invoke<void>("label_target_mark_submitted", { targetId, done });
 export const setDemoStatus = (id: number, status: "active" | "paused" | "done") =>
   invoke<void>("label_demo_set_status", { id, status });
+
+// Beatport reading and contact search (commands/beatport.rs, label_finder.rs).
+
+export interface LabelTrack {
+  /** "tech-house:top", "house:hype"; empty for the label's own top 10. */
+  chart: string;
+  position: number;
+  title: string;
+  artists: string;
+  url: string;
+}
+
+export interface LabelCardData {
+  id: number;
+  bio?: string | null;
+  chart_seen_at?: string | null;
+  top_at?: string | null;
+  contact_source?: string | null;
+  contact_find_at?: string | null;
+  charted: LabelTrack[];
+  top: LabelTrack[];
+}
+
+/** Payload of the `labels:beatport` event. */
+export interface BeatportProgress {
+  kind: "chart" | "done" | "label" | "closed" | "error";
+  charts_read: number;
+  charts_total: number;
+  summary?: { charts_read: number; labels_seen: number; added: number } | null;
+  label_id?: number | null;
+  tracks: number;
+  error?: string | null;
+}
+
+/** Payload of the `labels:finder` event. */
+export interface FinderProgress {
+  done: number;
+  total: number;
+  found: number;
+  finished: boolean;
+}
+
+export const scanBeatport = () => invoke<number>("labels_scan_beatport");
+export const loadLabelTop = (id: number) => invoke<void>("label_load_top", { id });
+export const labelCard = (id: number) => invoke<LabelCardData>("label_card", { id });
+export const findLabelContacts = (ids: number[]) => invoke<number>("labels_find_contacts", { ids });

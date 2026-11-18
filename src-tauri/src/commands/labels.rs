@@ -192,6 +192,10 @@ pub struct LabelRow {
     pub tier: i64,
     pub notes: Option<String>,
     pub source: Option<String>,
+    pub instagram: Option<String>,
+    pub beatport_url: Option<String>,
+    /// Charted tracks per style at the last Beatport reading.
+    pub chart_note: Option<String>,
     pub archived: bool,
     /// The address is on the suppression list (bounce, unsubscribe).
     pub suppressed: bool,
@@ -213,7 +217,8 @@ pub fn labels_list(state: State<'_, AppState>) -> Result<Vec<LabelRow>, String> 
         .prepare(
             "SELECT l.id, l.name, l.country, l.genres, l.website, l.email, l.contact_name, l.demo_policy, l.demo_url,
                     l.tier, l.notes, l.source, l.archived,
-                    EXISTS(SELECT 1 FROM suppressions s WHERE s.address = lower(trim(l.email)))
+                    EXISTS(SELECT 1 FROM suppressions s WHERE s.address = lower(trim(l.email))),
+                    l.instagram, l.beatport_url, l.chart_note
              FROM labels l ORDER BY l.archived, l.tier, l.name COLLATE NOCASE",
         )
         .map_err(|e| e.to_string())?
@@ -233,6 +238,9 @@ pub fn labels_list(state: State<'_, AppState>) -> Result<Vec<LabelRow>, String> 
                 source: r.get(11)?,
                 archived: r.get::<_, i64>(12)? != 0,
                 suppressed: r.get(13)?,
+                instagram: r.get(14)?,
+                beatport_url: r.get(15)?,
+                chart_note: r.get(16)?,
                 demos: Vec::new(),
             })
         })
@@ -268,6 +276,8 @@ pub struct LabelInput {
     pub demo_url: Option<String>,
     pub tier: i64,
     pub notes: Option<String>,
+    #[serde(default)]
+    pub instagram: Option<String>,
 }
 
 pub fn save_label(conn: &Connection, l: LabelInput) -> Result<i64, String> {
@@ -297,24 +307,33 @@ pub fn save_label(conn: &Connection, l: LabelInput) -> Result<i64, String> {
         return Err("Ce label est déjà dans la liste.".into());
     }
     let tier = l.tier.clamp(1, 3);
+    // "@handle", "handle" or a profile URL: stored as the profile URL.
+    let instagram = clean(l.instagram).map(|v| {
+        if v.contains("instagram.com") {
+            crate::commands::enrich::normalize_site(&v).unwrap_or(v)
+        } else {
+            format!("https://www.instagram.com/{}/", v.trim_start_matches('@').trim_matches('/'))
+        }
+    });
     let (country, genres, website, person, notes) =
         (clean(l.country), clean(l.genres), clean(l.website), clean(l.contact_name), clean(l.notes));
     let id = match l.id {
         Some(id) => {
             conn.execute(
                 "UPDATE labels SET name = ?2, name_norm = ?3, country = ?4, genres = ?5, website = ?6, email = ?7,
-                        contact_name = ?8, demo_policy = ?9, demo_url = ?10, tier = ?11, notes = ?12, updated_at = datetime('now')
+                        contact_name = ?8, demo_policy = ?9, demo_url = ?10, tier = ?11, notes = ?12, instagram = ?13,
+                        updated_at = datetime('now')
                  WHERE id = ?1",
-                params![id, name, norm, country, genres, website, email, person, l.demo_policy, demo_url, tier, notes],
+                params![id, name, norm, country, genres, website, email, person, l.demo_policy, demo_url, tier, notes, instagram],
             )
             .map_err(|e| e.to_string())?;
             id
         }
         None => {
             conn.execute(
-                "INSERT INTO labels (name, name_norm, country, genres, website, email, contact_name, demo_policy, demo_url, tier, notes, source)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'Ajout manuel')",
-                params![name, norm, country, genres, website, email, person, l.demo_policy, demo_url, tier, notes],
+                "INSERT INTO labels (name, name_norm, country, genres, website, email, contact_name, demo_policy, demo_url, tier, notes, source, instagram)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'Ajout manuel', ?12)",
+                params![name, norm, country, genres, website, email, person, l.demo_policy, demo_url, tier, notes, instagram],
             )
             .map_err(|e| e.to_string())?;
             conn.last_insert_rowid()
@@ -1376,6 +1395,7 @@ mod tests {
                 demo_url: (policy == "form").then(|| "https://label.example/demos".to_string()),
                 tier: 2,
                 notes: None,
+                instagram: None,
             },
         )
         .unwrap()
