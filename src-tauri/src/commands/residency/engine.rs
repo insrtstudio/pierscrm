@@ -383,8 +383,14 @@ pub fn pick_next(conn: &Connection, now: DateTime<Utc>) -> Option<DueMsg> {
         // First email: a mailbox found dead is dropped like a bounce, the
         // campaign goes on with the next target (deliverability/verify.rs).
         if m.step == 1 {
-            use crate::commands::deliverability::verify::{gate_first_email, Gate};
-            match gate_first_email(conn, &m.to, now) {
+            use crate::commands::deliverability::verify::{gate_first_email, Gate, RISKY_PER_DAY, RISKY_PER_DAY_LABELS};
+            // Each sending address answers for its own bounces.
+            let (sender, cap) = if is_label(conn, m.campaign_id) {
+                (crate::commands::email::labels_sender_address(conn).unwrap_or_default(), RISKY_PER_DAY_LABELS)
+            } else {
+                (crate::commands::deliverability::health::current_sender(conn), RISKY_PER_DAY)
+            };
+            match gate_first_email(conn, &m.to, &sender, cap, now) {
                 Gate::Send => {}
                 Gate::Drop(why) => {
                     let name: String = conn

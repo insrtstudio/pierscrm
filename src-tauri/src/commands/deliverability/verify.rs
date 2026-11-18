@@ -38,6 +38,9 @@ pub const CHECK_TTL_DAYS: i64 = 45;
 pub const PRECHECK_PER_TICK: usize = 10;
 /// First emails a day to catch-all addresses.
 pub const RISKY_PER_DAY: i64 = 3;
+/// Same cap for label demos: their addresses are the public demo boxes of
+/// established labels, and a wave is small.
+pub const RISKY_PER_DAY_LABELS: i64 = 8;
 /// No catch-all first email while the bounce rate of the last 14 days is above this.
 pub const RISKY_MAX_BOUNCE_PCT: f64 = 2.0;
 /// An address the service could not settle waits this long, then counts as risky.
@@ -357,45 +360,64 @@ fn days_since_first_seen(conn: &Connection, addr: &str, now: DateTime<Utc>) -> i
     .unwrap_or(0)
 }
 
-/// First emails sent today to addresses checked risky.
-pub fn risky_sent_today(conn: &Connection) -> i64 {
+/// SQL: the address an email left from (rows older than `from_addr` belong
+/// to the main account, bound as ?1).
+const FROM: &str = "lower(trim(COALESCE(NULLIF(e.from_addr, ''), ?1)))";
+
+/// First emails sent today from `sender` to addresses checked risky.
+pub fn risky_sent_today(conn: &Connection, sender: &str) -> i64 {
     conn.query_row(
-        "SELECT COUNT(DISTINCT lower(e.to_addr)) FROM emails e
-         JOIN email_checks c ON c.address = lower(trim(e.to_addr))
-         WHERE e.status = 'sent' AND c.status = 'risky'
-           AND date(e.sent_at, 'localtime') = date('now', 'localtime')",
-        [],
+        &format!(
+            "SELECT COUNT(DISTINCT lower(e.to_addr)) FROM emails e
+             JOIN email_checks c ON c.address = lower(trim(e.to_addr))
+             WHERE e.status = 'sent' AND c.status = 'risky' AND {FROM} = ?2
+               AND date(e.sent_at, 'localtime') = date('now', 'localtime')"
+        ),
+        params![super::health::current_sender(conn), norm(sender)],
         |r| r.get(0),
     )
     .unwrap_or(0)
 }
 
-/// Bounces over sends of the last 14 days (or since the health reset), in
-/// percent (0 with few sends).
-pub fn recent_bounce_pct(conn: &Connection) -> f64 {
-    let (sent, bounced): (i64, i64) = conn
-        .query_row(
+/// (sent, bounced) from `sender` over the last 14 days (or since the health
+/// reset). Each sending address answers for its own bounces: the demos sent
+/// to labels do not wait on the bounces of the club prospecting.
+fn recent_sends(conn: &Connection, sender: &str) -> (i64, i64) {
+    conn.query_row(
+        &format!(
             "WITH since AS (SELECT max(datetime('now', '-14 days'),
                     COALESCE((SELECT value FROM settings WHERE key = 'deliverability_health_reset_at'), '')) AS at)
-             SELECT (SELECT COUNT(*) FROM emails, since WHERE status = 'sent' AND sent_at >= since.at),
-                    (SELECT COUNT(*) FROM suppressions, since WHERE reason = 'bounce' AND created_at >= since.at)",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .unwrap_or((0, 0));
+             SELECT (SELECT COUNT(*) FROM emails e, since WHERE e.status = 'sent' AND e.sent_at >= since.at AND {FROM} = ?2),
+                    (SELECT COUNT(*) FROM suppressions s, since WHERE s.reason = 'bounce' AND s.created_at >= since.at
+                        AND EXISTS (SELECT 1 FROM emails e WHERE lower(trim(e.to_addr)) = s.address AND {FROM} = ?2))"
+        ),
+        params![super::health::current_sender(conn), norm(sender)],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .unwrap_or((0, 0))
+}
+
+/// Bounce rate of `sender` in percent. With few sends a rate says nothing:
+/// 0, unless two addresses already bounced (then risky ones wait).
+pub fn bounce_pct_of(sent: i64, bounced: i64) -> f64 {
     if sent < 20 {
-        return 0.0;
+        return if bounced >= 2 { 100.0 } else { 0.0 };
     }
     bounced as f64 * 100.0 / sent as f64
 }
 
+pub fn recent_bounce_pct(conn: &Connection, sender: &str) -> f64 {
+    let (sent, bounced) = recent_sends(conn, sender);
+    bounce_pct_of(sent, bounced)
+}
+
 /// The rule of the module header for one verdict.
-pub fn decide(v: &Verdict, service_set: bool, waited_days: i64, risky_today: i64, bounce_pct: f64) -> Gate {
+pub fn decide(v: &Verdict, service_set: bool, waited_days: i64, risky_today: i64, bounce_pct: f64, risky_cap: i64) -> Gate {
     let risky = |why: &str| {
         if bounce_pct > RISKY_MAX_BOUNCE_PCT {
             Gate::Wait(format!("{why}, en attente tant que le taux de rebond dépasse {RISKY_MAX_BOUNCE_PCT} %"))
-        } else if risky_today >= RISKY_PER_DAY {
-            Gate::Wait(format!("{why}, quota du jour atteint ({RISKY_PER_DAY} par jour)"))
+        } else if risky_today >= risky_cap {
+            Gate::Wait(format!("{why}, quota du jour atteint ({risky_cap} par jour)"))
         } else {
             Gate::Send
         }
@@ -412,7 +434,7 @@ pub fn decide(v: &Verdict, service_set: bool, waited_days: i64, risky_today: i64
 
 /// Before a first email. An invalid address is suppressed like a bounce
 /// (dropped from the contact, notified, the sequence stops).
-pub fn gate_first_email(conn: &Connection, addr: &str, now: DateTime<Utc>) -> Gate {
+pub fn gate_first_email(conn: &Connection, addr: &str, sender: &str, risky_cap: i64, now: DateTime<Utc>) -> Gate {
     // The engine tests run pick_next offline; the rule itself is tested below.
     if cfg!(test) {
         return Gate::Send;
@@ -420,7 +442,7 @@ pub fn gate_first_email(conn: &Connection, addr: &str, now: DateTime<Utc>) -> Ga
     let Ok(resolver) = super::dns::DohResolver::new() else { return Gate::Send };
     let svc = service(conn);
     let v = verdict_for(conn, addr, &resolver, svc.as_deref(), now);
-    let g = decide(&v, svc.is_some(), days_since_first_seen(conn, addr, now), risky_sent_today(conn), recent_bounce_pct(conn));
+    let g = decide(&v, svc.is_some(), days_since_first_seen(conn, addr, now), risky_sent_today(conn, sender), recent_bounce_pct(conn, sender), risky_cap);
     if let Gate::Drop(why) = &g {
         crate::commands::outbox::suppress(conn, addr, "invalid", Some(&format!("{} : {}", INVALID_NOTE, why)));
     }
@@ -592,14 +614,19 @@ mod tests {
     #[test]
     fn send_rule() {
         let v = |status, source| Verdict { status, reason: "r".into(), source };
-        assert_eq!(decide(&v(Status::Valid, "service"), true, 0, 9, 9.0), Gate::Send);
-        assert!(matches!(decide(&v(Status::Invalid, "local"), false, 0, 0, 0.0), Gate::Drop(_)));
-        assert_eq!(decide(&v(Status::Risky, "service"), true, 0, 0, 0.5), Gate::Send);
-        assert!(matches!(decide(&v(Status::Risky, "service"), true, 0, RISKY_PER_DAY, 0.5), Gate::Wait(_)));
-        assert!(matches!(decide(&v(Status::Risky, "service"), true, 0, 0, 3.0), Gate::Wait(_)));
-        assert_eq!(decide(&v(Status::Unknown, "local"), false, 0, 0, 0.0), Gate::Send);
-        assert!(matches!(decide(&v(Status::Unknown, "service"), true, 0, 0, 0.0), Gate::Wait(_)));
-        assert_eq!(decide(&v(Status::Unknown, "service"), true, UNKNOWN_GRACE_DAYS, 0, 0.0), Gate::Send);
+        assert_eq!(decide(&v(Status::Valid, "service"), true, 0, 9, 9.0, RISKY_PER_DAY), Gate::Send);
+        assert!(matches!(decide(&v(Status::Invalid, "local"), false, 0, 0, 0.0, RISKY_PER_DAY), Gate::Drop(_)));
+        assert_eq!(decide(&v(Status::Risky, "service"), true, 0, 0, 0.5, RISKY_PER_DAY), Gate::Send);
+        assert!(matches!(decide(&v(Status::Risky, "service"), true, 0, RISKY_PER_DAY, 0.5, RISKY_PER_DAY), Gate::Wait(_)));
+        assert!(matches!(decide(&v(Status::Risky, "service"), true, 0, 0, 3.0, RISKY_PER_DAY), Gate::Wait(_)));
+        assert_eq!(decide(&v(Status::Unknown, "local"), false, 0, 0, 0.0, RISKY_PER_DAY), Gate::Send);
+        assert!(matches!(decide(&v(Status::Unknown, "service"), true, 0, 0, 0.0, RISKY_PER_DAY), Gate::Wait(_)));
+        assert_eq!(decide(&v(Status::Unknown, "service"), true, UNKNOWN_GRACE_DAYS, 0, 0.0, RISKY_PER_DAY), Gate::Send);
+        // A wider cap for label demos, and a young sender: two bounces already hold risky addresses.
+        assert_eq!(decide(&v(Status::Risky, "service"), true, 0, RISKY_PER_DAY, 0.0, RISKY_PER_DAY_LABELS), Gate::Send);
+        assert_eq!(bounce_pct_of(8, 1), 0.0);
+        assert_eq!(bounce_pct_of(8, 2), 100.0);
+        assert_eq!(bounce_pct_of(120, 5).round(), 4.0);
     }
 
     #[test]

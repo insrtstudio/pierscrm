@@ -68,6 +68,14 @@ pub(crate) fn labels_sender_ready(conn: &rusqlite::Connection) -> bool {
     !cfg.password.trim().is_empty()
 }
 
+/// Address of the labels account, if one is set.
+pub(crate) fn labels_sender_address(conn: &rusqlite::Connection) -> Option<String> {
+    setting(conn, "smtp_labels")
+        .and_then(|j| serde_json::from_str::<SmtpConfig>(&j).ok())
+        .map(|c| c.from_email.trim().to_lowercase())
+        .filter(|a| !a.is_empty())
+}
+
 /// Is this email for a label (a demo, its follow-up, an answer to an A&R)?
 pub(crate) fn is_label_mail(conn: &rusqlite::Connection, contact_id: Option<i64>, campaign_id: Option<i64>) -> bool {
     let by_campaign = campaign_id
