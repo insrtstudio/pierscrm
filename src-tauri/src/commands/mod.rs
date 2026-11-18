@@ -34,6 +34,7 @@ pub mod visa;
 pub mod residency;
 pub mod labels;
 pub mod beatport;
+pub mod jobs;
 pub mod label_finder;
 pub mod routing;
 pub mod reply_desk;

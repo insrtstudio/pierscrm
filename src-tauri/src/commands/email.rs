@@ -603,6 +603,74 @@ fn build_message_full(
         .map_err(|e| e.to_string())
 }
 
+/// A personal email outside booking and label work (job applications): it
+/// leaves from the personal account (the labels one), carries no artist
+/// signature and no unsubscribe header, and may sit in an existing thread.
+/// Logged in `emails` so opens and replies are picked up like any other.
+/// Returns the result, the id of the logged email and its Message-ID.
+pub(crate) fn send_personal(
+    pool: &crate::db::DbPool,
+    to: &str,
+    subject: &str,
+    body: &str,
+    thread: Option<&ThreadRef>,
+    attachments: &[(String, Vec<u8>)],
+) -> Result<(SendResult, Option<i64>, String), String> {
+    let cfg = match load_labels_smtp(pool)? {
+        Some(cfg) if !cfg.password.trim().is_empty() => cfg,
+        _ => return Err(LABELS_SENDER_MISSING.into()),
+    };
+    let from_mbox = sender_mailbox(&cfg)?;
+    let to_mbox: Mailbox = parse_recipient(to).ok_or_else(|| format!("Invalid recipient address: {}", to))?;
+    let addr = to_mbox.email.to_string();
+    let tracking_base = {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        if let Some(reason) = outbox::suppression_reason(&conn, &addr) {
+            return Err(format!("{} : adresse en liste de suppression ({})", addr, reason));
+        }
+        setting(&conn, "tracking_base_url")
+    };
+    let token = deliverability::new_token(None);
+    let message_id = outbox::gen_message_id(&cfg.from_email);
+    let alt = message_body(body, &None, &tracking_base, &token);
+    let pdf = lettre::message::header::ContentType::parse("application/pdf").map_err(|e| e.to_string())?;
+    let content = attachments.iter().fold(MultiPart::mixed().multipart(alt), |m, (name, bytes)| {
+        m.singlepart(lettre::message::Attachment::new(name.clone()).body(bytes.clone(), pdf.clone()))
+    });
+    let mut b = Message::builder()
+        .from(from_mbox)
+        .to(to_mbox)
+        .subject(subject.to_string())
+        .message_id(Some(message_id.clone()));
+    if let Some(t) = thread {
+        if let Some(id) = t.in_reply_to.as_deref().filter(|s| !s.trim().is_empty()) {
+            b = b.in_reply_to(id.trim().to_string());
+        }
+        if !t.references.is_empty() {
+            b = b.references(t.references.join(" "));
+        }
+    }
+    let email = b.multipart(content).map_err(|e| e.to_string())?;
+    let transport = build_transport(&cfg)?;
+    let (outcome, error, _hard) = deliver(&transport, &email);
+    if outcome == "sent" {
+        outbox::save_to_sent(pool, &cfg, email.formatted());
+    }
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO emails (contact_id, campaign_id, to_addr, subject, body, status, error, track_token, message_id)
+         VALUES (NULL, NULL, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![addr, subject, body, outcome, error, token, (outcome == "sent").then_some(&message_id)],
+    )
+    .map_err(|e| e.to_string())?;
+    let email_id = conn.last_insert_rowid();
+    Ok((
+        SendResult { ok: outcome == "sent", error, tracked: tracking_base.is_some(), code: None },
+        Some(email_id),
+        message_id,
+    ))
+}
+
 /// Hand a message to SMTP: (status, error, hard_bounce). A permanent "no such
 /// mailbox" rejection is a hard bounce: the caller suppresses the address so it
 /// is never retried.

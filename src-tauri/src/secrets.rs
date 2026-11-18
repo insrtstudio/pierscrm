@@ -42,6 +42,8 @@ pub const SECRET_KEYS: &[&str] = &[
     "pushover_token",
     // Mailbox check before a first email (deliverability/verify.rs).
     "email_verifier_key",
+    // Job search (commands/jobs): the user's Adzuna developer key.
+    "adzuna_app_key",
 ];
 
 /// Vault key of the SMTP password (stored inside the `smtp` JSON setting before).

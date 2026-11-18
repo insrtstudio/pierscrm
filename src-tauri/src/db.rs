@@ -827,6 +827,7 @@ fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
     // Radar already found. Additive, see commands/labels.
     crate::commands::labels::migrate(conn);
     crate::commands::beatport::migrate(conn);
+    crate::commands::jobs::migrate(conn);
     // Contacts of campaigns deleted before a deletion released them, once.
     crate::commands::residency::stop::migrate(conn);
 

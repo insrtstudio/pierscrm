@@ -85,6 +85,7 @@ pub fn run() {
             let pool_for_pulse = pool.clone();
             let pool_for_residency = pool.clone();
             let pool_for_autosend = pool.clone();
+            let pool_for_jobs = pool.clone();
             app.manage(AppState {
                 pool,
                 cancels: Arc::new(Mutex::new(HashSet::new())),
@@ -96,6 +97,8 @@ pub fn run() {
             commands::residency::engine::start(pool_for_residency, app.handle().clone());
             // Reply desk autonomous sends (level 1 categories, commands/autonomy.rs).
             commands::autonomy::start(pool_for_autosend);
+            // Job search: one pass a day, prepares applications, never sends.
+            commands::jobs::daily::start(pool_for_jobs, app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -228,6 +231,27 @@ pub fn run() {
             commands::beatport::label_load_top,
             commands::beatport::label_card,
             commands::label_finder::labels_find_contacts,
+            commands::jobs::jobs_board,
+            commands::jobs::job_detail,
+            commands::jobs::job_save,
+            commands::jobs::job_set_status,
+            commands::jobs::job_delete,
+            commands::jobs::jobs_import_sheet,
+            commands::jobs::jobs_config,
+            commands::jobs::jobs_save_search,
+            commands::jobs::jobs_delete_search,
+            commands::jobs::jobs_save_board,
+            commands::jobs::jobs_delete_board,
+            commands::jobs::jobs_save_prefs,
+            commands::jobs::jobs_save_profile,
+            commands::jobs::apply::job_prepare,
+            commands::jobs::apply::job_save_draft,
+            commands::jobs::apply::job_send,
+            commands::jobs::apply::job_send_followup,
+            commands::jobs::apply::job_mark_applied,
+            commands::jobs::apply::job_open_cv,
+            commands::jobs::apply::jobs_check_pdf,
+            commands::jobs::daily::jobs_run,
             commands::labels::label_demos_list,
             commands::labels::label_demo_create,
             commands::labels::label_demo_get,
