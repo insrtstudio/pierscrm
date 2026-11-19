@@ -47,7 +47,8 @@ pub const PROFILE_SKELETON: &str = r#"{
   ],
   "skills": [ { "name": { "en": "", "fr": "" }, "items": { "en": "", "fr": "" } } ],
   "placements": [],
-  "facts": []
+  "facts": [],
+  "education": [ { "period": { "en": "", "fr": "" }, "title": { "en": "", "fr": "" }, "org": "" } ]
 }"#;
 
 /// A text in the two languages of the CVs. One side may be empty.
@@ -149,6 +150,19 @@ pub struct Profile {
     /// Other true facts the AI may draw on (earlier jobs, tools, studies).
     #[serde(default)]
     pub facts: Vec<String>,
+    /// Studies and training, printed as they stand.
+    #[serde(default)]
+    pub education: Vec<Education>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Education {
+    #[serde(default)]
+    pub period: L,
+    #[serde(default)]
+    pub title: L,
+    #[serde(default)]
+    pub org: String,
 }
 
 pub fn load_profile(conn: &Connection) -> Option<Profile> {
@@ -159,6 +173,7 @@ pub fn load_profile(conn: &Connection) -> Option<Profile> {
 
 /// The CV as printed: every field resolved in one language.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct CvDoc {
     pub lang: String,
     pub target: String,
@@ -175,18 +190,73 @@ pub struct CvDoc {
     pub experience: Vec<DocExperience>,
     pub skills: Vec<(String, String)>,
     pub placements: Vec<(String, Vec<Placement>)>,
+    /// (period, title, school)
+    pub education: Vec<(String, String, String)>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct DocExperience {
     pub period: String,
     pub title: String,
     pub org: String,
     pub bullets: Vec<String>,
+    /// In the field of the posting: printed first and in full. The others
+    /// follow in a shorter block.
+    pub core: bool,
 }
 
 fn norm_lang(lang: &str) -> &'static str {
     if lang.trim().to_lowercase().starts_with("fr") { "fr" } else { "en" }
+}
+
+/// The posting's title as a CV headline: no gender marker, no trailing
+/// "role" or "job", nothing after a dash or a comma that names the employer.
+pub fn headline(title: &str) -> String {
+    let mut t = title.trim().to_string();
+    for marker in ["(H/F)", "(F/H)", "(M/F)", "(F/M)", "(H/F/X)", "(M/F/D)", "(m/f/d)", "(h/f)", "(f/h)", " H/F", " F/H"] {
+        t = t.replace(marker, "");
+    }
+    let mut t = t.trim().trim_end_matches(['-', ',', '·', '|']).trim().to_string();
+    for tail in [" role", " job", " position"] {
+        if t.to_lowercase().ends_with(tail) {
+            t.truncate(t.len() - tail.len());
+        }
+    }
+    t.trim().to_string()
+}
+
+/// "2017 to present" as parsers expect it: "2017 - Present".
+pub fn period_text(period: &str) -> String {
+    let p = period.trim().replace(" to ", " - ").replace(" à ", " - ").replace(" au ", " - ");
+    match p.rsplit_once(" - ") {
+        Some((a, b)) => {
+            let mut c = b.chars();
+            let b: String = c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default();
+            format!("{a} - {b}")
+        }
+        None => p,
+    }
+}
+
+/// (end, start) of a period, the present counting as the latest end.
+fn period_key(period: &str) -> (u32, u32) {
+    let years: Vec<u32> = period
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|w| w.len() == 4)
+        .filter_map(|w| w.parse().ok())
+        .collect();
+    let start = years.iter().copied().min().unwrap_or(0);
+    let low = period.to_lowercase();
+    let open = low.contains("present") || low.contains("présent") || low.contains("aujourd") || low.contains("now") || years.len() == 1;
+    (if open { 9999 } else { years.iter().copied().max().unwrap_or(0) }, start)
+}
+
+/// The jobs in the field of the posting first, then the others; inside each
+/// block the most recent first, as recruiters and parsers both expect.
+pub fn ordered(mut d: CvDoc) -> CvDoc {
+    d.experience.sort_by(|a, b| (b.core, period_key(&b.period)).cmp(&(a.core, period_key(&a.period))));
+    d
 }
 
 fn placements_of(p: &Profile, lang: &str) -> Vec<(String, Vec<Placement>)> {
@@ -207,7 +277,7 @@ pub fn base_doc(p: &Profile, lang: &str, target: &str, place: &str) -> CvDoc {
     let lang = norm_lang(lang);
     CvDoc {
         lang: lang.to_string(),
-        target: target.trim().to_string(),
+        target: headline(target),
         place: place.trim().to_string(),
         name: p.identity.name.trim().to_string(),
         summary: p.summary.get(lang).to_string(),
@@ -222,14 +292,21 @@ pub fn base_doc(p: &Profile, lang: &str, target: &str, place: &str) -> CvDoc {
             .experience
             .iter()
             .map(|e| DocExperience {
-                period: e.period.get(lang).to_string(),
+                period: period_text(e.period.get(lang)),
                 title: e.titles.first().map(|t| t.get(lang).to_string()).unwrap_or_default(),
                 org: e.org.clone(),
                 bullets: e.bullets.iter().map(|b| b.get(lang).to_string()).filter(|b| !b.is_empty()).collect(),
+                core: true,
             })
             .collect(),
         skills: p.skills.iter().take(3).map(|s| (s.name.get(lang).to_string(), s.items.get(lang).to_string())).collect(),
         placements: placements_of(p, lang),
+        education: p
+            .education
+            .iter()
+            .map(|e| (period_text(e.period.get(lang)), e.title.get(lang).to_string(), e.org.clone()))
+            .filter(|(_, t, o)| !t.is_empty() || !o.is_empty())
+            .collect(),
     }
 }
 
@@ -299,15 +376,26 @@ pub struct Posting<'a> {
 fn tailor_system(p: &Profile) -> Vec<SystemBlock> {
     let rules = "You adapt one person's CV to one job posting. You are an editor, not an author: \
 the profile below is the only source of facts and you may not add to it.\n\
-What you decide: which figures to show (up to 4, by index), which title variant to print for each job (by index), \
+What you decide: a short summary, which figures to show (up to 4, by index), which title variant to print for each job (by index), \
 which bullets to keep for each job and how to word them, and three skill groups.\n\
 Rules:\n\
 - Keep every job of the profile, in the same order. Dates and employers are printed from the profile, you do not write them.\n\
+- core: true for EVERY job in the industry of the posting, whatever the role held (for a posting in music: every job in music, \
+label, publishing, composing, management, booking), false for the jobs outside it. Core jobs are printed first and in full, \
+3 to 5 bullets each. The others are printed after, 1 or 2 bullets each, worded for what they bring to this posting from outside \
+the industry (clients, sales, negotiation, service, organisation), still only with the facts of the profile.\n\
 - A bullet restates facts of that job's bullets (or of the 'facts' list). You may merge, shorten, reorder and reword so the \
 vocabulary matches the posting where the profile truly supports it. Never add a number, a company, a tool, a title, a result \
 or a skill that is not in the profile. If the posting asks for something the profile does not show, leave it out.\n\
-- Put first the bullets that answer the posting. 2 to 4 bullets per job, one line each, no first person, no full stop needed.\n\
-- Skill groups: a short name and one line of items separated by commas, drawn from the profile's skills and facts only.\n\
+- Put first the bullets that answer the posting. One line each, no first person, no full stop needed.\n\
+- Plain factual wording everywhere: what was done, for whom, with what result. No slogan, no catchphrase, no 'passionate', \
+'proven track record', 'results-driven', 'dynamic', 'seasoned' or the like.\n\
+- Summary: 2 or 3 sentences aimed at this posting. Say what the person does and for how long, then the two or three facts \
+of the profile that answer the posting best, in the posting's own vocabulary where the profile supports it. Facts only: \
+no first person, no adjective about character or motivation, no company name of the posting, numbers only as they stand in the profile. \
+Do not reuse the profile's own summary.\n\
+- Skill groups: a short name and one line of 6 to 10 items separated by commas, drawn from the profile's skills and facts only, \
+the items the posting asks for first.\n\
 - Write in the language given. Plain words. No em dash, no semicolon chains, no superlatives.\n\
 Answer with JSON only.";
     vec![
@@ -320,12 +408,13 @@ fn tailor_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["figures", "experience", "skills"],
+        "required": ["summary", "figures", "experience", "skills"],
         "properties": {
+            "summary": { "type": "string" },
             "figures": { "type": "array", "items": { "type": "integer" } },
             "experience": { "type": "array", "items": {
-                "type": "object", "additionalProperties": false, "required": ["id", "title", "bullets"],
-                "properties": { "id": { "type": "string" }, "title": { "type": "integer" }, "bullets": { "type": "array", "items": { "type": "string" } } }
+                "type": "object", "additionalProperties": false, "required": ["id", "core", "title", "bullets"],
+                "properties": { "id": { "type": "string" }, "core": { "type": "boolean" }, "title": { "type": "integer" }, "bullets": { "type": "array", "items": { "type": "string" } } }
             } },
             "skills": { "type": "array", "items": {
                 "type": "object", "additionalProperties": false, "required": ["name", "items"],
@@ -381,6 +470,16 @@ pub fn apply_choices(p: &Profile, post: &Posting, choices: &Value) -> (CvDoc, Ve
         doc.figures = figs;
     }
 
+    let summary = crate::commands::residency::claude::no_dashes(choices["summary"].as_str().unwrap_or("")).trim().to_string();
+    if !summary.is_empty() {
+        let bad = summary.split_inclusive(". ").find_map(|s| guard(s.trim(), &corpus, &terms));
+        match bad {
+            None if summary.chars().count() <= 520 => doc.summary = summary,
+            None => warnings.push("Résumé écarté (trop long), celui du profil est repris.".into()),
+            Some(why) => warnings.push(format!("Résumé écarté ({}), celui du profil est repris : {}", why, summary)),
+        }
+    }
+
     let empty = Vec::new();
     let chosen = choices["experience"].as_array().unwrap_or(&empty);
     for (i, e) in p.experience.iter().enumerate() {
@@ -399,8 +498,12 @@ pub fn apply_choices(p: &Profile, post: &Posting, choices: &Value) -> (CvDoc, Ve
                 Some(why) => warnings.push(format!("Ligne écartée ({}) : {}", why, line)),
             }
         }
+        let core = c["core"].as_bool().unwrap_or(true);
+        doc.experience[i].core = core;
         if !bullets.is_empty() {
-            doc.experience[i].bullets = bullets.into_iter().take(5).collect();
+            doc.experience[i].bullets = bullets.into_iter().take(if core { 5 } else { 2 }).collect();
+        } else if !core {
+            doc.experience[i].bullets.truncate(2);
         }
     }
 
@@ -428,9 +531,9 @@ pub fn apply_choices(p: &Profile, post: &Posting, choices: &Value) -> (CvDoc, Ve
 pub fn tailor(p: &Profile, post: &Posting, llm: Option<&dyn Llm>, model: &str, usage: &mut dyn FnMut(&str, &crate::commands::residency::claude::Usage)) -> (CvDoc, Vec<String>) {
     let lang = norm_lang(post.lang);
     let Some(llm) = llm else {
-        return (base_doc(p, lang, post.title, post.location), vec!["CV non adapté : IA non réglée.".into()]);
+        return (ordered(base_doc(p, lang, post.title, post.location)), vec!["CV non adapté : IA non réglée.".into()]);
     };
-    match llm.complete(&tailor_request(p, post, model)) {
+    let (doc, warnings) = match llm.complete(&tailor_request(p, post, model)) {
         Ok(resp) => {
             usage(&resp.model, &resp.usage);
             match extract_json(&resp.text) {
@@ -439,7 +542,8 @@ pub fn tailor(p: &Profile, post: &Posting, llm: Option<&dyn Llm>, model: &str, u
             }
         }
         Err(e) => (base_doc(p, lang, post.title, post.location), vec![format!("CV non adapté : {e}")]),
-    }
+    };
+    (ordered(doc), warnings)
 }
 
 // ---------------- HTML ----------------
@@ -449,46 +553,47 @@ fn esc(s: &str) -> String {
 }
 
 struct Labels {
-    target: &'static str,
-    contact: &'static str,
-    links: &'static str,
+    summary: &'static str,
+    highlights: &'static str,
     languages: &'static str,
     affiliations: &'static str,
-    figures: &'static str,
     experience: &'static str,
+    other: &'static str,
     skills: &'static str,
+    education: &'static str,
     placements: &'static str,
+    colon: &'static str,
 }
 
 fn labels(lang: &str) -> Labels {
     if lang == "fr" {
-        Labels { target: "Profil de recherche", contact: "Contact", links: "Liens", languages: "Langues", affiliations: "Affiliations",
-            figures: "En chiffres", experience: "Expérience", skills: "Compétences", placements: "Placements" }
+        Labels { summary: "Profil", highlights: "Chiffres clés", languages: "Langues", affiliations: "Affiliations",
+            experience: "Expérience professionnelle", other: "Autres expériences", skills: "Compétences", education: "Formation",
+            placements: "Sélection de placements", colon: " : " }
     } else {
-        Labels { target: "Target role", contact: "Contact", links: "Links", languages: "Languages", affiliations: "Affiliations",
-            figures: "In figures", experience: "Experience", skills: "Skills", placements: "Placements" }
+        Labels { summary: "Professional Summary", highlights: "Key figures", languages: "Languages", affiliations: "Affiliations",
+            experience: "Professional Experience", other: "Additional Experience", skills: "Skills", education: "Education",
+            placements: "Selected Placements", colon: ": " }
     }
 }
 
-const CSS: &str = "@page{size:A4;margin:15mm 16mm}*{box-sizing:border-box}\
-body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-variant-ligatures:none;font-feature-settings:'liga' 0,'clig' 0;letter-spacing:0;color:#111;font-size:9.6pt;line-height:1.42;margin:0}\
-h1{font-size:25pt;line-height:1;margin:0 0 3mm;text-transform:uppercase;font-weight:700}\
-.target{font-size:9pt;text-transform:uppercase;font-weight:700;margin:0 0 4mm}\
-.summary{margin:0 0 4mm;max-width:165mm;color:#222}\
-.meta{border-top:.4pt solid #111;border-bottom:.4pt solid #111;padding:2.6mm 0;margin:0 0 4mm}\
-.meta p{margin:0 0 .6mm}.meta b,.k{font-size:7.4pt;text-transform:uppercase;font-weight:700}\
-.figs{margin:0 0 5mm;padding:0;list-style:none;display:flex;gap:7mm;flex-wrap:wrap}\
-.figs li{white-space:nowrap}.figs b{font-size:14pt;margin-right:1.6mm}.figs span{font-size:7.6pt;text-transform:uppercase}\
-h2{font-size:9pt;text-transform:uppercase;margin:5mm 0 2.4mm;padding-bottom:1.2mm;border-bottom:.4pt solid #111}\
-.job{margin:0 0 3.2mm;break-inside:avoid}.job h3{font-size:10.2pt;margin:0;font-weight:700}\
-.job .org{margin:0;color:#333}.job .org .per{font-size:7.8pt;text-transform:uppercase}\
-ul.b{margin:1mm 0 0;padding-left:4.2mm}ul.b li{margin:0 0 .5mm}\
-.skill{margin:0 0 1.6mm}.skill b{font-weight:700}\
-h4{font-size:8pt;text-transform:uppercase;margin:3.4mm 0 1.2mm;color:#333}\
-.pl{margin:0;padding:0;list-style:none}.pl li{margin:0 0 .7mm;break-inside:avoid;font-size:8.8pt}.pl b{font-weight:700}";
+// One family, three sizes (name, headings, text) and one weight for emphasis:
+// what a screening tool reads as consistent formatting.
+const CSS: &str = "@page{size:A4;margin:14mm 16mm}*{box-sizing:border-box}\
+body{font-family:Arial,Helvetica,sans-serif;font-variant-ligatures:none;font-feature-settings:'liga' 0,'clig' 0;letter-spacing:0;color:#000;font-size:10pt;line-height:1.38;margin:0}\
+h1{font-size:20pt;line-height:1.1;margin:0 0 1mm;font-weight:700}\
+.headline{font-size:12pt;font-weight:700;margin:0 0 2mm}\
+.contact{margin:0 0 .6mm}\
+h2{font-size:12pt;font-weight:700;text-transform:uppercase;margin:5mm 0 2mm;padding-bottom:1mm;border-bottom:.5pt solid #000}\
+p{margin:0 0 1.4mm}\
+.job{margin:0 0 3mm}.job h3{font-size:10pt;margin:0;font-weight:700;break-after:avoid}.job .org{margin:0;break-after:avoid}.per{white-space:nowrap}\
+ul{margin:.8mm 0 0;padding-left:4.6mm}li{margin:0 0 .4mm}\
+h3.g{font-size:10pt;font-weight:700;margin:2.6mm 0 .8mm}\
+.pl li{break-inside:avoid}";
 
-/// One HTML flow, in the order a person reads it. No columns, no tables, no
-/// text in images: a parser gets the same lines in the same order.
+/// One HTML flow, in the order a parser expects: identity, summary, skills,
+/// experience from the most recent, education, credits. No columns, no
+/// tables, no text in images, no label in front of the contact details.
 pub fn render_html(d: &CvDoc) -> String {
     let l = labels(&d.lang);
     let mut h = String::new();
@@ -497,39 +602,50 @@ pub fn render_html(d: &CvDoc) -> String {
         esc(&d.lang), esc(&d.name), esc(&d.target), CSS
     ));
     h.push_str(&format!("<h1>{}</h1>", esc(&d.name)));
-    let target = if d.place.is_empty() { d.target.clone() } else { format!("{} · {}", d.target, d.place) };
-    h.push_str(&format!("<p class=\"target\">{} : {}</p>", l.target, esc(&target)));
-    if !d.summary.is_empty() {
-        h.push_str(&format!("<p class=\"summary\">{}</p>", esc(&d.summary)));
+    if !d.target.is_empty() {
+        h.push_str(&format!("<p class=\"headline\">{}</p>", esc(&d.target)));
     }
-    h.push_str("<div class=\"meta\">");
     let contact: Vec<&str> = [d.email.as_str(), d.phone.as_str(), d.location.as_str()].into_iter().filter(|s| !s.is_empty()).collect();
-    h.push_str(&format!("<p><b>{}</b> : {}</p>", l.contact, esc(&contact.join(" · "))));
+    h.push_str(&format!("<p class=\"contact\">{}</p>", esc(&contact.join(" | "))));
     if !d.links.is_empty() {
-        h.push_str(&format!("<p><b>{}</b> : {}</p>", l.links, esc(&d.links.join(" · "))));
+        h.push_str(&format!("<p class=\"contact\">{}</p>", esc(&d.links.join(" | "))));
     }
-    if !d.languages.is_empty() {
-        h.push_str(&format!("<p><b>{}</b> : {}</p>", l.languages, esc(&d.languages)));
-    }
-    if !d.affiliations.is_empty() {
-        h.push_str(&format!("<p><b>{}</b> : {}</p>", l.affiliations, esc(&d.affiliations)));
-    }
-    h.push_str("</div>");
-    if !d.figures.is_empty() {
-        h.push_str(&format!("<ul class=\"figs\" aria-label=\"{}\">", l.figures));
-        for (v, label) in &d.figures {
-            h.push_str(&format!("<li><b>{}</b><span>{}</span></li>", esc(v), esc(label)));
+    if !d.summary.is_empty() || !d.figures.is_empty() {
+        h.push_str(&format!("<h2>{}</h2>", l.summary));
+        if !d.summary.is_empty() {
+            h.push_str(&format!("<p>{}</p>", esc(&d.summary)));
         }
-        h.push_str("</ul>");
+        if !d.figures.is_empty() {
+            let figs: Vec<String> = d.figures.iter().map(|(v, label)| format!("{} {}", v.trim(), label.trim())).collect();
+            h.push_str(&format!("<p><b>{}</b>{}{}</p>", l.highlights, l.colon, esc(&figs.join(", "))));
+        }
+    }
+    if !d.skills.is_empty() || !d.languages.is_empty() {
+        h.push_str(&format!("<h2>{}</h2>", l.skills));
+        for (name, items) in &d.skills {
+            h.push_str(&format!("<p><b>{}</b>{}{}</p>", esc(name), l.colon, esc(items)));
+        }
+        if !d.languages.is_empty() {
+            h.push_str(&format!("<p><b>{}</b>{}{}</p>", l.languages, l.colon, esc(&d.languages.replace(" · ", ", "))));
+        }
+        if !d.affiliations.is_empty() {
+            h.push_str(&format!("<p><b>{}</b>{}{}</p>", l.affiliations, l.colon, esc(&d.affiliations.replace(" · ", ", "))));
+        }
     }
     h.push_str(&format!("<h2>{}</h2>", l.experience));
+    let split = d.experience.iter().any(|e| e.core) && d.experience.iter().any(|e| !e.core);
+    let mut in_other = false;
     for e in &d.experience {
+        if split && !e.core && !in_other {
+            in_other = true;
+            h.push_str(&format!("<h2>{}</h2>", l.other));
+        }
         h.push_str(&format!(
-            "<div class=\"job\"><h3>{}</h3><p class=\"org\">{} · <span class=\"per\">{}</span></p>",
+            "<div class=\"job\"><h3>{}</h3><p class=\"org\">{} | <span class=\"per\">{}</span></p>",
             esc(&e.title), esc(&e.org), esc(&e.period)
         ));
         if !e.bullets.is_empty() {
-            h.push_str("<ul class=\"b\">");
+            h.push_str("<ul>");
             for b in &e.bullets {
                 h.push_str(&format!("<li>{}</li>", esc(b)));
             }
@@ -537,23 +653,24 @@ pub fn render_html(d: &CvDoc) -> String {
         }
         h.push_str("</div>");
     }
-    if !d.skills.is_empty() {
-        h.push_str(&format!("<h2>{}</h2>", l.skills));
-        for (name, items) in &d.skills {
-            h.push_str(&format!("<p class=\"skill\"><b>{}</b> : {}</p>", esc(name), esc(items)));
+    if !d.education.is_empty() {
+        h.push_str(&format!("<h2>{}</h2>", l.education));
+        for (period, title, org) in &d.education {
+            let rest: Vec<&str> = [org.as_str(), period.as_str()].into_iter().filter(|s| !s.trim().is_empty()).collect();
+            h.push_str(&format!("<div class=\"job\"><h3>{}</h3><p class=\"org\">{}</p></div>", esc(title), esc(&rest.join(" | "))));
         }
     }
     if !d.placements.is_empty() {
         h.push_str(&format!("<h2>{}</h2>", l.placements));
         for (group, rows) in &d.placements {
             if !group.is_empty() {
-                h.push_str(&format!("<h4>{}</h4>", esc(group)));
+                h.push_str(&format!("<h3 class=\"g\">{}</h3>", esc(group)));
             }
             h.push_str("<ul class=\"pl\">");
             for r in rows {
                 let rest: Vec<&str> = [r.broadcaster.as_str(), r.track.as_str(), r.reach.as_str(), r.role.as_str()]
                     .into_iter().filter(|s| !s.trim().is_empty()).collect();
-                h.push_str(&format!("<li><b>{}</b>{}{}</li>", esc(&r.programme), if rest.is_empty() { "" } else { " · " }, esc(&rest.join(" · "))));
+                h.push_str(&format!("<li>{}{}{}</li>", esc(&r.programme), if rest.is_empty() { "" } else { ", " }, esc(&rest.join(", "))));
             }
             h.push_str("</ul>");
         }
@@ -697,7 +814,7 @@ mod tests {
         assert_eq!(doc.figures, vec![("41".into(), "broadcast countries".into()), ("12".into(), "years in sync".into())]);
         assert_eq!(doc.experience.len(), 2, "every job of the profile stays, no job is added");
         assert_eq!(doc.experience[0].title, "Founder, label and artist manager");
-        assert_eq!(doc.experience[0].period, "2017 to present");
+        assert_eq!(doc.experience[0].period, "2017 - Present");
         assert_eq!(doc.experience[0].bullets, vec!["Licence deals with brands and producers".to_string()]);
         assert_eq!(doc.experience[1].bullets, vec!["50 accounts, around $1.5M in annual revenue".to_string()], "untouched job keeps the profile wording");
         assert_eq!(doc.skills.len(), 2);
@@ -715,7 +832,9 @@ mod tests {
         assert!(pos("alex@example.test") < pos("Expérience"));
         assert!(pos("Fondateur, label manager") < pos("Acme Records, Lyon"));
         assert!(pos("Acme Records, Lyon") < pos("Responsable des ventes"));
-        assert!(pos("Compétences") < pos("Placements"));
+        assert!(pos("Compétences") < pos("Expérience professionnelle"), "skills come before the jobs");
+        assert!(pos("Expérience professionnelle") < pos("Sélection de placements"));
+        assert!(!text.contains("Autres expériences"), "one block when no job is set apart");
         assert_eq!(file_name(&doc), "CV_Alex_Martin_Sync_Manager_FR.pdf");
     }
 }

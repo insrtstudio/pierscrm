@@ -96,7 +96,7 @@ Answer with JSON only.";
     let body: String = text.chars().take(9000).collect();
     LlmRequest {
         model: DEFAULT_MODEL.to_string(),
-        max_tokens: 1100,
+        max_tokens: 2200,
         system: vec![
             SystemBlock { text: rules.to_string(), cache: false },
             SystemBlock { text: format!("CANDIDATE PROFILE\n{}", profile_digest(p)), cache: true },

@@ -148,6 +148,7 @@ pub fn check_pdf(p: &Profile, path: &Path, title: &str, keywords: &[String], doc
         Some(d) => d.experience.iter().map(|e| (e.org.as_str(), e.bullets.iter().map(String::as_str).collect())).collect(),
         None => p.experience.iter().zip(en).map(|(e, lines)| (e.org.as_str(), lines)).collect(),
     };
+    let title = &cv::headline(title);
     Ok(ats::check(&text, &ats::Expect { name: &p.identity.name, email: &p.identity.email, phone: &p.identity.phone, title, jobs, strict: doc.is_some(), keywords, profile_text: &ptext }))
 }
 
@@ -457,9 +458,19 @@ mod real_pdf {
         let p: Profile = serde_json::from_str(&std::fs::read_to_string(std::env::var("JOBS_PROFILE").unwrap()).unwrap()).unwrap();
         let out = PathBuf::from(std::env::var("JOBS_OUT").unwrap());
         let lang = std::env::var("JOBS_LANG").unwrap_or_else(|_| "en".into());
-        let doc = cv::base_doc(&p, &lang, "Sync Manager", "London");
-        let path = cv::print_pdf(&doc, &out).unwrap();
         let kw: Vec<String> = ["sync licensing", "clearance", "cue sheets", "music supervisors", "Salesforce", "metadata"].iter().map(|s| s.to_string()).collect();
+        // JOBS_CHOICES: a JSON file shaped like the AI's answer, to see a tailored CV without calling the AI.
+        let doc = match std::env::var("JOBS_CHOICES") {
+            Ok(f) => {
+                let choices: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(f).unwrap()).unwrap();
+                let post = Posting { title: "Sync Manager", company: "", location: "London", description: "", lang: &lang, keywords: &kw };
+                let (doc, warnings) = cv::apply_choices(&p, &post, &choices);
+                println!("warnings: {warnings:#?}");
+                cv::ordered(doc)
+            }
+            Err(_) => cv::ordered(cv::base_doc(&p, &lang, "Sync Manager", "London")),
+        };
+        let path = cv::print_pdf(&doc, &out).unwrap();
         let r = check_pdf(&p, &path, "Sync Manager", &kw, Some(&doc)).unwrap();
         println!("{}\n{}", path.display(), serde_json::to_string_pretty(&r).unwrap());
         if let Ok(other) = std::env::var("JOBS_OTHER") {
