@@ -51,10 +51,12 @@ fn analysis_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["is_posting", "domain", "score", "line", "lang", "contract", "salary", "seniority", "deadline", "work_right",
+        "required": ["is_posting", "expired", "posted", "domain", "score", "line", "lang", "contract", "salary", "seniority", "deadline", "work_right",
             "strengths", "gaps", "keywords", "apply_email", "apply_url", "contact_name", "contact_role"],
         "properties": {
             "is_posting": { "type": "boolean" },
+            "expired": { "type": "boolean" },
+            "posted": { "type": "string" },
             "domain": { "type": "string", "enum": ["sync", "label", "booking", "other"] },
             "score": { "type": "integer" },
             "line": s,
@@ -75,6 +77,11 @@ pub fn analysis_request(p: &Profile, title: &str, company: &str, location: &str,
 management, booking and agencies) looking in France, the UK and the USA. You are given the candidate's profile and the \
 text of a page.\n\
 - is_posting: false when the page is not one open position (a list of jobs, an article, a course, a closed role).\n\
+- posted: the date the posting was published, as YYYY-MM-DD, when the page states it (a date, or 'posted 3 weeks ago' \
+counted back from today), else empty. Never guess.\n\
+- expired: true when the opening can no longer be applied to. That is when the page says it is closed, filled, expired or \
+no longer accepting applications, when its deadline or the start date of the job is before today, or when it was published \
+more than 45 days before today and no later deadline is given. False when the page shows it open or gives no sign either way.\n\
 - domain: sync, label, booking, or other when the role is outside those three.\n\
 - score: 0 to 100, how likely this candidate is to be shortlisted. Judge the must-haves against the profile honestly. \
 A role in a domain the candidate has never worked in scores under 40. A required right to work the candidate lacks \
@@ -101,7 +108,7 @@ Answer with JSON only.";
             SystemBlock { text: rules.to_string(), cache: false },
             SystemBlock { text: format!("CANDIDATE PROFILE\n{}", profile_digest(p)), cache: true },
         ],
-        user: format!("Title: {title}\nCompany: {company}\nPlace: {location}\n\nPAGE TEXT\n{body}"),
+        user: format!("Today: {}\nTitle: {title}\nCompany: {company}\nPlace: {location}\n\nPAGE TEXT\n{body}", chrono::Local::now().format("%Y-%m-%d")),
         schema: Some(analysis_schema()),
     }
 }
@@ -134,6 +141,22 @@ pub fn store_analysis(conn: &Connection, id: i64, v: &Value, text: &str, mx: &mu
             "UPDATE job_posts SET status = 'dismissed', analysed_at = datetime('now'), notes = 'Écartée : la page n''est pas une offre ouverte' WHERE id = ?1",
             params![id],
         );
+        return None;
+    }
+    // The date read on the page, kept when it is a real past date.
+    let today = chrono::Local::now().date_naive();
+    let posted = s(v, "posted").and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()).filter(|d| *d <= today);
+    if let Some(d) = posted {
+        let _ = conn.execute("UPDATE job_posts SET posted_at = COALESCE(posted_at, ?2) WHERE id = ?1", params![id, d.to_string()]);
+    }
+    let too_old = posted.map(|d| (today - d).num_days() > super::MAX_AGE_DAYS).unwrap_or(false);
+    if v["expired"].as_bool() == Some(true) || too_old {
+        let _ = conn.execute("UPDATE job_posts SET analysed_at = datetime('now') WHERE id = ?1", params![id]);
+        let why = match posted {
+            Some(d) if too_old => format!("publiée le {d}, il y a plus de {} jours", super::MAX_AGE_DAYS),
+            _ => "la page indique que l'offre n'est plus ouverte (close, pourvue ou date limite passée)".to_string(),
+        };
+        super::close_post(conn, id, &why);
         return None;
     }
     let score = v["score"].as_i64().unwrap_or(0).clamp(0, 100);
@@ -178,13 +201,31 @@ pub fn analyse(conn: &Connection, http: &Http, llm: &dyn Llm, p: &Profile, id: i
         })
         .map_err(|e| e.to_string())?;
     if description.chars().count() < 600 {
-        if let Some(page) = url.as_deref().and_then(|u| http.page_text(u)) {
-            if page.len() > description.len() {
-                description = page.chars().take(12000).collect();
-                let _ = conn.execute("UPDATE job_posts SET description = ?2 WHERE id = ?1", params![id, description]);
+        if let Some(u) = url.as_deref().filter(|u| !super::sources::no_fetch(u)) {
+            match http.text(u) {
+                Ok(html) => {
+                    let page = super::sources::html_to_text(&html);
+                    if page.len() > 200 && page.len() > description.len() {
+                        description = page.chars().take(12000).collect();
+                        let _ = conn.execute("UPDATE job_posts SET description = ?2 WHERE id = ?1", params![id, description]);
+                    }
+                }
+                Err(e) if e == "HTTP 404" || e == "HTTP 410" => {
+                    let _ = conn.execute("UPDATE job_posts SET analysed_at = datetime('now') WHERE id = ?1", params![id]);
+                    super::close_post(conn, id, "la page a été retirée");
+                    return Ok(None);
+                }
+                Err(_) => {}
             }
         }
     }
+    // A page that says the opening is closed needs no reading by the AI.
+    if let Some(m) = super::sources::closed_marker(&description) {
+        let _ = conn.execute("UPDATE job_posts SET analysed_at = datetime('now') WHERE id = ?1", params![id]);
+        super::close_post(conn, id, &format!("la page indique « {m} »"));
+        return Ok(None);
+    }
+    let _ = conn.execute("UPDATE job_posts SET checked_at = datetime('now') WHERE id = ?1", params![id]);
     let resp = llm.complete(&analysis_request(p, &title, &company, &location, &description))?;
     crate::commands::residency::claude::log_usage(conn, "jobs_analysis", None, &resp.model, &resp.usage);
     let v = extract_json(&resp.text).ok_or("analyse illisible")?;
@@ -401,6 +442,45 @@ mod tests {
         conn.execute("INSERT INTO job_posts (source_key, title) VALUES ('k', 'Sync jobs')", []).unwrap();
         assert_eq!(store_analysis(&conn, 1, &json!({ "is_posting": false }), "", &mut yes), None);
         assert_eq!(crate::commands::jobs::one(&conn, 1).unwrap().status, "dismissed");
+    }
+
+    #[test]
+    fn expired_or_old_postings_are_closed_and_their_draft_goes() {
+        let conn = crate::commands::jobs::test_db();
+        for k in ["a", "b", "c", "d"] {
+            conn.execute("INSERT INTO job_posts (source_key, title) VALUES (?1, 'Sync Manager')", [k]).unwrap();
+        }
+        conn.execute("INSERT INTO job_applications (post_id, state) VALUES (1, 'draft')", []).unwrap();
+        let base = |extra: Value| {
+            let mut v = json!({ "is_posting": true, "domain": "sync", "score": 80, "line": "x", "lang": "en", "strengths": [], "gaps": [], "keywords": [] });
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            v
+        };
+        // The page says it is closed.
+        assert_eq!(store_analysis(&conn, 1, &base(json!({ "expired": true, "posted": "" })), "", &mut yes), None);
+        assert_eq!(crate::commands::jobs::one(&conn, 1).unwrap().status, "closed");
+        let drafts: i64 = conn.query_row("SELECT COUNT(*) FROM job_applications WHERE post_id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(drafts, 0, "no draft is left on a closed opening");
+        // Published months ago, even when the model did not flag it.
+        let old = (chrono::Local::now().date_naive() - chrono::Duration::days(120)).to_string();
+        assert_eq!(store_analysis(&conn, 2, &base(json!({ "expired": false, "posted": old })), "", &mut yes), None);
+        assert_eq!(crate::commands::jobs::one(&conn, 2).unwrap().status, "closed");
+        // Recent: kept, and its date is stored.
+        let recent = (chrono::Local::now().date_naive() - chrono::Duration::days(5)).to_string();
+        assert_eq!(store_analysis(&conn, 3, &base(json!({ "expired": false, "posted": recent.clone() })), "", &mut yes), Some(80));
+        let j = crate::commands::jobs::one(&conn, 3).unwrap();
+        assert_eq!((j.status.as_str(), j.posted_at.as_deref()), ("new", Some(recent.as_str())));
+        // No date and no sign: doubt does not close.
+        assert_eq!(store_analysis(&conn, 4, &base(json!({ "expired": false, "posted": "last month" })), "", &mut yes), Some(80));
+    }
+
+    #[test]
+    fn closed_pages_are_recognised() {
+        use crate::commands::jobs::sources::closed_marker;
+        assert!(closed_marker("Sync Manager. This job is No Longer Accepting Applications.").is_some());
+        assert!(closed_marker("Cette offre n’est plus disponible. Voir nos autres postes.").is_some());
+        assert!(closed_marker("Le poste a été pourvu").is_some());
+        assert!(closed_marker("Apply now. Applications close on 30 November.").is_none());
     }
 
     #[test]

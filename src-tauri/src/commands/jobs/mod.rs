@@ -25,6 +25,20 @@ use crate::AppState;
 
 pub const EVENT: &str = "jobs:progress";
 
+/// Days after which a posting with a known date is no longer shown as open.
+pub const MAX_AGE_DAYS: i64 = 45;
+
+/// Close a line whose opening is gone. A sent application keeps its status.
+pub fn close_post(conn: &Connection, id: i64, why: &str) {
+    let _ = conn.execute(
+        "UPDATE job_posts SET status = 'closed', next_action = NULL, next_action_at = NULL,
+            notes = trim(COALESCE(notes || char(10), '') || 'Offre fermée : ' || ?2), updated_at = datetime('now')
+         WHERE id = ?1 AND status IN ('new', 'shortlisted')",
+        params![id, why],
+    );
+    let _ = conn.execute("DELETE FROM job_applications WHERE post_id = ?1 AND state = 'draft'", params![id]);
+}
+
 pub fn migrate(conn: &Connection) {
     let _ = conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS job_posts (
@@ -114,6 +128,15 @@ pub fn migrate(conn: &Connection) {
             notes       TEXT
         );",
     );
+    // Last time the opening was seen still open.
+    let _ = conn.execute("ALTER TABLE job_posts ADD COLUMN checked_at TEXT", []);
+    // Once: lines read before the app looked at dates are read again, and
+    // pages it does not fetch leave the list.
+    if setting(conn, "jobs_expiry_v1").is_none() {
+        let _ = conn.execute("UPDATE job_posts SET status = 'dismissed', notes = 'Écartée : page que l''app ne lit pas, impossible de vérifier que l''offre est ouverte' WHERE status = 'new' AND source = 'web' AND (url LIKE '%linkedin.%' OR url LIKE '%indeed.%')", []);
+        let _ = conn.execute("UPDATE job_posts SET analysed_at = NULL, score = NULL WHERE status = 'new' AND source = 'web'", []);
+        put_setting(conn, "jobs_expiry_v1", "1");
+    }
     sources::seed(conn);
 }
 

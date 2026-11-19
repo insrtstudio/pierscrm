@@ -88,6 +88,60 @@ pub fn complete_one(conn: &Connection, id: i64) {
     }
 }
 
+/// How many openings are looked at again per pass.
+const VERIFY_CAP: i64 = 40;
+
+/// Close what is no longer open: postings older than the age limit, then the
+/// lines that matter most (a draft waiting, a good score, a line the user
+/// kept), whose page is read again every two days. Returns how many closed.
+pub fn verify_open(conn: &Connection, http: &Http, progress: &mut dyn FnMut(&str)) -> usize {
+    let mut closed = 0;
+    let old = ids(
+        conn,
+        &format!(
+            "SELECT id FROM job_posts WHERE status = 'new' AND source NOT IN ('sheet', 'manual')
+               AND posted_at IS NOT NULL AND date(posted_at) < date('now', '-{} days') LIMIT ?1",
+            super::MAX_AGE_DAYS
+        ),
+        1000,
+    );
+    for id in old {
+        // A company board still listing an old opening keeps it: the board is the proof.
+        let on_board: bool = conn
+            .query_row("SELECT source IN ('greenhouse', 'lever', 'ashby', 'smartrecruiters', 'workable', 'recruitee') FROM job_posts WHERE id = ?1", params![id], |r| r.get(0))
+            .unwrap_or(false);
+        if !on_board {
+            super::close_post(conn, id, &format!("publiée il y a plus de {} jours", super::MAX_AGE_DAYS));
+            closed += 1;
+        }
+    }
+    let todo: Vec<(i64, String, String)> = conn
+        .prepare(
+            "SELECT p.id, p.url, p.title FROM job_posts p LEFT JOIN job_applications a ON a.post_id = p.id
+             WHERE p.status IN ('new', 'shortlisted') AND p.url LIKE 'http%' AND p.source NOT IN ('sheet')
+               AND (a.state IS NULL OR a.state = 'draft')
+               AND (a.id IS NOT NULL OR p.status = 'shortlisted' OR COALESCE(p.score, 0) >= 50)
+               AND (p.checked_at IS NULL OR p.checked_at < datetime('now', '-2 days'))
+             ORDER BY (a.id IS NOT NULL) DESC, p.score DESC LIMIT ?1",
+        )
+        .and_then(|mut st| st.query_map(params![VERIFY_CAP], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).map(|rows| rows.filter_map(Result::ok).collect()))
+        .unwrap_or_default();
+    for (id, url, title) in todo {
+        progress(&format!("Vérification · {title}"));
+        match sources::gone(http, &url) {
+            Some(why) => {
+                super::close_post(conn, id, &why);
+                closed += 1;
+            }
+            None => {
+                let _ = conn.execute("UPDATE job_posts SET checked_at = datetime('now') WHERE id = ?1", params![id]);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    closed
+}
+
 pub fn run(app: &AppHandle, pool: &DbPool) -> Result<Progress, String> {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return Err("Une recherche est déjà en cours.".into());
@@ -114,6 +168,16 @@ pub fn run(app: &AppHandle, pool: &DbPool) -> Result<Progress, String> {
     p.found = collected.leads.len();
     p.notes = collected.notes;
     p.added = sources::store(&conn, &collected.leads).len();
+
+    // 1b. Only open positions stay in the list.
+    let closed = collected.closed + verify_open(&conn, &http, &mut |label: &str| {
+        let mut q = p.clone();
+        q.label = label.to_string();
+        emit(&q);
+    });
+    if closed > 0 {
+        p.notes.push(format!("{closed} offre(s) fermée(s) retirée(s) de la liste"));
+    }
 
     // 2. Analyse what has not been read yet.
     let profile = cv::load_profile(&conn);

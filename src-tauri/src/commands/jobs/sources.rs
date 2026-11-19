@@ -434,9 +434,48 @@ fn currency(country: &str) -> &'static str {
     }
 }
 
+/// What a page says when the opening is gone, in English and French.
+const CLOSED_MARKERS: &[&str] = &[
+    "no longer accepting applications", "no longer available", "no longer open", "job has expired", "job ad has expired",
+    "posting has expired", "this job is closed", "this position is closed", "position has been filled", "job has been filled",
+    "role has been filled", "this vacancy has now closed", "vacancy has closed", "applications are now closed",
+    "applications have closed", "application deadline has passed", "this job is not available", "job not found",
+    "job posting is no longer", "this listing has expired", "this opportunity has closed", "sorry, this job",
+    "offre expirée", "offre n'est plus disponible", "offre n’est plus disponible", "annonce n'est plus disponible",
+    "annonce n’est plus disponible", "offre a expiré", "annonce a expiré", "poste a été pourvu", "poste est pourvu",
+    "offre pourvue", "offre clôturée", "offre est clôturée", "candidatures sont closes", "n'est plus en ligne", "n’est plus en ligne",
+    "cette offre n'existe plus", "cette offre n’existe plus",
+];
+
+/// The sentence of a page that says the opening is closed, if any.
+pub fn closed_marker(text: &str) -> Option<&'static str> {
+    let low = text.to_lowercase();
+    CLOSED_MARKERS.iter().copied().find(|m| low.contains(m))
+}
+
+/// Pages this app never fetches (their terms forbid automated reading).
+pub fn no_fetch(url: &str) -> bool {
+    let host = crate::commands::enrich::host_of(url);
+    ["linkedin.", "indeed.", "glassdoor."].iter().any(|h| host.contains(h))
+}
+
+/// Is the opening behind this address still there? Some(reason) when it is
+/// gone (page removed, or the page says so), None when it stands or cannot be
+/// told (network error, page that refuses robots): doubt never closes a line.
+pub fn gone(http: &Http, url: &str) -> Option<String> {
+    if no_fetch(url) {
+        return None;
+    }
+    match http.text(url) {
+        Ok(html) => closed_marker(&html_to_text(&html)).map(|m| format!("la page indique « {m} »")),
+        Err(e) if e == "HTTP 404" || e == "HTTP 410" => Some("la page a été retirée".into()),
+        Err(_) => None,
+    }
+}
+
 /// Hosts a web search may return that are not a posting to apply to.
 const SEARCH_SKIP: &[&str] = &["youtube.", "facebook.", "instagram.", "wikipedia.", "reddit.", "quora.", "pinterest.",
-    "tiktok.", "twitter.", "x.com", "glassdoor.", "salary.", "payscale.", "ziprecruiter.", "indeed.", "talent.com",
+    "tiktok.", "twitter.", "x.com", "linkedin.", "glassdoor.", "salary.", "payscale.", "ziprecruiter.", "indeed.", "talent.com",
     "jooble.", "simplyhired.", "careerbuilder.", "monster.", "coursera.", "udemy.", "berklee.", "careersinmusic.",
     "betterteam.", "zippia."];
 
@@ -573,6 +612,8 @@ impl Http {
 pub struct Collected {
     pub leads: Vec<Lead>,
     pub notes: Vec<String>,
+    /// Lines closed because their opening left the company's board.
+    pub closed: usize,
 }
 
 /// One pass over every active source. Errors of one source never stop the
@@ -597,6 +638,21 @@ pub fn collect(conn: &Connection, http: &Http, progress: &mut dyn FnMut(&str)) -
         match res {
             Ok(leads) => {
                 let _ = conn.execute("UPDATE job_boards SET last_ok = datetime('now'), last_error = NULL WHERE id = ?1", params![id]);
+                // A board lists its open positions only: a line of ours that
+                // left the list is closed.
+                if platform != "rss" {
+                    let live: std::collections::HashSet<&str> = leads.iter().map(|l| l.key.as_str()).collect();
+                    let ours: Vec<(i64, String)> = conn
+                        .prepare("SELECT id, source_key FROM job_posts WHERE status IN ('new', 'shortlisted') AND source_key LIKE ?1")
+                        .and_then(|mut st| st.query_map(params![format!("{platform}:{token}:%")], |r| Ok((r.get(0)?, r.get(1)?))).map(|rows| rows.filter_map(Result::ok).collect()))
+                        .unwrap_or_default();
+                    for (pid, key) in ours {
+                        if !live.contains(key.as_str()) {
+                            super::close_post(conn, pid, "l'offre n'est plus sur le site carrière de la société");
+                            out.closed += 1;
+                        }
+                    }
+                }
                 out.leads.extend(leads);
             }
             Err(e) => {
@@ -790,13 +846,14 @@ mod tests {
     fn search_results_drop_guides_and_aggregators() {
         let v = json!({"organic": [
             {"title": "Sync Manager - Acme Music | LinkedIn", "link": "https://uk.linkedin.com/jobs/view/1?x=1", "snippet": "Acme is hiring"},
+            {"title": "Sync Manager - Acme Music | Music Week Jobs", "link": "https://jobs.musicweek.test/view/1?x=1", "snippet": "Acme is hiring"},
             {"title": "What does a Sync Manager do?", "link": "https://blog.test/a", "snippet": ""},
             {"title": "Sync Manager jobs", "link": "https://www.indeed.com/q", "snippet": ""}
         ]});
         let leads = parse_search("UK", "sync", "sync manager", &v);
         assert_eq!(leads.len(), 1);
         assert_eq!((leads[0].title.as_str(), leads[0].company.as_str()), ("Sync Manager", "Acme Music"));
-        assert_eq!(leads[0].key, "web:https://uk.linkedin.com/jobs/view/1");
+        assert_eq!(leads[0].key, "web:https://jobs.musicweek.test/view/1", "a page the app may not read cannot be checked, so it is left out");
         assert_eq!(split_search_title("Kobalt hiring Sync Manager in London | LinkedIn"), ("Sync Manager".into(), "Kobalt".into()));
     }
 
