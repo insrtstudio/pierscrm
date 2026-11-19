@@ -210,20 +210,85 @@ fn norm_lang(lang: &str) -> &'static str {
     if lang.trim().to_lowercase().starts_with("fr") { "fr" } else { "en" }
 }
 
-/// The posting's title as a CV headline: no gender marker, no trailing
-/// "role" or "job", nothing after a dash or a comma that names the employer.
-pub fn headline(title: &str) -> String {
-    let mut t = title.trim().to_string();
-    for marker in ["(H/F)", "(F/H)", "(M/F)", "(F/M)", "(H/F/X)", "(M/F/D)", "(m/f/d)", "(h/f)", "(f/h)", " H/F", " F/H"] {
+/// The posting's title as a CV headline: the job title and nothing else. No
+/// "[Hiring]", no "@company", no employer or city after a comma or a dash, no
+/// bracket, no gender marker, no trailing "role" or "job".
+pub fn headline(title: &str, company: &str, place: &str) -> String {
+    // Brackets and parentheses carry everything but the title.
+    let mut t = String::new();
+    let mut depth = 0i32;
+    for c in title.chars() {
+        match c {
+            '[' | '(' | '{' => depth += 1,
+            ']' | ')' | '}' => depth = (depth - 1).max(0),
+            _ if depth == 0 => t.push(c),
+            _ => {}
+        }
+    }
+    let mut t = t.replace(['\u{2013}', '\u{2014}'], "-");
+    for marker in [" H/F", " F/H", " M/F", " F/M", " h/f", " f/h"] {
         t = t.replace(marker, "");
     }
-    let mut t = t.trim().trim_end_matches(['-', ',', '·', '|']).trim().to_string();
-    for tail in [" role", " job", " position"] {
+    // What announces a posting, in front of the title.
+    loop {
+        let low = t.trim_start().to_lowercase();
+        let lead = ["we are hiring", "we're hiring", "now hiring", "hiring", "job offer", "job opening", "job", "offre d'emploi", "offre", "recrutement", "on recrute", "nous recrutons", "new", "urgent"]
+            .iter()
+            .find(|l| low.starts_with(**l) && low[l.len()..].starts_with([':', '-', '!', ' ', '|']) && low[l.len()..].trim_start_matches([':', '-', '!', ' ', '|']).len() > 3);
+        match lead {
+            Some(l) => {
+                let start = t.len() - t.trim_start().len() + l.len();
+                t = t[start..].trim_start_matches([':', '-', '!', ' ', '|']).to_string();
+            }
+            None => break,
+        }
+    }
+    // Everything from "@", "|", " at X", " chez X" on names the employer.
+    for cut in ["@", "|", " at ", " chez ", " - ", " : ", ": "] {
+        if let Some(i) = t.find(cut) {
+            if t[..i].trim().len() > 3 {
+                t.truncate(i);
+            }
+        }
+    }
+    // A comma is part of some titles ("Manager, Artist Partnerships"): the
+    // tail goes only when it is the employer or the place.
+    let norm = |x: &str| x.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+    let (company_n, place_n) = (norm(company), norm(place));
+    if let Some((head, tail)) = t.rsplit_once(',') {
+        let tail_n = norm(tail);
+        let is_other = tail_n.len() >= 3
+            && ((!company_n.is_empty() && (company_n.contains(&tail_n) || tail_n.contains(&company_n)))
+                || (!place_n.is_empty() && (place_n.contains(&tail_n) || tail_n.contains(&place_n))));
+        if is_other && head.trim().len() > 3 {
+            t = head.to_string();
+        }
+    }
+    if !company_n.is_empty() && company_n.len() >= 3 {
+        let low = t.to_lowercase();
+        if let Some(i) = low.find(&company.trim().to_lowercase()) {
+            if i > 3 {
+                t.truncate(i);
+            }
+        }
+    }
+    let mut t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    t = t.trim_matches(['-', ',', '·', '|', ':', '!', ' ']).to_string();
+    for tail in [" role", " job", " position", " wanted", " needed"] {
         if t.to_lowercase().ends_with(tail) {
             t.truncate(t.len() - tail.len());
         }
     }
     t.trim().to_string()
+}
+
+/// The headline proposed by the AI, kept only when it is a cut of the
+/// posting's own title: every word of it stands in that title.
+fn checked_headline(proposed: &str, title: &str) -> Option<String> {
+    let h = headline(proposed, "", "");
+    let in_title: HashSet<String> = words(title).collect();
+    let n = h.split_whitespace().count();
+    (n >= 1 && n <= 7 && words(&h).all(|w| in_title.contains(&w))).then_some(h)
 }
 
 /// "2017 to present" as parsers expect it: "2017 - Present".
@@ -277,7 +342,7 @@ pub fn base_doc(p: &Profile, lang: &str, target: &str, place: &str) -> CvDoc {
     let lang = norm_lang(lang);
     CvDoc {
         lang: lang.to_string(),
-        target: headline(target),
+        target: headline(target, "", place),
         place: place.trim().to_string(),
         name: p.identity.name.trim().to_string(),
         summary: p.summary.get(lang).to_string(),
@@ -376,7 +441,7 @@ pub struct Posting<'a> {
 fn tailor_system(p: &Profile) -> Vec<SystemBlock> {
     let rules = "You adapt one person's CV to one job posting. You are an editor, not an author: \
 the profile below is the only source of facts and you may not add to it.\n\
-What you decide: a short summary, which figures to show (up to 4, by index), which title variant to print for each job (by index), \
+What you decide: the headline, a short summary, which figures to show (up to 4, by index), which title variant to print for each job (by index), \
 which bullets to keep for each job and how to word them, and three skill groups.\n\
 Rules:\n\
 - Keep every job of the profile, in the same order. Dates and employers are printed from the profile, you do not write them.\n\
@@ -390,6 +455,8 @@ or a skill that is not in the profile. If the posting asks for something the pro
 - Put first the bullets that answer the posting. One line each, no first person, no full stop needed.\n\
 - Plain factual wording everywhere: what was done, for whom, with what result. No slogan, no catchphrase, no 'passionate', \
 'proven track record', 'results-driven', 'dynamic', 'seasoned' or the like.\n\
+- Headline: the job title of the posting and nothing else, cut from the posting's title word for word. No company, no city, \
+no 'Hiring', no bracket, no '@'. Example: '[Hiring] Artist Manager @Acme' gives 'Artist Manager'.\n\
 - Summary: 2 or 3 sentences aimed at this posting. Say what the person does and for how long, then the two or three facts \
 of the profile that answer the posting best, in the posting's own vocabulary where the profile supports it. Facts only: \
 no first person, no adjective about character or motivation, no company name of the posting, numbers only as they stand in the profile. \
@@ -408,8 +475,9 @@ fn tailor_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["summary", "figures", "experience", "skills"],
+        "required": ["headline", "summary", "figures", "experience", "skills"],
         "properties": {
+            "headline": { "type": "string" },
             "summary": { "type": "string" },
             "figures": { "type": "array", "items": { "type": "integer" } },
             "experience": { "type": "array", "items": {
@@ -469,6 +537,9 @@ pub fn apply_choices(p: &Profile, post: &Posting, choices: &Value) -> (CvDoc, Ve
     if !figs.is_empty() {
         doc.figures = figs;
     }
+
+    doc.target = checked_headline(choices["headline"].as_str().unwrap_or(""), post.title)
+        .unwrap_or_else(|| headline(post.title, post.company, post.location));
 
     let summary = crate::commands::residency::claude::no_dashes(choices["summary"].as_str().unwrap_or("")).trim().to_string();
     if !summary.is_empty() {
@@ -531,7 +602,9 @@ pub fn apply_choices(p: &Profile, post: &Posting, choices: &Value) -> (CvDoc, Ve
 pub fn tailor(p: &Profile, post: &Posting, llm: Option<&dyn Llm>, model: &str, usage: &mut dyn FnMut(&str, &crate::commands::residency::claude::Usage)) -> (CvDoc, Vec<String>) {
     let lang = norm_lang(post.lang);
     let Some(llm) = llm else {
-        return (ordered(base_doc(p, lang, post.title, post.location)), vec!["CV non adapté : IA non réglée.".into()]);
+        let mut doc = ordered(base_doc(p, lang, post.title, post.location));
+        doc.target = headline(post.title, post.company, post.location);
+        return (doc, vec!["CV non adapté : IA non réglée.".into()]);
     };
     let (doc, warnings) = match llm.complete(&tailor_request(p, post, model)) {
         Ok(resp) => {
@@ -543,7 +616,11 @@ pub fn tailor(p: &Profile, post: &Posting, llm: Option<&dyn Llm>, model: &str, u
         }
         Err(e) => (base_doc(p, lang, post.title, post.location), vec![format!("CV non adapté : {e}")]),
     };
-    (ordered(doc), warnings)
+    let mut doc = ordered(doc);
+    if doc.target.is_empty() || doc.target == headline(post.title, "", post.location) {
+        doc.target = headline(post.title, post.company, post.location);
+    }
+    (doc, warnings)
 }
 
 // ---------------- HTML ----------------
@@ -820,6 +897,25 @@ mod tests {
         assert_eq!(doc.skills.len(), 2);
         assert!(doc.skills.iter().all(|(_, items)| !items.contains("Salesforce")));
         assert_eq!(warnings.len(), 2);
+    }
+
+    #[test]
+    fn headline_is_the_job_title_alone() {
+        let h = |t: &str, c: &str, p: &str| headline(t, c, p);
+        assert_eq!(h("[Hiring] Artist Manager @Oxygenmusic", "", ""), "Artist Manager");
+        assert_eq!(h("Hiring: Sync Manager at Acme Music", "Acme Music", "London"), "Sync Manager");
+        assert_eq!(h("Music Research Specialist, Disney Music Group", "DISNEY", ""), "Music Research Specialist");
+        assert_eq!(h("Senior Music Supervisor, London", "", "London, UK"), "Senior Music Supervisor");
+        assert_eq!(h("Senior Music Supervisor Role", "TBWA", ""), "Senior Music Supervisor");
+        assert_eq!(h("Day-to-Day Manager (Charlotte Cardin)", "CULT NATION", ""), "Day-to-Day Manager");
+        assert_eq!(h("Studio Manager (H/F)", "", ""), "Studio Manager");
+        assert_eq!(h("Senior A&R Manager: Data-Driven Dance Music Scout", "", ""), "Senior A&R Manager");
+        assert_eq!(h("Manager, Artists Label & Partnerships", "Spotify", "New York"), "Manager, Artists Label & Partnerships");
+        assert_eq!(h("Booking Agent – Hotels & Travel", "", ""), "Booking Agent");
+        assert_eq!(h("PA / Office Coordinator", "Sony Music Publishing", "Paris"), "PA / Office Coordinator");
+        assert_eq!(h("Label Manager - Because Music - Paris", "Because Music", "Paris"), "Label Manager");
+        assert_eq!(checked_headline("Artist Manager", "[Hiring] Artist Manager @Oxygenmusic").as_deref(), Some("Artist Manager"));
+        assert_eq!(checked_headline("Head of Artist Relations", "[Hiring] Artist Manager @Oxygenmusic"), None, "a title the posting does not give is refused");
     }
 
     #[test]

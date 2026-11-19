@@ -67,7 +67,7 @@ fn mail_schema() -> Value {
         "properties": { "subject": s, "body": s, "followup": s } })
 }
 
-fn mail_request(p: &Profile, post: &Post, lang: &str, model: &str) -> LlmRequest {
+fn mail_request(p: &Profile, post: &Post, lang: &str, model: &str, role: &str) -> LlmRequest {
     let rules = "You write a job application email for the candidate below, to be sent with the CV attached, and a short \
 follow-up to send a week later if there is no answer. The email is the cover letter: there is no separate letter.\n\
 Voice: a real person writing to another, relaxed and direct, sure of the work done without selling it. Humble, never a \
@@ -92,7 +92,7 @@ Never state a fact that is not in the profile. Write in the language asked. Answ
         user: format!(
             "Language: {}\nRole: {}\nCompany: {}\nPlace: {}\nContact named in the posting: {}\nAbout the company: {}\nWhere the profile answers the posting: {}\nWhat the posting asks that the profile does not show (do not claim these): {}\nPractical note: {}\n\nPOSTING\n{}",
             if lang == "fr" { "French" } else { "English" },
-            post.title,
+            role,
             post.company,
             post.location,
             post.contact_name.as_deref().unwrap_or("none"),
@@ -148,7 +148,7 @@ pub fn check_pdf(p: &Profile, path: &Path, title: &str, keywords: &[String], doc
         Some(d) => d.experience.iter().map(|e| (e.org.as_str(), e.bullets.iter().map(String::as_str).collect())).collect(),
         None => p.experience.iter().zip(en).map(|(e, lines)| (e.org.as_str(), lines)).collect(),
     };
-    let title = &cv::headline(title);
+    let title = &doc.map(|d| d.target.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| cv::headline(title, "", ""));
     Ok(ats::check(&text, &ats::Expect { name: &p.identity.name, email: &p.identity.email, phone: &p.identity.phone, title, jobs, strict: doc.is_some(), keywords, profile_text: &ptext }))
 }
 
@@ -187,7 +187,8 @@ pub fn prepare(conn: &Connection, dir: &Path, llm: Option<&dyn Llm>, id: i64) ->
         }
     };
 
-    let (subject, body, followup) = match llm.map(|l| l.complete(&mail_request(&p, &post, lang, &model))) {
+    let role = if doc.target.is_empty() { post.title.as_str() } else { doc.target.as_str() };
+    let (subject, body, followup) = match llm.map(|l| l.complete(&mail_request(&p, &post, lang, &model, role))) {
         Some(Ok(resp)) => {
             claude::log_usage(conn, "jobs_mail", None, &resp.model, &resp.usage);
             match extract_json(&resp.text) {
@@ -196,14 +197,14 @@ pub fn prepare(conn: &Connection, dir: &Path, llm: Option<&dyn Llm>, id: i64) ->
                     voice(v["body"].as_str().unwrap_or("")),
                     voice(v["followup"].as_str().unwrap_or("")),
                 ),
-                _ => template_mail(&p, &post.title, lang),
+                _ => template_mail(&p, role, lang),
             }
         }
         Some(Err(e)) => {
             warnings.push(format!("Email non rédigé par l'IA : {e}"));
-            template_mail(&p, &post.title, lang)
+            template_mail(&p, role, lang)
         }
-        None => template_mail(&p, &post.title, lang),
+        None => template_mail(&p, role, lang),
     };
 
     conn.execute(
