@@ -33,6 +33,7 @@ pub mod vi;
 pub mod visa;
 pub mod residency;
 pub mod labels;
+pub mod releases;
 pub mod beatport;
 pub mod jobs;
 pub mod label_finder;
