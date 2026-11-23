@@ -64,10 +64,10 @@ export interface Target {
   body: string | null;
   dm: string | null;
   followup: string | null;
-  status: "found" | "draft" | "queued" | "sent" | "failed" | "skipped";
+  status: "found" | "draft" | "queued" | "sending" | "sent" | "failed" | "skipped";
   error: string | null;
   sent_at: string | null;
-  fu_status: "queued" | "sent" | "failed" | "skipped" | null;
+  fu_status: "queued" | "sending" | "sent" | "failed" | "skipped" | null;
   fu_sent_at: string | null;
   replied: boolean;
   opened_at: string | null;
@@ -107,6 +107,7 @@ export interface ReleaseProgress {
   total: number;
   finished: boolean;
   error: string | null;
+  info: string | null;
 }
 
 export const releasesBoard = () => invoke<Board>("releases_board");
@@ -129,6 +130,7 @@ export const targetsMark = (ids: number[], mark: "skip" | "restore" | "replied" 
   invoke<void>("targets_mark", { ids, mark });
 export const instaLogin = () => invoke<void>("insta_login");
 export const instaQueue = (run: boolean) => invoke<void>("insta_queue", { run });
+export const instaTest = (handle: string) => invoke<void>("insta_test", { handle });
 export const instaSetCap = (cap: number) => invoke<void>("insta_set_cap", { cap });
 
 /// The metadata sheet a distributor asks for. `required` ones count as missing when empty.

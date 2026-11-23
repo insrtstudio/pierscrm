@@ -248,6 +248,7 @@ pub fn run() {
             commands::releases::insta::insta_login,
             commands::releases::insta::insta_queue,
             commands::releases::insta::insta_set_cap,
+            commands::releases::insta::insta_test,
             commands::jobs::jobs_board,
             commands::jobs::job_detail,
             commands::jobs::job_save,

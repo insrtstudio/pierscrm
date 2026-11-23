@@ -42,6 +42,7 @@ import {
   cardWrite,
   instaLogin,
   instaQueue,
+  instaTest,
   metaMissing,
   releaseDelete,
   releaseSave,
@@ -93,6 +94,7 @@ function useProgress() {
       const p = e.payload;
       setProgress(p.finished ? null : p);
       if (p.error) toast(p.error, "error");
+      if (p.info) toast(p.info, "ok");
       qc.invalidateQueries({ queryKey: ["releases_board"] });
       qc.invalidateQueries({ queryKey: ["release_card"] });
     });
@@ -307,7 +309,7 @@ function ValidateBar({ release: r, t, onValidate, onEdit }: { release: Release; 
 
 function InstaBar({ board: b, t, run }: { board: Board; t: T; run: (p: Promise<unknown>) => void }) {
   const i = b.insta;
-  if (!i.queued && !i.sent_today && !i.need_login) return null;
+  const [handle, setHandle] = useState("");
   return (
     <div className={clsx("mb-4 flex flex-wrap items-center gap-3 rounded-xl border px-4 py-2.5 text-[12.5px]", i.need_login ? "border-accent-2/50 bg-accent-2/[0.06]" : "border-border bg-surface")}>
       <AtSign size={14} className="text-fg-subtle" />
@@ -317,6 +319,10 @@ function InstaBar({ board: b, t, run }: { board: Board; t: T; run: (p: Promise<u
         {i.need_login && <span className="text-accent-2"> · {t("releases.insta.need_login")}</span>}
       </span>
       <span className="flex-1" />
+      <input className="input h-7 w-40 text-[12.5px]" placeholder={t("releases.insta.test_handle")} value={handle} onChange={(e) => setHandle(e.target.value)} />
+      <button className="btn-ghost h-7 px-3" disabled={!handle.trim() || i.busy} title={t("releases.insta.test_hint")} onClick={() => run(instaTest(handle))}>
+        {t("releases.insta.test")}
+      </button>
       <button className="btn-ghost h-7 px-3" onClick={() => run(instaLogin())}>
         {t("releases.insta.login")}
       </button>
@@ -903,7 +909,7 @@ function TargetStatus({ target: x, t }: { target: Target; t: T }) {
       </span>
     );
   if (x.status === "sent") return <span className="badge bg-fg/[0.07] text-fg-subtle">{t("releases.st.sent", { date: formatDate(x.sent_at) })}</span>;
-  if (x.status === "queued") return <span className="badge bg-accent/15 text-accent">{t("releases.st.queued")}</span>;
+  if (x.status === "queued" || x.status === "sending") return <span className="badge bg-accent/15 text-accent">{t(`releases.st.${x.status}`)}</span>;
   if (x.status === "failed") return <span className="badge bg-danger/15 text-danger" title={x.error ?? undefined}>{t("releases.st.failed")}</span>;
   if (x.status === "draft") return <span className="badge bg-accent-2/15 text-accent-2">{t("releases.st.draft")}</span>;
   if (x.status === "skipped") return <span className="badge bg-fg/[0.07] text-fg-faint">{t("releases.st.skipped")}</span>;
@@ -1061,7 +1067,7 @@ function TargetEditor({ target: x, t, run, onClose }: { target: Target; t: T; ru
     dm: x.dm ?? "",
     followup: x.followup ?? "",
   });
-  const locked = x.status === "sent" || x.status === "queued";
+  const locked = x.status === "sent" || x.status === "queued" || x.status === "sending";
   const save = () => run(targetSave({ id: x.id, ...f }).then(onClose));
   return (
     <div className="space-y-3 bg-fg/[0.025] px-4 py-3">
@@ -1114,7 +1120,7 @@ function TargetEditor({ target: x, t, run, onClose }: { target: Target; t: T; ru
             {t("releases.e.no_followup")}
           </button>
         )}
-        {x.status !== "sent" && (
+        {x.status !== "sent" && x.status !== "sending" && (
           <button className="btn-ghost h-8 px-3" onClick={() => run(targetsMark([x.id], x.status === "queued" ? "restore" : "skip").then(onClose))}>
             {x.status === "queued" ? t("releases.e.unqueue") : t("releases.e.skip")}
           </button>

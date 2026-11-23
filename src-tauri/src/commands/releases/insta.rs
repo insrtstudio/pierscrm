@@ -34,6 +34,8 @@ struct Job {
     name: String,
     handle: String,
     text: String,
+    /// A trial on a profile: the text is typed then erased, nothing is sent.
+    dry: bool,
 }
 
 static JOB: Mutex<Option<Job>> = Mutex::new(None);
@@ -108,10 +110,10 @@ pub fn kick(app: &AppHandle) {
 /// A deleted or withdrawn target must not be sent by a window already open.
 pub fn drop_if_orphan(app: &AppHandle, conn: &Connection) {
     let current = JOB.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let Some(job) = current else { return };
+    let Some(job) = current.filter(|j| !j.dry) else { return };
     let still: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM release_targets WHERE id = ?1 AND (status = 'queued' OR fu_status = 'queued')",
+            "SELECT COUNT(*) FROM release_targets WHERE id = ?1 AND (status IN ('queued', 'sending') OR fu_status IN ('queued', 'sending'))",
             [job.target_id],
             |r| r.get(0),
         )
@@ -156,11 +158,18 @@ fn next(app: &AppHandle) {
                         handle: r.get(3)?,
                         text: super::one_line(&r.get::<_, Option<String>>(4)?.unwrap_or_default()),
                         followup: r.get::<_, i64>(5)? != 0,
+                        dry: false,
                     })
                 },
             )
             .ok();
         let Some(job) = found else { return };
+        // From here its outcome is unknown until the page answers: an
+        // interrupted message is failed, never queued again on its own.
+        let _ = conn.execute(
+            if job.followup { "UPDATE release_targets SET fu_status = 'sending' WHERE id = ?1" } else { "UPDATE release_targets SET status = 'sending' WHERE id = ?1" },
+            [job.target_id],
+        );
         *slot = Some(job.clone());
         job
     };
@@ -177,6 +186,13 @@ fn next(app: &AppHandle) {
 /// Records the outcome of the current job and moves on after a pause.
 fn finish(app: &AppHandle, job: &Job, error: Option<String>) {
     *JOB.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    if job.dry {
+        let info = error.is_none().then(|| format!("Essai réussi sur @{} : profil ouvert, message saisi puis effacé, rien n'a été envoyé.", job.handle));
+        let _ = app.emit(EVENT, Progress { stage: "insta".into(), finished: true, error, info, ..Default::default() });
+        let app = app.clone();
+        std::thread::spawn(move || close(&app));
+        return;
+    }
     if let Ok(conn) = app.state::<AppState>().pool.get() {
         let ok = error.is_none();
         let _ = if job.followup {
@@ -214,14 +230,17 @@ fn on_handover(app: &AppHandle, kind: &str, json: &str) {
             NEED_LOGIN.store(true, Ordering::SeqCst);
             emit(app, current.map(|j| j.card_id).unwrap_or(0), "", false, Some("Connectez-vous à Instagram dans la fenêtre ouverte, l'envoi reprendra tout seul.".into()));
         }
-        "ig_sent" | "ig_failed" => {
+        "ig_sent" | "ig_failed" | "ig_dry" => {
             NEED_LOGIN.store(false, Ordering::SeqCst);
             let Some(job) = current else { return };
             let error = (kind == "ig_failed").then(|| {
-                serde_json::from_str::<serde_json::Value>(json)
-                    .ok()
-                    .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(str::to_string))
-                    .unwrap_or_else(|| "Envoi échoué.".into())
+                let v = serde_json::from_str::<serde_json::Value>(json).unwrap_or_default();
+                let field = |k: &str| v.get(k).and_then(|r| r.as_str()).unwrap_or_default().to_string();
+                let reason = Some(field("reason")).filter(|r| !r.is_empty()).unwrap_or_else(|| "Envoi échoué.".into());
+                match field("seen") {
+                    seen if seen.is_empty() => reason,
+                    seen => format!("{reason} Page {} ; boutons vus : {}", field("path"), seen.chars().take(400).collect::<String>()),
+                }
             });
             let app = app.clone();
             // (Off the navigation callback: database work and window closing.)
@@ -255,15 +274,41 @@ fn open(app: &AppHandle, job: Option<&Job>) -> Result<(), String> {
             None => true,
         });
     if let Some(j) = job {
-        let task = serde_json::json!({ "id": format!("{}{}", j.target_id, if j.followup { "f" } else { "" }), "handle": j.handle, "text": j.text });
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let id = if j.dry { format!("dry{stamp}") } else { format!("{}{}", j.target_id, if j.followup { "f" } else { "" }) };
+        let task = serde_json::json!({ "id": id, "handle": j.handle, "text": j.text, "dry": j.dry });
         builder = builder.initialization_script(DM_JS.replace("__TASK__", &task.to_string()));
     }
     let window = builder.build().map_err(|e| e.to_string())?;
     let app = app.clone();
+    let owner = job.map(|j| (j.target_id, j.followup, j.dry));
     window.on_window_event(move |e| {
-        if matches!(e, tauri::WindowEvent::Destroyed) {
-            // Closed by hand in the middle of a message: it stays queued.
+        if !matches!(e, tauri::WindowEvent::Destroyed) {
+            return;
+        }
+        // Only the window of the message being sent may end that message: an
+        // older window (sign-in, previous message) closing changes nothing.
+        let current = JOB.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mine = current.filter(|j| Some((j.target_id, j.followup, j.dry)) == owner);
+        if let Some(job) = mine.clone().filter(|j| !j.dry && NEED_LOGIN.load(Ordering::SeqCst)) {
+            // Closed while Instagram was asking to sign in: nothing was typed,
+            // the message goes back to the queue and waits for "Reprendre".
+            PAUSED.store(true, Ordering::SeqCst);
             *JOB.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            if let Ok(conn) = app.state::<AppState>().pool.get() {
+                let _ = conn.execute(
+                    if job.followup { "UPDATE release_targets SET fu_status = 'queued' WHERE id = ?1" } else { "UPDATE release_targets SET status = 'queued' WHERE id = ?1" },
+                    [job.target_id],
+                );
+            }
+            let _ = app.emit(EVENT, Progress { stage: "insta".into(), finished: true, ..Default::default() });
+        } else if let Some(job) = mine {
+            // Closed by hand in the middle of a message: the queue stops and
+            // the message is failed, to be checked in Instagram before any retry.
+            PAUSED.store(true, Ordering::SeqCst);
+            let app = app.clone();
+            std::thread::spawn(move || finish(&app, &job, Some("Fenêtre fermée pendant l'envoi : vérifiez dans Instagram avant de renvoyer.".into())));
+        } else {
             let _ = app.emit(EVENT, Progress { stage: "insta".into(), finished: true, ..Default::default() });
         }
     });
@@ -287,7 +332,7 @@ pub async fn insta_queue(app: AppHandle, run: bool) -> Result<(), String> {
         kick(&app);
     } else {
         PAUSED.store(true, Ordering::SeqCst);
-        *JOB.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        // (Closing the window ends the message in hand, see `open`.)
         close(&app);
     }
     Ok(())
@@ -304,5 +349,25 @@ pub fn insta_set_cap(state: tauri::State<'_, AppState>, cap: i64) -> Result<(), 
         [cap.to_string()],
     )
     .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// "Tester" : opens a profile, clicks Message, types a text and erases it.
+/// Nothing is sent. Says whether the page still works the way the sender expects.
+#[tauri::command]
+pub async fn insta_test(app: AppHandle, handle: String) -> Result<(), String> {
+    let handle = crate::commands::social::normalize_handle_input(&handle).ok_or("Compte Instagram invalide.")?;
+    let job = Job { target_id: 0, card_id: 0, followup: false, name: handle.clone(), handle, text: "Essai de saisie, ce message ne sera pas envoyé.".into(), dry: true };
+    {
+        let mut slot = JOB.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.is_some() {
+            return Err("Un DM est en cours d'envoi.".into());
+        }
+        *slot = Some(job.clone());
+    }
+    if let Err(e) = open(&app, Some(&job)) {
+        *JOB.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        return Err(e);
+    }
     Ok(())
 }

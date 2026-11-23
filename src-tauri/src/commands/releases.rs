@@ -84,11 +84,11 @@ pub fn migrate(conn: &Connection) {
             body        TEXT,
             dm          TEXT,
             followup    TEXT,
-            status      TEXT NOT NULL DEFAULT 'found',       -- found | draft | queued | sent | failed | skipped
+            status      TEXT NOT NULL DEFAULT 'found',       -- found | draft | queued | sending | sent | failed | skipped
             error       TEXT,
             email_id    INTEGER,
             sent_at     TEXT,
-            fu_status   TEXT,                                -- NULL | queued | sent | failed
+            fu_status   TEXT,                                -- NULL | queued | sending | sent | failed | skipped
             fu_sent_at  TEXT,
             replied     INTEGER NOT NULL DEFAULT 0,
             created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -96,6 +96,10 @@ pub fn migrate(conn: &Connection) {
         )",
         "CREATE INDEX IF NOT EXISTS idx_release_cards_release ON release_cards(release_id)",
         "CREATE INDEX IF NOT EXISTS idx_release_targets_card ON release_targets(card_id)",
+        // A DM that was being sent when the app stopped: its outcome is unknown,
+        // so it is never sent again without the user looking at Instagram first.
+        "UPDATE release_targets SET status = 'failed', error = 'Envoi interrompu : vérifiez dans Instagram avant de renvoyer.' WHERE status = 'sending'",
+        "UPDATE release_targets SET fu_status = 'failed', error = 'Relance interrompue : vérifiez dans Instagram avant de renvoyer.' WHERE fu_status = 'sending'",
     ] {
         let _ = conn.execute(stmt, []);
     }
@@ -266,6 +270,8 @@ pub struct Progress {
     pub total: usize,
     pub finished: bool,
     pub error: Option<String>,
+    /// Good news worth a line (a trial that went through).
+    pub info: Option<String>,
 }
 
 fn release_from(row: &rusqlite::Row) -> rusqlite::Result<Release> {
@@ -342,7 +348,7 @@ fn load_targets(conn: &Connection, card_id: i64) -> Result<Vec<Target>, String> 
          FROM release_targets t
          LEFT JOIN emails e ON e.id = t.email_id
          WHERE t.card_id = ?1
-         ORDER BY CASE t.status WHEN 'draft' THEN 0 WHEN 'found' THEN 1 WHEN 'queued' THEN 2 WHEN 'failed' THEN 3
+         ORDER BY CASE t.status WHEN 'draft' THEN 0 WHEN 'found' THEN 1 WHEN 'queued' THEN 2 WHEN 'sending' THEN 2 WHEN 'failed' THEN 3
                                 WHEN 'sent' THEN 4 ELSE 5 END,
                   CASE t.channel WHEN 'email' THEN 0 WHEN 'instagram' THEN 1 ELSE 2 END, t.name"
     );
@@ -399,7 +405,7 @@ pub(crate) fn advance(conn: &Connection, card_id: i64) {
     }
     let (total, open, sent): (i64, i64, i64) = conn
         .query_row(
-            "SELECT COUNT(*), COALESCE(SUM(status IN ('found', 'draft', 'queued')), 0), COALESCE(SUM(status = 'sent'), 0)
+            "SELECT COUNT(*), COALESCE(SUM(status IN ('found', 'draft', 'queued', 'sending')), 0), COALESCE(SUM(status = 'sent'), 0)
              FROM release_targets WHERE card_id = ?1 AND status <> 'skipped'",
             [card_id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
@@ -473,17 +479,15 @@ pub fn release_save(state: State<'_, AppState>, release: Release) -> Result<i64,
     }
 }
 
-/// Validates a release with its date. The first time, lays out the plan and
-/// sets the agent on the campaign cards. Later, moves every card that is not
-/// done by the same number of days.
-#[tauri::command(async)]
-pub fn release_validate(app: AppHandle, state: State<'_, AppState>, id: i64, date: String) -> Result<(), String> {
-    let day = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|_| "Date de sortie invalide.".to_string())?;
-    let conn = state.pool.get().map_err(|e| e.to_string())?;
-    let mut r = load_release(&conn, id)?;
+/// Sets the release date. The first time, lays out the plan and returns the
+/// campaign cards for the agent. Later, moves every card that is not done by
+/// the same number of days.
+pub(crate) fn set_date(conn: &Connection, id: i64, date: &str, today: chrono::NaiveDate) -> Result<Vec<i64>, String> {
+    let day = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| "Date de sortie invalide.".to_string())?;
+    let mut r = load_release(conn, id)?;
     let before = r.release_date.as_deref().and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
     conn.execute("UPDATE releases SET release_date = ?2 WHERE id = ?1", params![id, date]).map_err(|e| e.to_string())?;
-    r.release_date = Some(date.clone());
+    r.release_date = Some(date.to_string());
     let existing: i64 = conn.query_row("SELECT COUNT(*) FROM release_cards WHERE release_id = ?1", [id], |x| x.get(0)).unwrap_or(0);
     if existing > 0 {
         if let Some(b) = before {
@@ -496,16 +500,15 @@ pub fn release_validate(app: AppHandle, state: State<'_, AppState>, id: i64, dat
                 .map_err(|e| e.to_string())?;
             }
         }
-        return Ok(());
+        return Ok(Vec::new());
     }
-    let today = chrono::Local::now().date_naive();
     let mut campaigns = Vec::new();
     for (pos, (kind, offset, title)) in PLAN.iter().enumerate() {
         if *kind == "mastering" && r.master_state == "master" {
             continue;
         }
         // (A step whose day is already past is due today.)
-        let due = (day + chrono::Duration::days(*offset)).max(if *offset < 0 { today } else { day });
+        let due = (day + chrono::Duration::days(*offset)).max(if *offset < 0 { today.min(day) } else { day });
         conn.execute(
             "INSERT INTO release_cards (release_id, kind, title, due_date, pos, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![id, kind, title, due.format("%Y-%m-%d").to_string(), pos as i64, default_data(kind, &r).to_string()],
@@ -515,7 +518,16 @@ pub fn release_validate(app: AppHandle, state: State<'_, AppState>, id: i64, dat
             campaigns.push(conn.last_insert_rowid());
         }
     }
-    drop(conn);
+    Ok(campaigns)
+}
+
+/// Validates a release with its date and sets the agent on its campaign cards.
+#[tauri::command(async)]
+pub fn release_validate(app: AppHandle, state: State<'_, AppState>, id: i64, date: String) -> Result<(), String> {
+    let campaigns = {
+        let conn = state.pool.get().map_err(|e| e.to_string())?;
+        set_date(&conn, id, &date, chrono::Local::now().date_naive())?
+    };
     // The agent starts on its own, one campaign after the other.
     let pool = state.pool.clone();
     std::thread::spawn(move || {
@@ -526,13 +538,18 @@ pub fn release_validate(app: AppHandle, state: State<'_, AppState>, id: i64, dat
     Ok(())
 }
 
-#[tauri::command(async)]
-pub fn release_delete(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<(), String> {
-    let conn = state.pool.get().map_err(|e| e.to_string())?;
+pub(crate) fn delete_release(conn: &Connection, id: i64) -> Result<(), String> {
     conn.execute("DELETE FROM release_targets WHERE card_id IN (SELECT id FROM release_cards WHERE release_id = ?1)", [id])
         .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM release_cards WHERE release_id = ?1", [id]).map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM releases WHERE id = ?1", [id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn release_delete(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    delete_release(&conn, id)?;
     insta::drop_if_orphan(&app, &conn);
     Ok(())
 }
@@ -733,9 +750,14 @@ pub fn card_send(app: AppHandle, state: State<'_, AppState>, card_id: i64, ids: 
     let conn = state.pool.get().map_err(|e| e.to_string())?;
     let targets: Vec<Target> = load_targets(&conn, card_id)?.into_iter().filter(|t| ids.contains(&t.id)).collect();
     let mut emails = Vec::new();
-    let mut dms = 0usize;
+    let mut dms = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for t in &targets {
-        let ready = if followup { t.status == "sent" && t.fu_status.is_none() } else { t.status == "draft" || t.status == "failed" };
+        let ready = if followup {
+            t.status == "sent" && (t.fu_status.is_none() || t.fu_status.as_deref() == Some("failed"))
+        } else {
+            t.status == "draft" || t.status == "failed"
+        };
         if !ready {
             continue;
         }
@@ -751,16 +773,29 @@ pub fn card_send(app: AppHandle, state: State<'_, AppState>, card_id: i64, ids: 
             return Err(format!("Le message pour {} n'est pas prêt (texte vide ou lien d'écoute manquant).", t.name));
         }
         match t.channel.as_str() {
-            "email" => emails.push(t.clone()),
-            "instagram" => {
-                let sql = if followup {
-                    "UPDATE release_targets SET fu_status = 'queued', error = NULL WHERE id = ?1"
-                } else {
-                    "UPDATE release_targets SET status = 'queued', error = NULL WHERE id = ?1"
-                };
-                conn.execute(sql, [t.id]).map_err(|e| e.to_string())?;
-                dms += 1;
+            "email" => {
+                let addr = t.email.clone().unwrap_or_default().to_lowercase();
+                if !followup {
+                    if t.subject.as_deref().unwrap_or_default().trim().is_empty() {
+                        return Err(format!("L'email pour {} n'a pas d'objet.", t.name));
+                    }
+                    // The same address is written to once per release, whatever the card.
+                    let elsewhere: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM release_targets t JOIN release_cards c ON c.id = t.card_id
+                             WHERE c.release_id = (SELECT release_id FROM release_cards WHERE id = ?1)
+                               AND t.id <> ?2 AND lower(t.email) = ?3 AND t.channel = 'email' AND t.status = 'sent'",
+                            params![card_id, t.id, addr],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(0);
+                    if elsewhere > 0 || !seen.insert(addr) {
+                        return Err(format!("{} a déjà reçu un email pour cette sortie à la même adresse. Écartez ce contact.", t.name));
+                    }
+                }
+                emails.push(t.clone());
             }
+            "instagram" => dms.push(t.id),
             _ => {}
         }
     }
@@ -772,6 +807,15 @@ pub fn card_send(app: AppHandle, state: State<'_, AppState>, card_id: i64, ids: 
             return Err("Un envoi est déjà en cours.".into());
         }
     }
+    for id in &dms {
+        let sql = if followup {
+            "UPDATE release_targets SET fu_status = 'queued', error = NULL WHERE id = ?1"
+        } else {
+            "UPDATE release_targets SET status = 'queued', error = NULL WHERE id = ?1"
+        };
+        let _ = conn.execute(sql, [id]);
+    }
+    let dms = dms.len();
     advance(&conn, card_id);
     drop(conn);
     let total = emails.len() + dms;
@@ -1283,5 +1327,92 @@ Answer with JSON only:\n\
             assert!(unfinished("écoute ici [LIEN]"));
             assert!(!unfinished("écoute ici https://insrt.studio/p/abc"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::residency::testdb;
+
+    fn day(s: &str) -> chrono::NaiveDate {
+        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    fn release(c: &Connection, master: &str) -> i64 {
+        migrate(c);
+        c.execute("INSERT INTO releases (name, genre, master_state, artist) VALUES ('Night Shift', 'Tech house', ?1, 'Piers')", [master]).unwrap();
+        c.last_insert_rowid()
+    }
+
+    fn dates(c: &Connection, id: i64) -> Vec<(String, String)> {
+        let mut st = c.prepare("SELECT kind, due_date FROM release_cards WHERE release_id = ?1 ORDER BY pos").unwrap();
+        let rows = st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        rows.filter_map(Result::ok).collect()
+    }
+
+    #[test]
+    fn the_plan_is_laid_backwards_from_the_release_day() {
+        let c = testdb::conn();
+        let id = release(&c, "unmastered");
+        let campaigns = set_date(&c, id, "2027-03-12", day("2026-11-23")).unwrap();
+        let d = dates(&c, id);
+        assert_eq!(d.len(), 9);
+        assert_eq!(d[0], ("mastering".to_string(), "2027-01-29".to_string()));
+        assert!(d.contains(&("dj".to_string(), "2027-02-19".to_string())));
+        assert!(d.contains(&("release".to_string(), "2027-03-12".to_string())));
+        assert!(d.contains(&("recap".to_string(), "2027-03-19".to_string())));
+        assert_eq!(campaigns.len(), 2);
+        // A mastered release has no mastering card.
+        let id2 = release(&c, "master");
+        set_date(&c, id2, "2027-03-12", day("2026-11-23")).unwrap();
+        assert!(dates(&c, id2).iter().all(|(k, _)| k != "mastering"));
+    }
+
+    #[test]
+    fn a_close_release_puts_late_steps_today_and_a_new_date_shifts_open_cards() {
+        let c = testdb::conn();
+        let id = release(&c, "master");
+        set_date(&c, id, "2026-12-03", day("2026-11-23")).unwrap();
+        let d = dates(&c, id);
+        // Metadata was due 35 days before: it is due today, never in the past.
+        assert!(d.contains(&("meta".to_string(), "2026-11-23".to_string())));
+        assert!(d.contains(&("release".to_string(), "2026-12-03".to_string())));
+        c.execute("UPDATE release_cards SET col = 'done' WHERE release_id = ?1 AND kind = 'meta'", [id]).unwrap();
+        // Second validation: no new card, open cards move by a week, done ones stay.
+        assert!(set_date(&c, id, "2026-12-10", day("2026-11-23")).unwrap().is_empty());
+        let d = dates(&c, id);
+        assert_eq!(d.len(), 8);
+        assert!(d.contains(&("meta".to_string(), "2026-11-23".to_string())));
+        assert!(d.contains(&("release".to_string(), "2026-12-10".to_string())));
+        assert!(set_date(&c, id, "pas une date", day("2026-11-23")).is_err());
+    }
+
+    #[test]
+    fn a_campaign_card_moves_forward_only_and_deleting_leaves_nothing() {
+        let c = testdb::conn();
+        let id = release(&c, "master");
+        let card = set_date(&c, id, "2027-03-12", day("2026-11-23")).unwrap()[0];
+        let col = |c: &Connection| c.query_row("SELECT col FROM release_cards WHERE id = ?1", [card], |r| r.get::<_, String>(0)).unwrap();
+        advance(&c, card);
+        assert_eq!(col(&c), "todo");
+        c.execute("INSERT INTO release_targets (card_id, name, channel, status) VALUES (?1, 'A', 'instagram', 'queued'), (?1, 'B', 'email', 'draft')", [card]).unwrap();
+        advance(&c, card);
+        assert_eq!(col(&c), "doing");
+        c.execute("UPDATE release_targets SET status = 'sent', sent_at = datetime('now') WHERE card_id = ?1", [card]).unwrap();
+        advance(&c, card);
+        assert_eq!(col(&c), "waiting");
+        // New drafts do not pull the card back.
+        c.execute("INSERT INTO release_targets (card_id, name, status) VALUES (?1, 'C', 'draft')", [card]).unwrap();
+        advance(&c, card);
+        assert_eq!(col(&c), "waiting");
+        // A DM cut short by a restart is failed, not queued again.
+        c.execute("UPDATE release_targets SET status = 'sending' WHERE name = 'A'", []).unwrap();
+        migrate(&c);
+        let st: String = c.query_row("SELECT status FROM release_targets WHERE name = 'A'", [], |r| r.get(0)).unwrap();
+        assert_eq!(st, "failed");
+        delete_release(&c, id).unwrap();
+        let left: i64 = c.query_row("SELECT (SELECT COUNT(*) FROM release_targets) + (SELECT COUNT(*) FROM release_cards)", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0);
     }
 }
